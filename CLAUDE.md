@@ -76,6 +76,7 @@ DRIFT зупиняє, якщо міняє те, що будуємо, або ви
 ## Перевірки
 
 - `make setup` — `.venv` і dev-залежності; `make ci` = `make lint` + `make test`. Те саме, що в CI. Ганяти перед пушем.
+- На PR — перевірки `quality` (Ubuntu, Python 3.12) і `windows-tests` (Windows, Python 3.12). Захисту `main` на GitHub немає (TD-002): мерж лише коли обидві зелені.
 - Тест доводить головне: **якщо прибрати фікс, тест червоніє.** Перевір це і напиши у звіті.
 - Інтеграції (Telegram, Шафа, Claude API) — тести на моках і фікстурах.
 
@@ -98,7 +99,8 @@ DRIFT зупиняє, якщо міняє те, що будуємо, або ви
 
 **Старт** («продовжуємо», «поїхали» або назва тікета). Прочитай: `CLAUDE.md` → `.claude/state/STATUS.md` →
 три останні записи `.claude/state/log/` → `docs/TECH_DEBT.md` → `OPEN_QUESTIONS.md` → заголовки `LEARNED_CONVENTIONS.md`.
-Перевір гілку, чистоту дерева і хуки. Перша відповідь починається рядком:
+Перевір гілку, чистоту дерева і хуки: `git config core.hooksPath` має бути `.githooks`, інакше `sh ops/install-hooks.sh`.
+Перша відповідь починається рядком:
 
 `[Pre-flight: CLAUDE ✓ | LEARNED ✓ | SESSION_LOG ✓ | TECH_DEBT ✓ | OPEN_Q ✓] гілка: <…>, тікет: <…>`
 
