@@ -1,0 +1,16 @@
+#!/bin/sh
+# Забороняє коміт у main і з від'єднаного HEAD. Комітимо лише в гілки тікетів.
+branch=$(git symbolic-ref --short -q HEAD)
+
+if [ -z "$branch" ]; then
+    echo "pre-commit: HEAD від'єднаний від гілки. Перейди на гілку тікета: git switch <гілка>" >&2
+    exit 1
+fi
+
+if [ "$branch" = "main" ]; then
+    echo "pre-commit: коміт у main заборонено. Створи гілку тікета:" >&2
+    echo "  git fetch && git switch -c chore/<ID>-<назва> --no-track origin/main" >&2
+    exit 1
+fi
+
+exit 0
