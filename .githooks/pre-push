@@ -1,0 +1,53 @@
+#!/bin/sh
+# Пускає лише гілки тікетів і лише вперед (fast-forward).
+# Забороняє: пуш у main, теги, видалення, force-push, гілки з іншою назвою.
+# stdin (git help githooks): <local-ref> <local-sha> <remote-ref> <remote-sha>
+
+ticket_re='^(feature|fix|chore|docs)/[A-Z]+-[0-9]+(-[a-z0-9-]+)?$'
+
+is_zero() {
+    case "$1" in
+        *[!0]*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+reject() {
+    echo "pre-push: $1" >&2
+    exit 1
+}
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -z "$remote_ref" ] && continue
+
+    if [ "$local_ref" = "(delete)" ] || is_zero "$local_sha"; then
+        reject "видалення заборонено ($remote_ref). Видаляє лише Власник на GitHub."
+    fi
+
+    case "$remote_ref" in
+        refs/heads/*) name=${remote_ref#refs/heads/} ;;
+        *) reject "пушити можна лише гілки, не $remote_ref." ;;
+    esac
+
+    if [ "$name" = "main" ]; then
+        reject "пуш у main заборонено. Шлях у main — лише через PR."
+    fi
+
+    if ! printf '%s\n' "$name" | grep -Eq "$ticket_re"; then
+        reject "назва гілки «$name» не схожа на гілку тікета: (feature|fix|chore|docs)/<ID>-<назва>."
+    fi
+
+    if is_zero "$remote_sha"; then
+        continue
+    fi
+
+    if ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+        reject "на віддаленій гілці «$name» є коміт, якого немає локально. Зроби git fetch; force-push заборонено."
+    fi
+
+    if ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
+        reject "force-push заборонено: «$name» не fast-forward від віддаленої гілки."
+    fi
+done
+
+exit 0
