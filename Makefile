@@ -7,6 +7,7 @@ BIN := $(VENV)/bin
 setup:
 	$(PYTHON) -c "import sys; sys.exit(sys.version_info < (3, 12))" || { echo "Потрібен Python >= 3.12"; exit 1; }
 	$(PYTHON) -m venv $(VENV)
+	$(BIN)/python -m pip install --quiet pip==26.2.1
 	$(BIN)/python -m pip install --quiet --group dev
 
 lint:
