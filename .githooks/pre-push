@@ -21,12 +21,12 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     [ -z "$remote_ref" ] && continue
 
     if [ "$local_ref" = "(delete)" ] || is_zero "$local_sha"; then
-        reject "видалення заборонено ($remote_ref). Видаляє лише Власник на GitHub."
+        reject "видалення заборонено (${remote_ref}). Видаляє лише Власник на GitHub."
     fi
 
     case "$remote_ref" in
         refs/heads/*) name=${remote_ref#refs/heads/} ;;
-        *) reject "пушити можна лише гілки, не $remote_ref." ;;
+        *) reject "пушити можна лише гілки, не ${remote_ref}." ;;
     esac
 
     if [ "$name" = "main" ]; then
@@ -34,7 +34,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     fi
 
     if ! printf '%s\n' "$name" | grep -Eq "$ticket_re"; then
-        reject "назва гілки «$name» не схожа на гілку тікета: (feature|fix|chore|docs)/<ID>-<назва>."
+        reject "назва гілки «${name}» не схожа на гілку тікета: (feature|fix|chore|docs)/<ID>-<назва>."
     fi
 
     if is_zero "$remote_sha"; then
@@ -42,11 +42,11 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     fi
 
     if ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
-        reject "на віддаленій гілці «$name» є коміт, якого немає локально. Зроби git fetch; force-push заборонено."
+        reject "на віддаленій гілці «${name}» є коміт, якого немає локально. Зроби git fetch; force-push заборонено."
     fi
 
     if ! git merge-base --is-ancestor "$remote_sha" "$local_sha"; then
-        reject "force-push заборонено: «$name» не fast-forward від віддаленої гілки."
+        reject "force-push заборонено: «${name}» не fast-forward від віддаленої гілки."
     fi
 done
 
