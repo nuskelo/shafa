@@ -73,6 +73,15 @@ def test_post_without_token_or_from_foreign_page_refused(conn, app, item_id, tok
     assert status(conn, item_id) == Status.REVIEW
 
 
+def test_referrer_policy_keeps_own_origin_in_forms(app):
+    # Із `no-referrer` Chrome надсилає форму з `Origin: null` — і сервер відмовляє.
+    assert get(app, "/review").headers["Referrer-Policy"] == "same-origin"
+
+
+def test_null_origin_refused(conn, app, item_id):
+    assert post(app, f"/item/{item_id}", origin="null", action="reject").status == 403
+
+
 def test_post_with_own_origin_allowed(conn, app, item_id):
     post(app, f"/item/{item_id}", origin=f"http://{HOST}", action="reject")
     assert status(conn, item_id) == Status.ARCHIVED

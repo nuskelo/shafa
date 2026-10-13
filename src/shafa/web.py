@@ -72,7 +72,8 @@ SECURITY_HEADERS = {
         "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    # Не `no-referrer`: з ним Chrome шле у формах `Origin: null`, і кожен POST — 403 (знайшла «мавпа»).
+    "Referrer-Policy": "same-origin",
     "Cache-Control": "no-store",
 }
 
