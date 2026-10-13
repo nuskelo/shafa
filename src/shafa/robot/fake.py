@@ -6,6 +6,7 @@
 записується. Профіль Chrome — тимчасовий, не профіль робота.
 """
 
+import itertools
 import json
 import random
 import tempfile
@@ -41,7 +42,8 @@ def allowed(url: str, base: str) -> bool:
 
 
 class _Handler(BaseHTTPRequestHandler):
-    counter = iter(range(900000001, 999999999))
+    # ID різні й між запусками: інакше «мавпа» не відрізнила б подвійну публікацію від збігу.
+    counter = itertools.count(900_000_000 + int(time.time() * 10) % 99_000_000)
 
     def do_GET(self) -> None:
         self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
