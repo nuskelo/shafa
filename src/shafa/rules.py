@@ -61,14 +61,27 @@ STATE_WORD = re.compile(r"(?<!\w)стан(?:і|у|ом)?(?!\w)", re.IGNORECASE)
 STATE_SENTENCE = {NEW: "Стан нових, без дефектів.", IDEAL: "Ідеальний стан, без дефектів."}
 
 
+def _without_price(text: str) -> str:
+    """Прибрати ціну: останню й закреслені перед нею впритул. «Куплені за NNNгрн» лишається."""
+    prices = list(PRICE.finditer(text))
+    if not prices:
+        return text
+    start = prices[-1].start()
+    for before in reversed(prices[:-1]):
+        if text[before.end() : start].strip():
+            break
+        start = before.start()
+    return text[:start] + " " + text[prices[-1].end() :]
+
+
 def clean_description(text: str, state: str) -> str:
     """Опис для Шафи: без назви (першого речення), ціни, підпису, контактів і хештегів.
 
     Наприкінці — речення про стан, якщо в тексті його ще немає.
     """
     text = text.strip()
-    text = text[first_sentence_end(text) :]
-    for pattern in (SIGNATURE, LINK, MENTION, PHONE, HASHTAG, PRICE):
+    text = _without_price(text[first_sentence_end(text) :])
+    for pattern in (SIGNATURE, LINK, MENTION, PHONE, HASHTAG):
         text = pattern.sub(" ", text)
     lines = [re.sub(r"[ \t\u00a0]+", " ", line).strip() for line in text.splitlines()]
     lines = [re.sub(r" (?=[,.!?])", "", line) for line in lines]
