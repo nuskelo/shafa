@@ -125,3 +125,29 @@ def test_command_uses_same_python():
 
 def test_states_have_texts():
     assert set(control.TEXTS) >= {"stopped", "running", "paused", "login_needed", "crashed"}
+
+
+def test_spawned_robot_survives_ctrl_c_of_screen(monkeypatch, tmp_path):
+    """Mac: своя сесія ОС (Ctrl+C у вікні сервера не дістане); Windows: без вікна, своя група."""
+    import os
+    import subprocess
+    import sys
+
+    probe = "import os; print(os.getsid(0) if hasattr(os, 'getsid') else 0)"
+    monkeypatch.setattr(control, "command", lambda args: [sys.executable, "-c", probe])
+    seen = {}
+    real = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(control.subprocess, "Popen", popen)
+    log = tmp_path / "журнал.log"
+    assert control.spawn([], log).wait(timeout=60) == 0
+    if os.name == "nt":
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        assert seen["creationflags"] & flags == flags
+    else:
+        assert seen.get("start_new_session") is True
+        assert int(log.read_text(encoding="utf-8").strip()) != os.getsid(0)
