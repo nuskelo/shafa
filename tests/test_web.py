@@ -117,10 +117,21 @@ def test_pages_use_only_own_resources(conn, app, item_id):
             assert link.startswith("/") and not link.startswith("//"), link
     for name in web.STATIC:
         body = get(app, f"/static/{name}").body.decode("utf-8")
+        body = body.replace(
+            'xmlns="http://www.w3.org/2000/svg"', ""
+        )  # простір імен, не завантаження
         assert not re.search(r"https?:|//[\w.-]+\.\w|@import|url\(", body.replace("// ", ""))
 
 
 # --- Сторінки ---
+
+
+def test_own_icon_so_browser_does_not_ask_favicon(app, item_id):
+    # Без іконки Chrome просить /favicon.ico → 404 → помилка в консолі (знайшла «мавпа»).
+    for path in ("/review", f"/item/{item_id}"):
+        assert '<link rel="icon" href="/static/icon.svg">' in html(get(app, path))
+    icon = get(app, "/static/icon.svg")
+    assert (icon.status, icon.content_type) == (200, "image/svg+xml")
 
 
 def test_root_redirects_to_review(app):
@@ -309,6 +320,27 @@ def test_missing_or_broken_photo(app, item_id, root):
 
 
 # --- Справжній сервер ---
+
+
+class GoneBrowser:
+    def write(self, data):
+        raise BrokenPipeError(32, "Broken pipe")
+
+    def flush(self):
+        pass
+
+
+def test_browser_leaving_early_is_not_an_error(capsys):
+    # Гортали фото: браузер закрив з'єднання, поки оригінал ще відправлявся.
+    handler = web.Handler.__new__(web.Handler)
+    handler.wfile = GoneBrowser()
+    handler.request_version = "HTTP/1.1"
+    handler.requestline = "GET /photo/1/1 HTTP/1.1"
+    handler.command = "GET"
+
+    handler._send(web.Response(200, b"x" * 1000, "image/jpeg"))
+
+    assert "Traceback" not in capsys.readouterr().err
 
 
 def test_server_listens_only_on_localhost(app, item_id):

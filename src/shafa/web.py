@@ -31,7 +31,11 @@ DEFAULT_PORT = 8765
 MAX_BODY = 1_000_000
 
 PACKAGE = Path(__file__).resolve().parent
-STATIC = {"style.css": "text/css; charset=utf-8", "app.js": "text/javascript; charset=utf-8"}
+STATIC = {
+    "style.css": "text/css; charset=utf-8",
+    "app.js": "text/javascript; charset=utf-8",
+    "icon.svg": "image/svg+xml",
+}
 
 TAB_TITLES = {
     Status.REVIEW: "На перевірку",
@@ -340,13 +344,16 @@ class Handler(BaseHTTPRequestHandler):
         self._send(self.app.handle(request))
 
     def _send(self, response: Response) -> None:
-        self.send_response(response.status)
-        self.send_header("Content-Type", response.content_type)
-        self.send_header("Content-Length", str(len(response.body)))
-        for name, value in response.headers.items():
-            self.send_header(name, value)
-        self.end_headers()
-        self.wfile.write(response.body)
+        try:
+            self.send_response(response.status)
+            self.send_header("Content-Type", response.content_type)
+            self.send_header("Content-Length", str(len(response.body)))
+            for name, value in response.headers.items():
+                self.send_header(name, value)
+            self.end_headers()
+            self.wfile.write(response.body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # браузер пішов, не дочекавшись (гортали фото) — це не помилка
 
     def log_message(self, format: str, *args) -> None:
         pass  # без журналу кожного запиту в консолі
