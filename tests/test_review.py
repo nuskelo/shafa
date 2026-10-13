@@ -395,3 +395,69 @@ def test_list_sorted_by_post_date_and_searchable(conn, root):
     assert [c.id for c in review.list_tab(conn, Status.REVIEW, "1395")] == [late]
     assert [c.id for c in review.list_tab(conn, Status.REVIEW, "lowa 39")] == [other]
     assert review.list_tab(conn, Status.APPROVED) == []
+
+
+# --- Ключові слова під розділ ---
+
+WOMEN = "Жіночий одяг / Взуття / Кросівки"
+MEN = "Чоловічий одяг / Взуття / Кросівки"
+GIRLS = "Дитячий одяг / Для дівчаток / Взуття / Кросівки"
+BOYS = "Дитячий одяг / Для хлопчиків / Взуття / Кросівки"
+BABIES = "Дитячий одяг / Для малюків / Взуття / Кросівки"
+
+
+@pytest.mark.parametrize(
+    ("section", "keywords", "expected"),
+    [
+        (WOMEN, ["кросівки чоловічі", "Чоловічі кросівки"], ["кросівки жіночі", "Жіночі кросівки"]),
+        (MEN, ["жіночі кросівки", "взуття для жінок"], ["чоловічі кросівки", "взуття для чоловіків"]),
+        (MEN, ["бутси дитячі", "Кросівки для малюків"], ["бутси чоловічі", "Кросівки для чоловіків"]),
+        (GIRLS, ["кросівки чоловічі", "кросівки для хлопчика"], ["кросівки дитячі", "кросівки для дівчинки"]),
+        (BOYS, ["дівчачі кросівки", "кеди для дівчаток"], ["дитячі кросівки", "кеди для хлопчика"]),
+        (BABIES, ["жіноче взуття", "для хлопчиків"], ["дитяче взуття", "для малюків"]),
+        # повтори прибрано; слова, схожі на стать, але інші, не чіпаємо
+        (WOMEN, ["кросівки жіночі", "кросівки чоловічі", "жіночність"], ["кросівки жіночі", "жіночність"]),
+        (WOMEN, ["кросівки", "кросівки skechers", "унісекс"], ["кросівки", "кросівки skechers", "унісекс"]),
+        ("Аксесуари / Сумки та рюкзаки / Рюкзаки", ["рюкзак жіночий"], ["рюкзак жіночий"]),
+        ("Щось своє", ["кросівки чоловічі"], ["кросівки чоловічі"]),
+        (None, ["кросівки чоловічі"], ["кросівки чоловічі"]),
+    ],
+)  # fmt: skip
+def test_keywords_for_section(section, keywords, expected):
+    assert review.keywords_for_section(keywords, section) == expected
+
+
+def test_keywords_follow_changed_section(conn, root):
+    blank = [
+        ai.Field("section", MEN),
+        ai.Field("keywords", ["кросівки", "кросівки чоловічі", "кросівки ecco", "42 розмір"]),
+    ]
+    item_id = add_card(conn, root, blank=blank)
+    c = card(conn, item_id)
+
+    review.save(conn, c, form_of(c, section=WOMEN))
+
+    c = card(conn, item_id)
+    assert c.fields["keywords"].value == [
+        "кросівки",
+        "кросівки жіночі",
+        "кросівки ecco",
+        "42 розмір",
+    ]
+    assert "keywords" not in edits(conn, item_id)  # рахується, а не записується
+    review.save(conn, c, form_of(c))  # сторінка без змін — правок не з'являється
+    assert edits(conn, item_id) == {"section": WOMEN}
+    assert review.act(conn, item_id, "approve") == "approved"
+    assert card(conn, item_id).fields["keywords"].value[1] == "кросівки жіночі"
+
+
+def test_manual_keywords_not_touched(conn, root):
+    blank = [ai.Field("section", MEN), ai.Field("keywords", ["кросівки"])]
+    item_id = add_card(conn, root, blank=blank)
+    c = card(conn, item_id)
+    review.save(conn, c, form_of(c, keywords="кросівки чоловічі, кеди"))
+
+    c = card(conn, item_id)
+    review.save(conn, c, form_of(c, section=WOMEN))
+
+    assert card(conn, item_id).fields["keywords"].value == ["кросівки чоловічі", "кеди"]

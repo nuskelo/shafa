@@ -184,6 +184,49 @@ class Card:
         return None
 
 
+# Ключові слова під розділ: слова статі й групи («чоловічі», «для жінок», «дитячі»…) міняються
+# на слова розділу. Для дитячого — «дитячі» (без статі) і «для дівчинки» / «для хлопчика».
+GROUP_ADJECTIVE = re.compile(
+    r"(?<!\w)(чоловіч|жіноч|дівчач|хлопчач|дитяч)(?=[а-яіїєґ']*(?!\w))", re.IGNORECASE
+)
+GROUP_PHRASE = re.compile(
+    r"(?<!\w)(для)\s+(чоловіків|жінок|дівчинки|дівчаток|хлопчика|хлопчиків|малюків)(?!\w)",
+    re.IGNORECASE,
+)
+
+
+def _section_group(section: str) -> tuple[str, str] | None:
+    """(корінь прикметника, «для …») для розділу або None — тоді слова не чіпаємо."""
+    kind = catalog.section_kind(section)
+    if kind is Kind.KIDS:
+        girls = catalog.normalize_section(section).casefold().startswith(catalog.GIRLS.casefold())
+        return "дитяч", "для дівчинки" if girls else "для хлопчика"
+    return {
+        Kind.WOMEN: ("жіноч", "для жінок"),
+        Kind.MEN: ("чоловіч", "для чоловіків"),
+        Kind.BABIES: ("дитяч", "для малюків"),
+    }.get(kind)
+
+
+def _same_case(word: str, like: str) -> str:
+    return word[:1].upper() + word[1:] if like[:1].isupper() else word
+
+
+def keywords_for_section(keywords: list[str], section: str | None) -> list[str]:
+    """Ключові слова зі словами статі/групи розділу; повтори прибрано."""
+    group = _section_group(section) if section else None
+    if group is None:
+        return keywords
+    stem, phrase = group
+    result: list[str] = []
+    for keyword in keywords:
+        keyword = GROUP_ADJECTIVE.sub(lambda m: _same_case(stem, m[1]), keyword)
+        keyword = GROUP_PHRASE.sub(lambda m: _same_case(phrase, m[1]), keyword)
+        if keyword.casefold() not in {k.casefold() for k in result}:
+            result.append(keyword)
+    return result
+
+
 def _code_values(text: str, condition: str | None) -> dict[str, Any]:
     price = rules.price_from_text(text)
     condition = condition or rules.condition(text)
@@ -230,6 +273,18 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
             value = []
         fields[spec.name] = FieldView(
             spec, value, as_form(spec, value), yellow, reason if yellow else None, edited
+        )
+
+    keywords = fields["keywords"]
+    if not keywords.edited:  # ручну правку не чіпаємо
+        value = keywords_for_section(keywords.value, fields["section"].value)
+        fields["keywords"] = FieldView(
+            keywords.spec,
+            value,
+            as_form(keywords.spec, value),
+            keywords.yellow,
+            keywords.reason,
+            False,
         )
 
     photos = [
