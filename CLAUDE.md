@@ -77,15 +77,22 @@ DRIFT зупиняє, якщо міняє те, що будуємо, або ви
 
 | Модуль | Що |
 |---|---|
-| `db.py` | SQLite: `posts`, `items` (Картки), `photos`; `Status` — єдиний список статусів; версія схеми в `PRAGMA user_version` |
+| `db.py` | SQLite: `posts`, `items` (Картки), `photos`, `blanks` (поля ШІ, жовте/ні, причина), `ai_requests` (токени, ціна); `Status` — єдиний список статусів; версія схеми в `PRAGMA user_version` (зараз 2, перехід з 1 автоматичний) |
 | `export.py` | `result.json` → пости `номер → (дата, текст)`, текст без форматування, службові пропущено |
 | `folders.py` | папки товарів першого рівня, номер з назви (`1342` або id каналу + номер), фото `.jpg/.jpeg` «як у провіднику» |
 | `scan.py` | папка ↔ пост → Картка `new` або `problem` з кодом і текстом; повтор не дублює; чіпає лише `new`/`problem` |
 | `rules.py` | поля коду за `docs/rules.md`: ціна (остання) → ціна Шафи, стан, чистий опис, довжина устілки, мембрана; `many_items` |
+| `config.py` | налаштування: змінна середовища, інакше `.env` у корені проєкту; `api_key()` без друку значень |
+| `catalog.py` | довідники Шафи з `docs/research/shafa-form.md`: розділи (звірені й ні), кольори, матеріали, сезони, розміри |
+| `photos.py` | фото для ШІ: поворот за EXIF, 1092 px, JPEG у пам'яті, токени фото |
+| `ai.py` | запит до Claude (`claude-sonnet-5-5`, мислення вимкнене, JSON за схемою) і перевірка відповіді кодом → жовті поля |
+| `fill.py` | Картки `new` → бланк і вартість у базі → `review`, помилка → `problem` `ai_error` |
 
-Зіставлення: `PYTHONPATH=src .venv/bin/python -m shafa scan --export <result.json> --root <Головна папка> --db <файл.sqlite>`.
+Зіставлення: `.venv/bin/python -m shafa scan --export <result.json> --root <Головна папка> --db <файл.sqlite>`.
 `--root` за замовчуванням із `SHAFA_ROOT_DIR`, id каналу — з `TELEGRAM_CHANNEL_ID` (без нього розпізнаються лише назви-номери).
-Поля одного поста: `PYTHONPATH=src .venv/bin/python -m shafa rules --export <result.json> --post <номер>`.
+Поля одного поста: `.venv/bin/python -m shafa rules --export <result.json> --post <номер>`.
+ШІ-бланк: `.venv/bin/python -m shafa fill --db <файл.sqlite> [--root …] [--post N] [--limit K] [--dry-run]` — не більше 10 Карток за запуск; `--dry-run` нічого не надсилає. Інструкція для ШІ — `src/shafa/prompts/blank.md` (правиться без коду).
+Налаштування (`SHAFA_ROOT_DIR`, `TELEGRAM_CHANNEL_ID`, `ANTHROPIC_API_KEY`) — зі змінних середовища або з `.env`.
 Справжні дані й базу — лише поза репозиторієм.
 
 ## Перевірки

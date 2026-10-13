@@ -2,14 +2,17 @@
 
 `python -m shafa scan --export … --root … --db …` — зіставити папки й пости.
 `python -m shafa rules --export … --post N` — поля, які заповнює код, для одного поста.
+`python -m shafa fill --db … --root … [--post N] [--limit K] [--dry-run]` — ШІ-бланк для Карток.
+
+Налаштування (`SHAFA_ROOT_DIR`, `TELEGRAM_CHANNEL_ID`, `ANTHROPIC_API_KEY`) — зі змінних
+середовища або з `.env` у корені проєкту.
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
-from shafa import db, rules
+from shafa import ai, config, db, fill, rules
 from shafa.export import Post, read_export
 from shafa.folders import list_folders
 from shafa.scan import ScanResult, scan
@@ -44,21 +47,75 @@ def format_rules(post: Post) -> str:
     return "\n".join(lines)
 
 
+def _cents(micro_usd: int) -> str:
+    return f"{micro_usd / 10_000:.2f}".replace(".", ",") + " ¢"
+
+
+def format_plan(planned: list[fill.Planned], skipped: list[fill.Skipped]) -> str:
+    """Що було б надіслано: фото, токени й орієнтовна вартість. Нічого не надсилалось."""
+    lines = []
+    for p in planned:
+        tokens = p.estimate.input_tokens
+        lines.append(
+            f"{p.folder_name} (пост {p.post_id}): фото {len(p.photos)}, "
+            f"≈ {tokens} токенів на вхід, ≈ {_cents(p.estimate.cost_micro_usd)}"
+        )
+    lines += [f"{s.folder_name}: пропущено — {s.text}" for s in skipped]
+    total = sum(p.estimate.cost_micro_usd for p in planned)
+    lines.append(
+        f"Карток: {len(planned)} · орієнтовно {_cents(total)}, пакетом ≈ {_cents(total // 2)} · "
+        "нічого не надіслано"
+    )
+    return "\n".join(lines)
+
+
+def format_filled(results: list[fill.Filled], skipped: list[fill.Skipped]) -> str:
+    lines = []
+    for r in results:
+        cost = _cents(r.usage.cost_micro_usd) if r.usage else "0 ¢"
+        if r.error:
+            lines.append(f"{r.folder_name}: помилка — {r.error} ({cost})")
+        else:
+            lines.append(f"{r.folder_name}: бланк готовий, жовтих полів {r.yellow} ({cost})")
+    lines += [f"{s.folder_name}: пропущено — {s.text}" for s in skipped]
+    total = sum(r.usage.cost_micro_usd for r in results if r.usage)
+    done = sum(1 for r in results if not r.error)
+    lines.append(f"Бланків: {done} з {len(results)} · вартість {_cents(total)}")
+    return "\n".join(lines)
+
+
+def _add_root(cmd: argparse.ArgumentParser) -> None:
+    cmd.add_argument(
+        "--root",
+        type=Path,
+        default=config.setting("SHAFA_ROOT_DIR"),
+        help="Головна папка (за замовчуванням SHAFA_ROOT_DIR)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m shafa")
     commands = parser.add_subparsers(dest="command", required=True)
     cmd = commands.add_parser("scan", help="зіставити папки товарів із постами Експорту")
     cmd.add_argument("--export", type=Path, required=True, help="шлях до result.json")
-    cmd.add_argument(
-        "--root",
-        type=Path,
-        default=os.environ.get("SHAFA_ROOT_DIR") or None,
-        help="Головна папка (за замовчуванням SHAFA_ROOT_DIR)",
-    )
+    _add_root(cmd)
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     cmd = commands.add_parser("rules", help="поля, які заповнює код, для одного поста")
     cmd.add_argument("--export", type=Path, required=True, help="шлях до result.json")
     cmd.add_argument("--post", type=int, required=True, help="номер поста")
+    cmd = commands.add_parser("fill", help="ШІ-бланк для Карток new")
+    cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
+    _add_root(cmd)
+    cmd.add_argument("--post", type=int, help="лише Картка цього поста")
+    cmd.add_argument(
+        "--limit",
+        type=int,
+        default=fill.MAX_PER_RUN,
+        help=f"скільки Карток (не більше {fill.MAX_PER_RUN})",
+    )
+    cmd.add_argument(
+        "--dry-run", action="store_true", help="зібрати запити й порахувати, нічого не надсилати"
+    )
     return parser
 
 
@@ -72,21 +129,63 @@ def run_rules(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.command == "rules":
-        return run_rules(parser, args)
+def _root(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Path:
     if args.root is None:
         parser.error("потрібна Головна папка: --root або змінна SHAFA_ROOT_DIR")
     root = Path(args.root)
     if not root.is_dir():
         parser.error(f"Головну папку не знайдено: {root}")
+    return root
+
+
+def run_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    root = _root(parser, args)
+    if not 1 <= args.limit <= fill.MAX_PER_RUN:
+        parser.error(f"--limit від 1 до {fill.MAX_PER_RUN}")
+    if not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    client = None
+    if not args.dry_run:
+        try:
+            client = ai.make_client(config.api_key())
+        except config.ConfigError as error:
+            parser.error(str(error))
+    conn = db.connect(args.db)
+    try:
+        rows = fill.pick_items(conn, args.post, args.limit)
+        if not rows:
+            if args.post is None:
+                print("Немає Карток у статусі new")
+            else:
+                print(f"Немає Картки поста {args.post} у статусі new")
+            return 0
+        planned, skipped = [], []
+        for row in rows:
+            result = fill.plan(conn, root, row)
+            (planned if isinstance(result, fill.Planned) else skipped).append(result)
+        if args.dry_run:
+            print(format_plan(planned, skipped))
+            return 0
+        results = [fill.fill(conn, client, p) for p in planned]
+    finally:
+        conn.close()
+    print(format_filled(results, skipped))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.command == "rules":
+        return run_rules(parser, args)
+    if args.command == "fill":
+        return run_fill(parser, args)
+    root = _root(parser, args)
     if not args.export.is_file():
         parser.error(f"Файл Експорту не знайдено: {args.export}")
 
     posts = read_export(args.export)
-    folders = list_folders(root, os.environ.get("TELEGRAM_CHANNEL_ID") or None)
+    folders = list_folders(root, config.setting("TELEGRAM_CHANNEL_ID"))
     conn = db.connect(args.db)
     try:
         result = scan(conn, posts, folders)
