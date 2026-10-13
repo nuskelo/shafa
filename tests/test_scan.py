@@ -261,8 +261,12 @@ def test_published_folder_is_not_a_product_folder(conn, posts, root):
     assert (result.folders, result.problems) == (1, [])
 
 
-@pytest.mark.parametrize("code", ["publish_uncertain", "possible_duplicate", "publish_error"])
-def test_scan_never_resets_publication_problem(conn, posts, root, code):
+@pytest.mark.parametrize(
+    "code",
+    ["publish_uncertain", "possible_duplicate", "publish_error", "robot_field_missing",
+     "robot_brand_missing", "robot_not_sent"],
+)  # fmt: skip
+def test_scan_never_resets_publication_or_robot_problem(conn, posts, root, code):
     """Інакше Картка пішла б у new → ШІ → перевірка → друга публікація (D2)."""
     folder = make_folder(root, "10", ["1.jpg"])
     run(conn, posts, root)

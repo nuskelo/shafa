@@ -263,6 +263,27 @@ def test_recheck_problem_still_there(conn, app, root):
     assert location(response) == f"/item/{item_id}?msg=recheck_problem"
 
 
+def test_recheck_robot_problem_returns_to_approved_keeping_blank(conn, app, root, item_id):
+    """TD-015: не в new (без нового запиту до ШІ) — бланк і правки лишаються."""
+    with conn:
+        conn.execute("INSERT INTO edits VALUES (?, 'title', '\"Кеди Ecco\"', 'x')", (item_id,))
+        conn.execute(
+            "UPDATE items SET status = 'problem', problem_code = 'robot_field_missing', "
+            "problem_text = 'Робот не знайшов поле «Сезон»'"
+        )
+    blanks = conn.execute("SELECT count(*) FROM blanks WHERE item_id = ?", (item_id,)).fetchone()
+
+    response = post(app, f"/item/{item_id}", action="recheck")
+
+    assert location(response) == "/problem?msg=robot_retry"
+    assert status(conn, item_id) == Status.APPROVED
+    assert (
+        conn.execute("SELECT count(*) FROM blanks WHERE item_id = ?", (item_id,)).fetchone()
+        == blanks
+    )
+    assert conn.execute("SELECT value FROM edits WHERE item_id = ?", (item_id,)).fetchone()[0]
+
+
 def test_recheck_never_returns_publication_problem(conn, app, root, item_id):
     with conn:
         conn.execute(

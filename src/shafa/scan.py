@@ -19,9 +19,18 @@ SCANNABLE = (Status.NEW, Status.PROBLEM)
 STICKY = ("publish_uncertain", "possible_duplicate", "publish_error")
 
 
+def robot_problem(problem_code: str | None) -> bool:
+    """Проблема публікації чи робота: бланк і правки лишаються, повертає лише людина."""
+    return problem_code in STICKY or (problem_code or "").startswith("robot_")
+
+
 def touchable(status: str, problem_code: str | None) -> bool:
-    """Чи може сканування змінити Картку з таким статусом і кодом проблеми."""
-    return status in SCANNABLE and problem_code not in STICKY
+    """Чи може сканування змінити Картку з таким статусом і кодом проблеми.
+
+    Проблеми робота (`robot_…`) теж не чіпає: інакше Картка пішла б у new і ШІ заповнило б бланк
+    знову (TD-015). «Перевірити ще раз» повертає їх у Схвалені (`review.robot_retry`).
+    """
+    return status in SCANNABLE and not robot_problem(problem_code)
 
 
 @dataclass(frozen=True)
@@ -146,7 +155,9 @@ def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
     ).fetchall()
     stamp = now()
     for row in rows:
-        if row["folder_name"] in present or row["problem_code"] in ("folder_missing", *STICKY):
+        if row["folder_name"] in present or row["problem_code"] == "folder_missing":
+            continue
+        if robot_problem(row["problem_code"]):
             continue
         conn.execute(
             """
