@@ -20,9 +20,11 @@ class FakeDriver:
 
     def set_photos(self, paths):
         self._call("photos", len(paths))
+        return len(paths) - (self.missing == "одне фото")
 
     def check_own_photos(self):
         self._call("own_photos")
+        return self.missing != "галочка"
 
     def fill(self, name, value, label):
         self._call("fill", name, label)
@@ -285,3 +287,13 @@ def test_brand_not_found_on_shafa_is_noted():
     )
     assert driver.calls == [("brand", "Ecco"), ("brand", "Невідомий бренд")]
     assert notes == ["Бренду «Невідомий бренд» немає на Шафі — не заповнено (OQ-004)"]
+
+
+def test_missing_checkbox_and_photo_are_notes_not_stops():
+    driver = FakeDriver(None)
+    driver.missing = "галочка"
+    notes = execute([Step("photos", "Фото", ["a", "b"]), Step("own_photos", "Фото")], driver)
+    assert notes == ["Галочки «фото зроблені самостійно» у формі немає — не ставилась"]
+    driver.missing = "одне фото"
+    notes = execute([Step("photos", "Фото", ["a", "b"])], driver)
+    assert notes == ["Фото у формі: 1 з 2 — частина не завантажилась"]

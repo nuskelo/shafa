@@ -5,6 +5,7 @@
 зупиняється, знімає екран, Картка йде в «Проблеми» (не вгадуємо).
 """
 
+import re
 import sqlite3
 import time
 from collections.abc import Callable
@@ -26,8 +27,8 @@ class FieldMissing(Exception):
 
 
 class Driver(Protocol):
-    def set_photos(self, paths: list[str]) -> None: ...
-    def check_own_photos(self) -> None: ...
+    def set_photos(self, paths: list[str]) -> int: ...
+    def check_own_photos(self) -> bool: ...
     def fill(self, name: str, value: str, label: str) -> None: ...
     def choose_category(self, parts: list[str], slug: str) -> None: ...
     def pick(self, label: str, values: list[str]) -> None: ...
@@ -43,9 +44,14 @@ def execute(steps: list[Step], driver: Driver) -> list[str]:
     notes = []
     for step in steps:
         if step.kind == "photos":
-            driver.set_photos(step.value)
+            shown = driver.set_photos(step.value)
+            if shown < len(step.value):
+                notes.append(
+                    f"Фото у формі: {shown} з {len(step.value)} — частина не завантажилась"
+                )
         elif step.kind == "own_photos":
-            driver.check_own_photos()
+            if not driver.check_own_photos():
+                notes.append("Галочки «фото зроблені самостійно» у формі немає — не ставилась")
         elif step.kind == "text":
             driver.fill(step.target, step.value, step.label)
         elif step.kind == "category":
@@ -108,7 +114,8 @@ class PageDriver:
             raise FieldMissing(label)
         return self.page.locator(f"[data-robot-block='{mark}']")
 
-    def set_photos(self, paths: list[str]) -> None:
+    def set_photos(self, paths: list[str]) -> int:
+        """Завантажити фото у форму; повертає, скільки форма показує завантаженими."""
         inputs = self.page.locator("input[type=file]")
         if not inputs.count():
             raise FieldMissing("Фото")
@@ -119,18 +126,23 @@ class PageDriver:
             if time.monotonic() > deadline:
                 raise FieldMissing("Фото (не завантажились)")
             self.page.wait_for_timeout(500)
-        browser.pause(2.0, 3.0)
+        browser.pause(3.0, 4.0)
+        counter = self.page.get_by_text(re.compile(r"\(\d+ з \d+ завантажено\)")).first
+        match = re.search(r"\((\d+) з", counter.inner_text()) if counter.count() else None
+        return int(match.group(1)) if match else len(paths)
 
-    def check_own_photos(self) -> None:
+    def check_own_photos(self) -> bool:
+        """Галочка «фото зроблені самостійно» (D3). У формі 13.10.2026 її немає — тоді False."""
         text = self.page.get_by_text("самостійно").locator("visible=true")
         if not text.count():
-            raise FieldMissing("Фото зроблені самостійно")
+            return False
         box = text.first.locator("xpath=ancestor-or-self::label[1]")
         target = box if box.count() else text.first
         checkbox = target.locator("input[type=checkbox]")
         if checkbox.count() and checkbox.first.is_checked():
-            return
+            return True
         self.session.click(target.first if box.count() else target, "фото самостійні")
+        return True
 
     def fill(self, name: str, value: str, label: str) -> None:
         field = self.page.locator(f"[name='{name}']")
