@@ -1,29 +1,75 @@
-"""Заповнення форми «Додати товар» за кроками з `plan` — БЕЗ публікації (ROBOT-001).
+"""Заповнення форми «Додати товар» за кроками з `plan` (ROBOT-001) і клік «Додати річ» (ROBOT-002).
 
 `execute` знає лише інтерфейс драйвера (тести — з підробним). `PageDriver` — справжній, через
 `browser.Session`: усі кліки й клавіші — крізь захист. Поле не знайдено → `FieldMissing`: робот
 зупиняється, знімає екран, Картка йде в «Проблеми» (не вгадуємо).
 """
 
+import json
 import re
 import sqlite3
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
 from shafa import config, review
 from shafa.db import Status, now
-from shafa.robot import browser
+from shafa.robot import browser, guard
 from shafa.robot.plan import PlanError, Step, plan
 
 MAX_CARDS = 3  # більше за один прогін не можна (тікет)
 UPLOAD_TIMEOUT = 120  # с на всі фото
 
 
+SUBMIT_TIMEOUT = 90  # с на відповідь Шафи після «Додати річ»
+
+
 class FieldMissing(Exception):
     """Поля форми не знайдено (Шафа змінила вигляд?). `args[0]` — назва поля на Шафі."""
+
+
+class BrandMissing(Exception):
+    """Бренду немає у списку Шафи (публікація зупиняється, OQ-004). `args[0]` — бренд."""
+
+
+class PhotosShort(Exception):
+    """Форма показує не всі фото. `args[0]` — текст для Продавчині."""
+
+
+@dataclass(frozen=True)
+class Submitted:
+    """Що сталося після «Додати річ».
+
+    `sent` — запит публікації пройшов захист (пішов на Шафу); `blocked` — захист його зупинив.
+    Успіх — лише `product_id` з відповіді `createProduct` (D6).
+    """
+
+    sent: bool
+    blocked: bool = False
+    product_id: int | None = None
+    errors: list[str] = field(default_factory=list)
+    failure: str | None = None
+
+
+def outcome(sent: bool, blocked: bool, body: object, failure: str | None = None) -> Submitted:
+    """Відповідь `WEB_CreateProduct` → результат. Усе незрозуміле — без `product_id`."""
+    created = None
+    errors: list[str] = []
+    if isinstance(body, dict):
+        result = (body.get("data") or {}).get("createProduct") or {}
+        if isinstance(result, dict):
+            product = result.get("createdProduct") or {}
+            raw_id = product.get("id") if isinstance(product, dict) else None
+            created = int(raw_id) if str(raw_id or "").isdigit() else None
+            for error in result.get("errors") or []:
+                messages = [m.get("message", "") for m in error.get("messages") or []]
+                errors.append(f"{error.get('field') or 'форма'}: {'; '.join(messages)}")
+        if not created and body.get("errors"):
+            failure = failure or "; ".join(str(e.get("message", e)) for e in body["errors"])
+    return Submitted(sent, blocked, created, errors, failure)
 
 
 class Driver(Protocol):
@@ -34,21 +80,24 @@ class Driver(Protocol):
     def pick(self, label: str, values: list[str]) -> None: ...
     def keywords(self, words: list[str]) -> None: ...
     def brand(self, name: str) -> bool: ...
+    def submit(self) -> Submitted: ...
 
 
-def execute(steps: list[Step], driver: Driver) -> list[str]:
+def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str]:
     """Виконати кроки по черзі. Розмір/колір/стан/характеристики — вибір у блоці з підписом.
 
-    Повертає нотатки (бренд не знайшовся на Шафі — поле лишилось порожнім).
+    Повертає нотатки (бренд не знайшовся на Шафі — поле лишилось порожнім). `strict` (публікація):
+    бренд не знайдено → `BrandMissing`, не всі фото → `PhotosShort` — замість нотаток.
     """
     notes = []
     for step in steps:
         if step.kind == "photos":
             shown = driver.set_photos(step.value)
             if shown < len(step.value):
-                notes.append(
-                    f"Фото у формі: {shown} з {len(step.value)} — частина не завантажилась"
-                )
+                note = f"Фото у формі: {shown} з {len(step.value)} — частина не завантажилась"
+                if strict:
+                    raise PhotosShort(note)
+                notes.append(note)
         elif step.kind == "own_photos":
             if not driver.check_own_photos():
                 notes.append("Галочки «фото зроблені самостійно» у формі немає — не ставилась")
@@ -60,6 +109,8 @@ def execute(steps: list[Step], driver: Driver) -> list[str]:
             driver.keywords(step.value)
         elif step.kind == "brand":
             if not driver.brand(step.value):
+                if strict:
+                    raise BrandMissing(step.value)
                 notes.append(f"Бренду «{step.value}» немає на Шафі — не заповнено (OQ-004)")
         elif step.kind in ("condition", "size_system"):
             driver.pick(step.label, [step.value])
@@ -214,6 +265,35 @@ class PageDriver:
             combo.first.fill(word)
             browser.pause(0.5, 1.0)
             self.session.press("Enter", in_keywords=True)
+
+    def submit(self) -> Submitted:
+        """Клік «Додати річ» за квитком і відповідь Шафи. Помилка до кліку — `FieldMissing`."""
+        exact = re.compile(rf"^\s*{guard.PUBLISH_BUTTON}\s*$")
+        button = self.page.locator("button[type=submit]").filter(has_text=exact)
+        button = button.locator("visible=true")
+        if button.count() != 1:
+            raise FieldMissing(f"Кнопка «{guard.PUBLISH_BUTTON}»")
+        creates, blocked = self.session.creates, len(self.session.blocked)
+        body, failure = None, None
+        try:
+            with self.page.expect_response(
+                lambda r: r.request.method == "POST" and is_create_request(r.request),
+                timeout=SUBMIT_TIMEOUT * 1000,
+            ) as info:
+                self.session.click_publish(button.first)
+            body = info.value.json()
+        except Exception as error:  # noqa: BLE001 — тайм-аут, обрив, не JSON, відмова захисту
+            failure = f"{type(error).__name__}: {str(error)[:200]}"
+        refused = [r for _, r in self.session.blocked[blocked:] if browser.PUBLISH.search(r)]
+        return outcome(self.session.creates > creates, bool(refused), body, failure)
+
+
+def is_create_request(request: Any) -> bool:
+    try:
+        data = json.loads(request.post_data or "")
+    except (ValueError, TypeError):
+        return False
+    return guard.is_create(request.url, data)
 
 
 # --- Пробне заповнення ---
