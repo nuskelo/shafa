@@ -285,8 +285,8 @@ def test_photo_only_from_card_folders(app, item_id, path):
     assert get(app, path.format(id=item_id)).status == 404
 
 
-def test_photo_outside_root_refused_even_if_in_db(conn, app, item_id, tmp_path):
-    (tmp_path / "secret.jpg").write_bytes(b"\xff\xd8secret")
+def test_photo_outside_root_refused_even_if_in_db(conn, app, item_id, root):
+    (root.parent / "secret.jpg").write_bytes(b"\xff\xd8secret")  # Головна/1342/../../
     with conn:
         conn.execute("UPDATE photos SET file_name = '../../secret.jpg' WHERE position = 1")
     assert get(app, f"/photo/{item_id}/1").status == 404

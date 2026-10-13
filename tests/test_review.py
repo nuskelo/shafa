@@ -136,6 +136,17 @@ def test_unchanged_form_saves_nothing(conn, root):
     assert edits(conn, c.id) == {}
 
 
+def test_windows_line_breaks_in_description_are_no_change(conn, root):
+    text = "Кеди Ecco 38 розміру.\nУстілка 24,5 см.\nМ'які, легкі.\n1200грн"
+    c = card(conn, add_card(conn, root, text=text))
+    description = c.fields["description"].inputs[0]
+    assert "\n" in description
+
+    review.save(conn, c, form_of(c, season="Зима", description=description.replace("\n", "\r\n")))
+
+    assert "description" not in edits(conn, c.id)
+
+
 def test_changed_field_saved_and_no_longer_yellow(conn, root):
     item_id = add_card(conn, root)
     c = card(conn, item_id)
