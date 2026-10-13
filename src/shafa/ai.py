@@ -18,12 +18,19 @@ from shafa.photos import PreparedPhoto
 
 MODEL = "claude-sonnet-5-5"
 MAX_TOKENS = 4000
-# Ціна Claude Sonnet 5.5, мікродолари за токен ($2 і $10 за мільйон; docs: about-claude/pricing).
-INPUT_MICRO_USD = 2
-OUTPUT_MICRO_USD = 10
-# Для оцінки без запиту (--dry-run): символів тексту на токен і токенів відповіді — грубо, точне
-# число — у `usage` відповіді.
-CHARS_PER_TOKEN = 2.5
+# Ціна Claude Sonnet 5.5 у десятих частках мікродолара за токен (= $ за мільйон × 10; docs:
+# about-claude/pricing, звірено 13.10.2026): вхід $2, вихід $10, запис кешу на годину $4,
+# читання з кешу $0,10. Пакет (Batch API) — усе вдвічі дешевше, знижки складаються.
+INPUT_PRICE = 20
+OUTPUT_PRICE = 100
+CACHE_WRITE_PRICE = 40
+CACHE_READ_PRICE = 1
+# Кеш інструкції — лише в пакеті і лише на годину: пакет може йти довше 5 хв (рішення D1).
+CACHE_CONTROL = {"type": "ephemeral", "ttl": "1h"}
+# Для оцінки без запиту (--dry-run, запобіжник грошей): символів тексту на токен і токенів
+# відповіді — грубо, точне число — у `usage` відповіді. Замір CORE-004: інструкція й схема
+# (23 771 символ) — 13 991 токен, ≈1,7 символу на токен; беремо з запасом.
+CHARS_PER_TOKEN = 1.6
 OUTPUT_TOKENS_ESTIMATE = 1000
 # Ліміт поля «Назва» у формі Шафи (`maxlength`, звірено 13.10.2026, ROBOT-001).
 TITLE_MAX = 150
@@ -108,12 +115,36 @@ class Field:
 
 @dataclass(frozen=True)
 class Usage:
+    """Токени запиту. `input_tokens` — лише некешовані; запис кешу — завжди на годину (інших
+    позначок ми не ставимо)."""
+
     input_tokens: int
     output_tokens: int
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
+    batch: bool = False
 
     @property
     def cost_micro_usd(self) -> int:
-        return self.input_tokens * INPUT_MICRO_USD + self.output_tokens * OUTPUT_MICRO_USD
+        tenths = (
+            self.input_tokens * INPUT_PRICE
+            + self.output_tokens * OUTPUT_PRICE
+            + self.cache_write_tokens * CACHE_WRITE_PRICE
+            + self.cache_read_tokens * CACHE_READ_PRICE
+        )
+        divisor = 20 if self.batch else 10
+        return (tenths + divisor // 2) // divisor
+
+
+def usage_from(usage: Any, batch: bool = False) -> Usage:
+    """`usage` відповіді API → Usage; поля кешу бувають відсутні або None."""
+    return Usage(
+        usage.input_tokens,
+        usage.output_tokens,
+        getattr(usage, "cache_creation_input_tokens", None) or 0,
+        getattr(usage, "cache_read_input_tokens", None) or 0,
+        batch,
+    )
 
 
 def system_prompt() -> str:
@@ -147,8 +178,14 @@ def user_text(post_text: str) -> str:
     )
 
 
-def build_request(post_text: str, photos: list[PreparedPhoto]) -> dict[str, Any]:
-    """Параметри `client.messages.create`: фото перед текстом, кожне з іменем файлу."""
+def build_request(
+    post_text: str, photos: list[PreparedPhoto], cache: bool = False
+) -> dict[str, Any]:
+    """Параметри `client.messages.create`: фото перед текстом, кожне з іменем файлу.
+
+    `cache` — інструкція з позначкою кешу (для пакета): вона однакова для всіх Карток і стоїть
+    першою (`system` перед `messages`), тож кешується весь її текст. Мислення й схема — сталі.
+    """
     content: list[dict[str, Any]] = []
     for i, photo in enumerate(photos, start=1):
         content.append({"type": "text", "text": f"Фото {i}: {photo.file_name}"})
@@ -163,38 +200,69 @@ def build_request(post_text: str, photos: list[PreparedPhoto]) -> dict[str, Any]
             }
         )
     content.append({"type": "text", "text": user_text(post_text)})
+    system: str | list[dict[str, Any]] = system_prompt()
+    if cache:
+        system = [{"type": "text", "text": system, "cache_control": CACHE_CONTROL}]
     return {
         "model": MODEL,
         "max_tokens": MAX_TOKENS,
-        "system": system_prompt(),
+        "system": system,
         "thinking": {"type": "between_tools"},  # мислення вимкнене (рішення D4)
         "output_config": {"format": {"type": "json_schema", "schema": SCHEMA}},
         "messages": [{"role": "user", "content": content}],
     }
 
 
-def estimate(request: dict[str, Any], photos: list[PreparedPhoto]) -> Usage:
-    """Орієнтовні токени запиту без надсилання: фото — точно за формулою, текст — грубо."""
-    texts = [request["system"], json.dumps(SCHEMA, ensure_ascii=False)]
+def _tokens(text: str) -> int:
+    return round(len(text) / CHARS_PER_TOKEN)
+
+
+def estimate(request: dict[str, Any], photos: list[PreparedPhoto], batch: bool = False) -> Usage:
+    """Орієнтовні токени запиту без надсилання: фото — точно за формулою, текст — грубо.
+
+    Інструкція з позначкою кешу рахується як запис у кеш — найгірший випадок (кеш не спрацював).
+    """
+    system = request["system"]
+    cached = 0
+    if isinstance(system, list):
+        cached = _tokens("".join(b["text"] for b in system))
+        system = ""
+    texts = [system, json.dumps(SCHEMA, ensure_ascii=False)]
     texts += [b["text"] for b in request["messages"][0]["content"] if b["type"] == "text"]
-    text_tokens = round(sum(len(t) for t in texts) / CHARS_PER_TOKEN)
-    return Usage(text_tokens + sum(p.tokens for p in photos), OUTPUT_TOKENS_ESTIMATE)
+    text_tokens = sum(_tokens(t) for t in texts)
+    return Usage(
+        text_tokens + sum(p.tokens for p in photos),
+        OUTPUT_TOKENS_ESTIMATE,
+        cache_write_tokens=cached,
+        batch=batch,
+    )
 
 
 def call(client: Any, request: dict[str, Any]) -> tuple[dict[str, Any], Usage]:
     """Надіслати запит. Відповідь — словник JSON і використані токени, або AiError."""
     try:
         message = client.messages.create(**request)
-    except anthropic.AuthenticationError as error:
-        raise AiError("Ключ Claude API не прийнято (401)") from error
-    except anthropic.RateLimitError as error:
-        raise AiError("Забагато запитів до Claude API (429), спробуйте пізніше") from error
-    except anthropic.APIStatusError as error:
-        raise AiError(f"Помилка Claude API ({error.status_code})") from error
-    except anthropic.APIConnectionError as error:
-        raise AiError("Немає з'єднання з Claude API") from error
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as error:
+        raise AiError(error_text(error)) from error
+    return parse(message)
 
-    usage = Usage(message.usage.input_tokens, message.usage.output_tokens)
+
+def error_text(error: anthropic.AnthropicError) -> str:
+    """Помилка API простими словами, без тексту відповіді (там може бути що завгодно)."""
+    if isinstance(error, anthropic.AuthenticationError):
+        return "Ключ Claude API не прийнято (401)"
+    if isinstance(error, anthropic.RateLimitError):
+        return "Забагато запитів до Claude API (429), спробуйте пізніше"
+    if isinstance(error, anthropic.APIStatusError):
+        return f"Помилка Claude API ({error.status_code})"
+    if isinstance(error, anthropic.APIConnectionError):
+        return "Немає з'єднання з Claude API"
+    return "Помилка Claude API"
+
+
+def parse(message: Any, batch: bool = False) -> tuple[dict[str, Any], Usage]:
+    """Відповідь (звичайна або з пакета) → словник JSON і токени, або AiError з токенами."""
+    usage = usage_from(message.usage, batch)
     if message.stop_reason == "refusal":
         raise AiError("ШІ відмовилось обробити цю Картку", usage)
     if message.stop_reason == "max_tokens":

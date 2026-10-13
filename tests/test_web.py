@@ -148,12 +148,6 @@ def test_tabs_with_counts(conn, app, root, item_id):
     assert "1380 грн · Чоловічий одяг / Взуття / Кросівки" in page
 
 
-def test_waiting_for_ai_counter(conn, app, root, item_id):
-    with conn:
-        conn.execute("UPDATE items SET status = 'new'")
-    assert "Чекають ШІ: 1" in html(get(app, "/review"))
-
-
 def test_search(conn, app, root, item_id):
     assert f"/item/{item_id}" in html(get(app, "/review?q=ECCO"))
     assert "Нічого не знайдено" in html(get(app, "/review?q=Lowa"))
@@ -352,6 +346,41 @@ def test_missing_or_broken_photo(app, item_id, root):
     (root / "1342" / "IMG_2.JPG").write_bytes(b"not a jpeg")
     assert get(app, f"/photo/{item_id}/1").status == 404
     assert get(app, f"/thumb/{item_id}/2").status == 404
+
+
+def test_published_card_photos_from_published_folder(conn, app, item_id, root):
+    """TD-016: робот переносить папку опублікованого в «Опубліковано» — фото звідти."""
+    (root / "Опубліковано").mkdir()
+    (root / "1342").rename(root / "Опубліковано" / "1342")
+    with conn:
+        conn.execute("UPDATE items SET status = 'published'")
+
+    original = get(app, f"/photo/{item_id}/1")
+    assert original.status == 200
+    assert original.body == (root / "Опубліковано" / "1342" / "IMG_1.JPG").read_bytes()
+    assert get(app, f"/thumb/{item_id}/2").status == 200
+
+
+def test_published_card_photos_still_in_main_folder(conn, app, item_id):
+    """Папку не вдалося перенести (D1 ROBOT-002) — фото з Головної папки."""
+    with conn:
+        conn.execute("UPDATE items SET status = 'published'")
+    assert get(app, f"/photo/{item_id}/1").status == 200
+
+
+def test_published_folder_only_for_published_cards(conn, app, item_id, root):
+    (root / "Опубліковано").mkdir()
+    (root / "1342").rename(root / "Опубліковано" / "1342")
+    assert get(app, f"/photo/{item_id}/1").status == 404
+
+
+def test_published_photo_outside_root_refused(conn, app, item_id, root):
+    (root.parent / "secret.jpg").write_bytes(b"\xff\xd8secret")  # Опубліковано/1342/../../../
+    with conn:
+        conn.execute("UPDATE items SET status = 'published'")
+        conn.execute("UPDATE photos SET file_name = '../../../secret.jpg' WHERE position = 1")
+    (root / "Опубліковано" / "1342").mkdir(parents=True)
+    assert get(app, f"/photo/{item_id}/1").status == 404
 
 
 # --- Справжній сервер ---

@@ -162,3 +162,94 @@ def test_lining_checked_against_post_text(conn, root, lining, row):
         (item_id,),
     ).fetchone()
     assert tuple(saved) == row
+
+
+def test_cache_tokens_and_cost_are_logged(conn, root):
+    item_id = add_item(conn, root)
+    good = {**GOOD, "photo_order": ["IMG_1.JPG", "IMG_2.JPG"]}
+    reply = message(good, usage=(1000, 400), cache=(9000, 0))
+
+    fill.fill(conn, FakeClient(reply), planned_for(conn, root))
+
+    row = conn.execute("SELECT * FROM ai_requests WHERE item_id = ?", (item_id,)).fetchone()
+    assert (row["input_tokens"], row["cache_write_tokens"], row["cache_read_tokens"]) == (
+        1000, 9000, 0
+    )  # fmt: skip
+    assert row["cost_micro_usd"] == 1000 * 2 + 400 * 10 + 9000 * 4
+    assert row["batch_id"] is None
+
+
+def test_pick_items_skips_cards_waiting_in_batch(conn, root):
+    first = add_item(conn, root, folder="1", post_id=1)
+    add_item(conn, root, folder="2", post_id=2)
+    with conn:
+        conn.execute(
+            "INSERT INTO ai_batches (id, status, created_at) VALUES (1, 'in_progress', 'x')"
+        )
+        conn.execute("INSERT INTO ai_batch_items VALUES (1, ?, 30000, 'pending')", (first,))
+    assert [r["post_id"] for r in fill.pick_items(conn, None, 10)] == [2]
+    with conn:
+        conn.execute("UPDATE ai_batch_items SET state = 'returned'")
+    assert [r["post_id"] for r in fill.pick_items(conn, None, 10)] == [1, 2]
+
+
+def review_card_with_edit(conn, root):
+    """Картка на перевірці зі старим бланком і ручною правкою назви."""
+    item_id = add_item(conn, root)
+    with conn:
+        conn.execute("UPDATE items SET status = 'review' WHERE id = ?", (item_id,))
+        conn.execute(
+            "INSERT INTO blanks VALUES (?, 'title', '\"Стара назва\"', 1, 'x')", (item_id,)
+        )
+        conn.execute("INSERT INTO edits VALUES (?, 'title', '\"Моя назва\"', 'x')", (item_id,))
+    return item_id
+
+
+def retry_planned(conn, root, item_id):
+    planned = fill.plan(conn, root, fill.retry_row(conn, item_id))
+    assert isinstance(planned, fill.Planned)
+    return planned
+
+
+def test_retry_replaces_blank_but_keeps_edits(conn, root):
+    item_id = review_card_with_edit(conn, root)
+    planned = retry_planned(conn, root, item_id)
+    assert "cache_control" not in json.dumps(planned.request)  # без кешу (D2)
+    client = FakeClient(message({**GOOD, "photo_order": ["IMG_1.JPG", "IMG_2.JPG"]}))
+
+    result = fill.retry(conn, client, planned)
+
+    assert result.error is None
+    assert item(conn, item_id)["status"] == Status.REVIEW
+    title = conn.execute(
+        "SELECT value FROM blanks WHERE item_id = ? AND field = 'title'", (item_id,)
+    ).fetchone()[0]
+    assert json.loads(title) == GOOD["title"]
+    edits = conn.execute("SELECT field, value FROM edits WHERE item_id = ?", (item_id,)).fetchall()
+    assert [tuple(e) for e in edits] == [("title", '"Моя назва"')]
+    assert conn.execute("SELECT count(*) FROM ai_requests").fetchone()[0] == 1
+
+
+def test_retry_error_keeps_old_blank_and_status(conn, root):
+    item_id = review_card_with_edit(conn, root)
+    error = anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x.test"))
+
+    result = fill.retry(conn, FakeClient(error), retry_planned(conn, root, item_id))
+
+    assert result.error == "Немає з'єднання з Claude API"
+    assert item(conn, item_id)["status"] == Status.REVIEW
+    assert conn.execute("SELECT value FROM blanks").fetchone()[0] == '"Стара назва"'
+    assert conn.execute("SELECT error FROM ai_requests").fetchone()[0] == result.error
+
+
+def test_retry_does_not_touch_card_approved_meanwhile(conn, root):
+    item_id = review_card_with_edit(conn, root)
+    planned = retry_planned(conn, root, item_id)
+    with conn:
+        conn.execute("UPDATE items SET status = 'approved' WHERE id = ?", (item_id,))
+
+    fill.retry(conn, FakeClient(message({**GOOD, "photo_order": []})), planned)
+
+    assert item(conn, item_id)["status"] == Status.APPROVED
+    assert conn.execute("SELECT value FROM blanks").fetchone()[0] == '"Стара назва"'
+    assert fill.retry_row(conn, item_id) is None

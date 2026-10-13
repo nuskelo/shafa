@@ -15,9 +15,6 @@
     <a href="/{{ status }}" class="tab{% if status == current %} current{% endif %}">{{ title }} <span class="count">{{ counts[status] }}</span></a>
     {% endfor %}
   </nav>
-  {% if counts["new"] %}
-  <p class="waiting">Чекають ШІ: {{ counts["new"] }}</p>
-  {% endif %}
 </header>
 <div id="robot" data-panel="/robot/panel?back={{ back | urlencode }}">
 {% include "panel.html" %}

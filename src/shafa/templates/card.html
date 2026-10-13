@@ -168,6 +168,14 @@
         {% endif %}
       </div>
     </form>
+    {% if card.status == "review" %}
+    {# Окрема форма: незбережені правки не пропадуть мовчки — браузер перепитає. #}
+    <form method="post" action="/item/{{ card.id }}" class="ai-retry">
+      <input type="hidden" name="token" value="{{ token }}">
+      <button name="action" value="ai_retry">ШІ, спробуй ще раз</button>
+      <small>новий бланк одразу (≈ 5 ¢); ваші правки лишаються</small>
+    </form>
+    {% endif %}
     {% endif %}
   </section>
 </div>

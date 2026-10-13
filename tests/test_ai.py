@@ -42,13 +42,19 @@ def photos(names=NAMES):
     return [PreparedPhoto(n, b"\xff\xd8jpeg", 1092, 819) for n in names]
 
 
-def message(text, stop_reason="end_turn", usage=(15000, 600)):
+def message(text, stop_reason="end_turn", usage=(15000, 600), cache=(None, None)):
+    """Відповідь API; `cache` — (записано в кеш, прочитано з кешу), None — поля немає."""
     if isinstance(text, dict):
         text = json.dumps(text, ensure_ascii=False)
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text=text)],
         stop_reason=stop_reason,
-        usage=SimpleNamespace(input_tokens=usage[0], output_tokens=usage[1]),
+        usage=SimpleNamespace(
+            input_tokens=usage[0],
+            output_tokens=usage[1],
+            cache_creation_input_tokens=cache[0],
+            cache_read_input_tokens=cache[1],
+        ),
     )
 
 
@@ -59,6 +65,9 @@ class FakeClient:
         self.result = result
         self.requests = []
         self.messages = self
+
+    def with_options(self, **options):
+        return self
 
     def create(self, **request):
         self.requests.append(request)
@@ -89,6 +98,28 @@ def test_request_shape():
     assert content[0]["text"] == "Фото 1: IMG_1.JPG"
     assert content[1]["source"]["media_type"] == "image/jpeg"
     assert content[1]["source"]["data"] == "/9hqcGVn"
+
+
+def test_plain_request_has_no_cache_mark():
+    """Звичайний запит («ШІ, спробуй ще раз») — без кешу (D2): інструкція — простий рядок."""
+    request = ai.build_request(POST, photos())
+    assert request["system"] == ai.system_prompt()
+    assert "cache_control" not in json.dumps(request)
+
+
+def test_cached_request_marks_only_instruction_for_an_hour():
+    request = ai.build_request(POST, photos(), cache=True)
+
+    assert request["system"] == [
+        {
+            "type": "text",
+            "text": ai.system_prompt(),
+            "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        }
+    ]
+    assert json.dumps(request).count("cache_control") == 1
+    plain = ai.build_request(POST, photos())
+    assert {**request, "system": plain["system"]} == plain
 
 
 def test_request_text_has_code_fields_but_no_contacts():
@@ -139,8 +170,48 @@ def test_estimate_counts_photos_exactly():
     assert usage.output_tokens == ai.OUTPUT_TOKENS_ESTIMATE
 
 
+def test_estimate_of_cached_batch_request_is_worst_case():
+    """Оцінка для пакета: інструкція — як запис у кеш на годину (кеш не спрацював), усе вдвічі."""
+    plain = ai.estimate(ai.build_request(POST, photos()), photos())
+    cached = ai.estimate(ai.build_request(POST, photos(), cache=True), photos(), batch=True)
+
+    system = round(len(ai.system_prompt()) / ai.CHARS_PER_TOKEN)
+    assert cached.cache_write_tokens == system
+    assert cached.input_tokens == plain.input_tokens - system
+    assert cached.batch
+    assert cached.cost_micro_usd > plain.cost_micro_usd / 2
+
+
 def test_cost_in_micro_dollars():
     assert ai.Usage(15000, 600).cost_micro_usd == 15000 * 2 + 600 * 10
+
+
+@pytest.mark.parametrize(
+    ("usage", "micro_usd"),
+    [
+        # звичайний запит: $2 і $10 за мільйон
+        (ai.Usage(10_000, 400), 20_000 + 4_000),
+        # пакет: усе вдвічі
+        (ai.Usage(10_000, 400, batch=True), 12_000),
+        # кеш: запис на годину $4, читання $0,10 за мільйон
+        (ai.Usage(1_000, 400, cache_write_tokens=9_000), 2_000 + 4_000 + 36_000),
+        (ai.Usage(1_000, 400, cache_read_tokens=9_000), 2_000 + 4_000 + 900),
+        # пакет і кеш разом
+        (ai.Usage(9_500, 370, cache_read_tokens=8_800, batch=True), 9_500 + 1_850 + 440),
+        (ai.Usage(9_500, 370, cache_write_tokens=8_800, batch=True), 9_500 + 1_850 + 17_600),
+        # дробові мікродолари округлюються
+        (ai.Usage(0, 0, cache_read_tokens=5), 1),
+        (ai.Usage(0, 0, cache_read_tokens=5, batch=True), 0),
+    ],
+)
+def test_cost_for_batch_and_cache(usage, micro_usd):
+    assert usage.cost_micro_usd == micro_usd
+
+
+def test_parse_reads_cache_tokens():
+    reply = message(GOOD, usage=(9500, 370), cache=(0, 8800))
+    assert ai.parse(reply, batch=True)[1] == ai.Usage(9500, 370, 0, 8800, batch=True)
+    assert ai.parse(message(GOOD, usage=(9500, 370)))[1] == ai.Usage(9500, 370)
 
 
 # --- Відповідь ---

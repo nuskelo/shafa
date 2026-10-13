@@ -55,7 +55,6 @@ main.error { max-width: 40rem; padding-top: 4rem; }
   text-align: center;
   font-size: 0.85em;
 }
-.waiting { margin: 0 0 0 auto; color: var(--muted); }
 
 .message {
   max-width: 1400px;
@@ -175,6 +174,11 @@ dialog p { margin: 0.3rem 0 0; text-align: center; font-size: 0.9rem; }
 .robot-buttons { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
 .robot-buttons .why { color: var(--muted); font-size: 0.9rem; }
 .robot-help { flex-basis: 100%; margin: 0; }
+.ai { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; align-items: center; padding: 0.4rem 1.5rem 0.6rem; max-width: 1400px; margin: 0 auto; border-top: 1px solid var(--line); }
+.ai-busy strong { color: var(--green); }
+.ai-note { font-size: 0.9rem; }
+.ai-retry { margin-top: 1rem; display: flex; gap: 0.8rem; align-items: center; }
+.ai-retry small { color: var(--muted); }
 .robot-running strong, .robot-pausing strong, .robot-stopping strong { color: var(--green); }
 .robot-login_needed strong, .robot-crashed strong, .robot-failed strong { color: var(--red); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
