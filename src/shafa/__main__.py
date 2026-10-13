@@ -3,6 +3,8 @@
 `python -m shafa scan --export … --root … --db …` — зіставити папки й пости.
 `python -m shafa rules --export … --post N` — поля, які заповнює код, для одного поста.
 `python -m shafa fill --db … --root … [--post N] [--limit K] [--dry-run]` — ШІ-бланк для Карток.
+`python -m shafa fill --db … --root … --batch [--limit K] | --estimate` — пакет ШІ (Картки, чий пост
+старший 7 днів) або оцінка без запитів; `fill --db … --collect` — забрати готові результати.
 `python -m shafa ui --db … --root … [--port P] [--no-browser]` — екран перевірки в браузері.
 `python -m shafa robot --login | --sync-catalog | --dry-fill --db … --post N [--post M …]` — робот
 Шафи: ручний вхід Власника, знімок довідників, заповнення форми БЕЗ публікації (до 3 Карток).
@@ -16,9 +18,10 @@
 import argparse
 import sys
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 
-from shafa import ai, config, db, fill, photos, review, rules, web
+from shafa import ai, batch, config, db, fill, photos, review, rules, web
 from shafa.export import Post, read_export
 from shafa.folders import list_folders
 from shafa.scan import ScanResult, scan
@@ -116,12 +119,15 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument(
         "--limit",
         type=int,
-        default=fill.MAX_PER_RUN,
-        help=f"скільки Карток (не більше {fill.MAX_PER_RUN})",
+        help=f"скільки Карток (по одній — не більше {fill.MAX_PER_RUN}; пакетом — ліміт пакета)",
     )
-    cmd.add_argument(
+    mode = cmd.add_mutually_exclusive_group()
+    mode.add_argument(
         "--dry-run", action="store_true", help="зібрати запити й порахувати, нічого не надсилати"
     )
+    mode.add_argument("--batch", action="store_true", help="відправити пакет (−50%%)")
+    mode.add_argument("--collect", action="store_true", help="забрати результати пакетів")
+    mode.add_argument("--estimate", action="store_true", help="що піде в пакет — без запитів")
     cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
@@ -323,18 +329,73 @@ def _root(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Path:
     return root
 
 
+def format_estimate(plan: batch.Plan, spent: int, lim: batch.Limits) -> str:
+    lines = [
+        f"{p.folder_name} (пост {p.post_id}): фото {len(p.photos)}, "
+        f"≈ {_cents(p.estimate.cost_micro_usd)}"
+        for p in plan.planned
+    ]
+    lines += [f"{s.folder_name}: у «Проблеми» — {s.text}" for s in plan.skipped]
+    lines.append(
+        f"У пакет: {len(plan.planned)} · ≈ {_cents(plan.estimate)} (найгірше: кеш не спрацював) · "
+        f"лишиться в черзі {plan.left}{' (ліміт грошей)' if plan.over_budget else ''}"
+    )
+    lines.append(
+        f"Чекають 7 днів: {plan.young} · чекають відповіді ШІ: {plan.pending} · "
+        f"сьогодні {batch.dollars(spent)} з {batch.dollars(lim.daily_micro_usd)} · нічого не надіслано"
+    )
+    return "\n".join(lines)
+
+
+def _client(parser: argparse.ArgumentParser):
+    try:
+        return ai.make_client(config.api_key())
+    except config.ConfigError as error:
+        parser.error(str(error))
+
+
+def run_batch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`fill --batch | --collect | --estimate`."""
+    try:
+        lim = batch.limits()
+    except batch.SetupError as error:
+        parser.error(str(error))
+    if args.limit is not None and not 1 <= args.limit <= lim.batch_limit:
+        parser.error(f"--limit від 1 до {lim.batch_limit}")
+    root = None if args.collect else _root(parser, args)
+    if not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    client = None if args.estimate else _client(parser)
+    today = datetime.now().astimezone()
+    conn = db.connect(args.db)
+    try:
+        if args.estimate:
+            plan = batch.prepare(conn, root, today, lim, args.limit)
+            print(format_estimate(plan, batch.spent_today(conn, today), lim))
+        elif args.collect:
+            report = batch.collect(conn, client, today)
+            waiting = f"пакетів ще в роботі: {report.waiting}" if report.waiting else None
+            print("; ".join(t for t in (batch.collected_text(report), waiting) if t) or "Нічого")
+        else:
+            print(batch.sent_text(batch.send(conn, client, root, today, lim, args.limit), lim))
+    finally:
+        conn.close()
+    return 0
+
+
 def run_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if args.batch or args.collect or args.estimate:
+        if args.post is not None:
+            parser.error("--post — лише для запитів по одній Картці")
+        return run_batch(parser, args)
     root = _root(parser, args)
+    if args.limit is None:
+        args.limit = fill.MAX_PER_RUN
     if not 1 <= args.limit <= fill.MAX_PER_RUN:
         parser.error(f"--limit від 1 до {fill.MAX_PER_RUN}")
     if not args.db.is_file():
         parser.error(f"Базу не знайдено: {args.db}")
-    client = None
-    if not args.dry_run:
-        try:
-            client = ai.make_client(config.api_key())
-        except config.ConfigError as error:
-            parser.error(str(error))
+    client = None if args.dry_run else _client(parser)
     conn = db.connect(args.db)
     try:
         rows = fill.pick_items(conn, args.post, args.limit)

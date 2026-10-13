@@ -185,6 +185,57 @@ def test_fill_missing_db_not_created(tmp_path, root, no_client, capsys):
     assert "Базу не знайдено" in capsys.readouterr().err
 
 
+def test_fill_estimate_sends_nothing(conn, db_path, root, no_client, capsys):
+    add_item(conn, root)
+
+    code = main(fill_args(db_path, root, "--estimate"))
+
+    out = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert out[0].startswith("1342 (пост 1342): фото 2, ≈ ")
+    assert out[1].startswith("У пакет: 1 · ≈ ")
+    assert out[2] == (
+        "Чекають 7 днів: 0 · чекають відповіді ШІ: 0 · сьогодні $0,00 з $3,00 · нічого не надіслано"
+    )
+    assert conn.execute("SELECT count(*) FROM ai_batches").fetchone()[0] == 0
+
+
+def test_fill_batch_then_collect(conn, db_path, root, monkeypatch, capsys):
+    from test_batch import FakeClient as BatchClient
+    from test_batch import line
+
+    item_id = add_item(conn, root)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    client = BatchClient()
+    monkeypatch.setattr(ai, "make_client", lambda key: client)
+
+    assert main(fill_args(db_path, root, "--batch")) == 0
+    assert capsys.readouterr().out.startswith(
+        "Відправлено на ШІ 1 товарів, результати зазвичай до години"
+    )
+    main(["fill", "--db", str(db_path), "--collect"])  # Головна папка не потрібна
+    assert capsys.readouterr().out == "пакетів ще в роботі: 1\n"
+
+    client.batches.status["msgbatch_1"] = "ended"
+    client.batches.lines["msgbatch_1"] = [line(f"b1-i{item_id}")]
+    main(["fill", "--db", str(db_path), "--collect"])
+    assert capsys.readouterr().out == "ШІ заповнило бланків: 1\n"
+
+
+@pytest.mark.parametrize(
+    ("extra", "error"),
+    [
+        (["--batch", "--limit", "51"], "--limit від 1 до 50"),
+        (["--batch", "--post", "1342"], "--post — лише для запитів по одній Картці"),
+        (["--batch", "--dry-run"], "not allowed with argument"),
+    ],
+)
+def test_fill_batch_argument_errors(db_path, root, no_client, extra, error, capsys):
+    with pytest.raises(SystemExit):
+        main(fill_args(db_path, root, *extra))
+    assert error in capsys.readouterr().err
+
+
 def test_settings_from_env_file(tmp_path, root, export_path, capsys):
     make_folder(root, CHANNEL_ID + "10", ["1.jpg"])
     config.ENV_FILE.write_text(f"SHAFA_ROOT_DIR={root}\n", encoding="utf-8")
