@@ -1,0 +1,161 @@
+"""Зіставлення папок товарів із постами: Картки й «Проблеми»."""
+
+import sqlite3
+from collections import defaultdict
+from dataclasses import dataclass
+
+from shafa.db import Status, now
+from shafa.export import Post
+from shafa.folders import Folder, natural_key
+
+MAX_PHOTOS = 10
+
+# Статуси, які сканування може міняти. Картки в роботі (review і далі) не чіпає.
+SCANNABLE = (Status.NEW, Status.PROBLEM)
+
+
+@dataclass(frozen=True)
+class Problem:
+    folder_name: str
+    code: str
+    text: str
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    folders: int
+    new: int
+    problems: list[Problem]
+
+
+def save_posts(conn: sqlite3.Connection, posts: dict[int, Post]) -> None:
+    """Пости з Експорту → таблиця `posts`. Пости від бота не перезаписуються."""
+    added_at = now()
+    conn.executemany(
+        """
+        INSERT INTO posts (post_id, date, text, source, added_at)
+        VALUES (?, ?, ?, 'export', ?)
+        ON CONFLICT (post_id) DO UPDATE SET date = excluded.date, text = excluded.text
+        WHERE posts.source = 'export'
+        """,
+        [(p.post_id, p.date, p.text, added_at) for p in posts.values()],
+    )
+
+
+def _join(names: list[str]) -> str:
+    return ", ".join(names[:-1]) + " і " + names[-1]
+
+
+def find_problem(
+    folder: Folder, texts: dict[int, str], twins: dict[int, list[str]]
+) -> tuple[str, str] | None:
+    """Причина «Проблеми» для папки (код, текст для Продавчині) або None."""
+    post_id = folder.post_id
+    if post_id is None:
+        return "bad_folder_name", "Назва папки не номер поста"
+    if len(twins[post_id]) > 1:
+        names = twins[post_id]
+        count = "Дві папки" if len(names) == 2 else "Кілька папок"
+        return "duplicate_post", f"{count} для одного поста: {_join(names)}"
+    if post_id not in texts:
+        return "post_not_found", f"Поста з номером {post_id} немає в експорті"
+    if not texts[post_id].strip():
+        return "no_text", f"У поста {post_id} немає тексту"
+    if not folder.photos:
+        return "no_photos", "У папці немає фото .jpg"
+    if len(folder.photos) > MAX_PHOTOS:
+        return "too_many_photos", f"Більше {MAX_PHOTOS} фото"
+    return None
+
+
+def _save_item(conn: sqlite3.Connection, folder: Folder, problem: tuple[str, str] | None) -> None:
+    status = Status.PROBLEM if problem else Status.NEW
+    code, text = problem or (None, None)
+    row = conn.execute(
+        "SELECT id, post_id, status, problem_code, problem_text FROM items WHERE folder_name = ?",
+        (folder.name,),
+    ).fetchone()
+    stamp = now()
+    if row is None:
+        item_id = conn.execute(
+            """
+            INSERT INTO items (folder_name, post_id, status, problem_code, problem_text,
+                               created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (folder.name, folder.post_id, status, code, text, stamp, stamp),
+        ).lastrowid
+    else:
+        if row["status"] not in SCANNABLE:
+            return
+        item_id = row["id"]
+        photos = tuple(
+            r[0]
+            for r in conn.execute(
+                "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
+            )
+        )
+        same = (row["post_id"], row["status"], row["problem_code"], row["problem_text"]) == (
+            folder.post_id,
+            status,
+            code,
+            text,
+        )
+        if same and photos == folder.photos:
+            return
+        conn.execute(
+            """
+            UPDATE items SET post_id = ?, status = ?, problem_code = ?, problem_text = ?,
+                             updated_at = ?
+            WHERE id = ?
+            """,
+            (folder.post_id, status, code, text, stamp, item_id),
+        )
+        conn.execute("DELETE FROM photos WHERE item_id = ?", (item_id,))
+    conn.executemany(
+        "INSERT INTO photos (item_id, position, file_name) VALUES (?, ?, ?)",
+        [(item_id, i, name) for i, name in enumerate(folder.photos, start=1)],
+    )
+
+
+def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
+    rows = conn.execute(
+        "SELECT id, folder_name, problem_code FROM items WHERE status IN (?, ?)", SCANNABLE
+    ).fetchall()
+    stamp = now()
+    for row in rows:
+        if row["folder_name"] in present or row["problem_code"] == "folder_missing":
+            continue
+        conn.execute(
+            """
+            UPDATE items SET status = ?, problem_code = 'folder_missing',
+                             problem_text = 'Папку не знайдено', updated_at = ?
+            WHERE id = ?
+            """,
+            (Status.PROBLEM, stamp, row["id"]),
+        )
+
+
+def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]) -> ScanResult:
+    """Створити або оновити Картки для папок. Повторний запуск нічого не дублює."""
+    with conn:
+        save_posts(conn, posts)
+        texts = {r[0]: r[1] for r in conn.execute("SELECT post_id, text FROM posts")}
+        twins: dict[int, list[str]] = defaultdict(list)
+        for folder in folders:
+            if folder.post_id is not None:
+                twins[folder.post_id].append(folder.name)
+        for folder in folders:
+            _save_item(conn, folder, find_problem(folder, texts, twins))
+        _mark_missing(conn, {f.name for f in folders})
+
+    new = conn.execute("SELECT count(*) FROM items WHERE status = ?", (Status.NEW,)).fetchone()[0]
+    problems = [
+        Problem(r["folder_name"], r["problem_code"], r["problem_text"])
+        for r in conn.execute(
+            "SELECT folder_name, problem_code, problem_text FROM items WHERE status = ?",
+            (Status.PROBLEM,),
+        )
+    ]
+    problems.sort(key=lambda p: natural_key(p.folder_name))
+    return ScanResult(len(folders), new, problems)
