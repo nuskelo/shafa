@@ -6,7 +6,7 @@ import pytest
 
 from shafa.db import Status
 from shafa.folders import PUBLISHED_DIR
-from shafa.robot import browser, guard, publish
+from shafa.robot import browser, guard, lock, publish
 from shafa.robot.form import BrandMissing, FieldMissing, PhotosShort, Submitted, outcome
 from shafa.robot.listings import (
     Listing,
@@ -101,11 +101,12 @@ class Env:
             self.sleeps.append(seconds)
             t[0] += seconds + self.clock_jump
 
-        return publish.Run(
-            self.conn, self.root, self.session, self.make_driver, self.load,
-            self.tmp / "екрани", log=self.lines.append, sleep=sleep, clock=lambda: t[0],
-            rand=lambda a, b: (a + b) / 2, today=lambda: self.today,
-        ).start(limit, day_limit)  # fmt: skip
+        with lock.hold("publish", self.tmp / "robot.lock") as held:
+            return publish.Run(
+                self.conn, self.root, self.session, self.make_driver, self.load,
+                self.tmp / "екрани", held, log=self.lines.append, sleep=sleep, clock=lambda: t[0],
+                rand=lambda a, b: (a + b) / 2, today=lambda: self.today,
+            ).start(limit, day_limit)  # fmt: skip
 
 
 @pytest.fixture
@@ -536,12 +537,13 @@ def test_pause_holds_until_resumed(env):
         if len(waits) == 3:
             publish.request(env.conn, None)  # «Продовжити»
 
-    run = publish.Run(
-        env.conn, env.root, env.session, env.make_driver, env.load, env.tmp,
-        log=env.lines.append, sleep=sleep, clock=lambda: 0.0, rand=lambda a, b: 0.0,
-        today=lambda: env.today,
-    )  # fmt: skip
-    report = run.start(30, 30)
+    with lock.hold("publish", env.tmp / "robot.lock") as held:
+        run = publish.Run(
+            env.conn, env.root, env.session, env.make_driver, env.load, env.tmp, held,
+            log=env.lines.append, sleep=sleep, clock=lambda: 0.0, rand=lambda a, b: 0.0,
+            today=lambda: env.today,
+        )  # fmt: skip
+        report = run.start(30, 30)
     assert len(report.published) == 2
     assert waits[:3] == [publish.TICK] * 3
 

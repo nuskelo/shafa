@@ -24,6 +24,7 @@ from shafa import catalog, config, review
 from shafa.db import Status, now
 from shafa.folders import PUBLISHED_DIR
 from shafa.robot import listings as listings_mod
+from shafa.robot import lock
 from shafa.robot.form import (
     BrandMissing,
     Driver,
@@ -222,6 +223,7 @@ class Run:
         make_driver: Callable[[Any], Driver],
         load_listings: Callable[[Any], list[listings_mod.Listing]],
         screens: Path,
+        held: lock.Held,
         log: Callable[[str], None] = print,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
@@ -230,10 +232,14 @@ class Run:
     ) -> None:
         self.conn, self.root, self.session = conn, root, session
         self.make_driver, self.load_listings = make_driver, load_listings
-        self.screens, self.log = screens, log
+        self.screens, self.held, self.log = screens, held, log
         self.sleep, self.clock, self.rand, self.today = sleep, clock, rand, today
 
     def start(self, limit: int, day_limit: int) -> Report:
+        # recover() закриває відкриту сесію й Картки `publishing` — лише з узятим замком:
+        # без нього це могли б бути сесія й Картки іншого живого робота.
+        if self.held.released or self.held.mode != "publish":
+            raise lock.Busy
         for item_id in recover(self.conn):
             self.log(f"Картка {item_id} лишилась посеред публікації — у Проблемах")
         with self.conn:

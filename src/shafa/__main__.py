@@ -167,14 +167,14 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.pause or args.resume or args.stop:
         return run_control(parser, args)
 
-    from playwright.sync_api import sync_playwright
+    from shafa.robot import form, lock, publish
 
-    from shafa.robot import browser, form, listings, publish, sync
-
-    if args.publish:
+    root, limit, day_limit = None, 0, 0
+    if args.publish or args.dry_fill:
         root = _root(parser, args)
         if args.db is None or not args.db.is_file():
             parser.error(f"Базу не знайдено: {args.db}")
+    if args.publish:
         try:
             day_limit = publish.daily_limit()
         except publish.SetupError as error:
@@ -182,12 +182,29 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         limit = day_limit if args.limit is None else args.limit
         if not 1 <= limit <= day_limit:
             parser.error(f"--limit від 1 до {day_limit} (ліміт доби)")
-    if args.dry_fill:
-        root = _root(parser, args)
-        if args.db is None or not args.db.is_file():
-            parser.error(f"Базу не знайдено: {args.db}")
-        if not args.post or len(args.post) > form.MAX_CARDS:
-            parser.error(f"--post від 1 до {form.MAX_CARDS} разів")
+    if args.dry_fill and (not args.post or len(args.post) > form.MAX_CARDS):
+        parser.error(f"--post від 1 до {form.MAX_CARDS} разів")
+
+    mode = next(m for m in ("login", "sync_catalog", "dry_fill", "publish") if getattr(args, m))
+    try:  # замок — до профілю Chrome і до будь-яких змін у базі (D1)
+        held = lock.acquire(mode.replace("_", "-"))
+    except lock.Busy as error:
+        print(error)
+        return 2
+    try:
+        return _with_browser(args, held, root, limit, day_limit)
+    finally:
+        held.release()
+
+
+def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
+    from playwright.sync_api import sync_playwright
+
+    from shafa.robot import browser, form, listings, publish, sync
+
+    def log(line: str) -> None:
+        print(line, flush=True)
+
     with sync_playwright() as p:
         if args.login:
             print("Увійдіть на Шафу у відкритому вікні й закрийте його.")
@@ -196,30 +213,24 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             return 0
         session = browser.Session(p, allow_upload=args.dry_fill, publish=args.publish)
         try:
-            if args.publish:
-                conn = db.connect(args.db)
-                try:
-                    publish.Run(
-                        conn, root, session, form.PageDriver,
-                        lambda s: listings.load(s, log=lambda x: print(x, flush=True)),
-                        form.screens_dir(), log=lambda x: print(x, flush=True),
-                    ).start(limit, day_limit)  # fmt: skip
-                except KeyboardInterrupt:  # звіт сесії вже надруковано
-                    return 130
-                finally:
-                    conn.close()
-                return 0
             if args.sync_catalog:
-                snapshot = sync.crawl(session, sync.CACHE, log=lambda s: print(s, flush=True))
+                snapshot = sync.crawl(session, sync.CACHE, log=log)
                 sync.save(snapshot)
                 print(f"Знімок збережено: розділів {len(snapshot['sections'])}")
                 return 0
             conn = db.connect(args.db)
             try:
-                form.dry_fill(
-                    conn, root, args.post, session, form.PageDriver, form.screens_dir(),
-                    log=lambda s: print(s, flush=True),
-                )  # fmt: skip
+                if args.dry_fill:
+                    form.dry_fill(
+                        conn, root, args.post, session, form.PageDriver, form.screens_dir(), log=log
+                    )
+                    return 0
+                publish.Run(
+                    conn, root, session, form.PageDriver,
+                    lambda s: listings.load(s, log=log), form.screens_dir(), held, log=log,
+                ).start(limit, day_limit)  # fmt: skip
+            except KeyboardInterrupt:  # звіт сесії вже надруковано
+                return 130
             finally:
                 conn.close()
         finally:

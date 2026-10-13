@@ -52,3 +52,15 @@ def shafa_snapshot(monkeypatch):
     catalog.snapshot.cache_clear()
     yield
     catalog.snapshot.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def no_real_browser(monkeypatch):
+    """Жоден тест не відкриває справжній Chrome робота (і не ходить на Шафу), навіть через помилку."""
+    from shafa.robot import browser
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("тест спробував відкрити справжній браузер робота")
+
+    monkeypatch.setattr(browser, "launch", forbidden)
+    monkeypatch.setattr(browser, "wait_for_manual_login", forbidden)
