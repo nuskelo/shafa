@@ -158,6 +158,15 @@ def _signature(path: str) -> tuple:
     return tuple(parts)
 
 
+LONG_LIST = 8  # довші списки варіантів пишемо один раз під позначкою — коротша інструкція
+
+
+def _choices(choices: tuple[str, ...], long_lists: dict[tuple[str, ...], str]) -> str:
+    if len(choices) <= LONG_LIST:
+        return ", ".join(choices)
+    return "список " + long_lists.setdefault(choices, f"L{len(long_lists) + 1}")
+
+
 def render() -> str:
     """Довідники текстом для інструкції ШІ: розділи, розміри, поля кожного типу (стисло)."""
     lines = ["Розділи (повний шлях = група / тип):"]
@@ -175,18 +184,24 @@ def render() -> str:
             lines.append(f"- {group}: розміру немає (порожній список)")
 
     lines += ["", "Поля типу (лише ці варіанти; «до N» — скільки можна вибрати; * — обов'язкове):"]
+    long_lists: dict[tuple[str, ...], str] = {}
     by_signature: dict[tuple, list[str]] = {}
     for path in sections():
         by_signature.setdefault(_signature(path), []).append(path)
     for signature, paths in by_signature.items():
-        names = "; ".join(paths)
+        names = "; ".join(  # група один раз, далі короткі назви типів
+            f"{group} / " + ", ".join(p.rsplit(SEP, 1)[1] for p in paths if _parent(p) == group)
+            for group in dict.fromkeys(_parent(p) for p in paths)
+        )
         if not signature:
             lines.append(f"- {names}: полів немає")
             continue
         fields = [
-            f"{field} («{title}»{' *' if req else ''}, до {mx}): " + ", ".join(choices)
+            f"{field} («{title}»{' *' if req else ''}, до {mx}): " + _choices(choices, long_lists)
             for field, title, mx, req, choices in signature
         ]
         lines.append(f"- {names}:\n    " + "\n    ".join(fields))
+    lines += ["", "Довгі списки варіантів (на них посилаються поля вище):"]
+    lines += [f"{mark}: " + ", ".join(choices) for choices, mark in long_lists.items()]
     lines += ["", "Кольори: " + ", ".join(COLORS) + "."]
     return "\n".join(lines)
