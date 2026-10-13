@@ -326,8 +326,8 @@ def test_same_post_in_other_folder_is_not_published_again(env):
 
     report = env.run()
 
-    assert state(env.conn, twin) == (Status.PROBLEM, "possible_duplicate")
-    assert "папка 1342" in row(env.conn, twin)["problem_text"]
+    assert state(env.conn, twin) == (Status.PROBLEM, "already_published")
+    assert "уже опубліковано з іншої папки (1342)" in row(env.conn, twin)["problem_text"]
     assert len(env.driver.submits) == 0 and report.published == []
 
 
@@ -343,6 +343,7 @@ def test_similar_listing_on_shafa_is_possible_duplicate(env):
     assert state(env.conn, item) == (Status.PROBLEM, "possible_duplicate")
     text = row(env.conn, item)["problem_text"]
     assert SAME.url in text and f"«{SAME.name}»" in text  # Продавчиня перевіряє одним кліком
+    assert row(env.conn, item)["duplicate_url"] == SAME.url
     assert state(env.conn, other) == (Status.PROBLEM, "possible_duplicate")  # той самий товар
     assert report.published == []
 
@@ -664,3 +665,76 @@ def test_strict_execute_stops_on_missing_brand_and_photos():
     driver.missing = "одне фото"
     with pytest.raises(PhotosShort, match="1 з 2"):
         execute([Step("photos", "Фото", ["a", "b"])], driver, strict=True)
+
+
+def test_other_item_decision_skips_listing_check_but_not_same_post(env):
+    """«Це інший товар»: схоже оголошення більше не зупиняє; той самий пост — завжди зупиняє."""
+    item = add(env)
+    env.listings = [SAME]
+    with env.conn:
+        env.conn.execute("UPDATE items SET duplicate_ok_at = '2026-10-13T10:00:00+00:00'")
+    env.run()
+    assert state(env.conn, item)[0] == Status.PUBLISHED
+
+
+@pytest.mark.parametrize(
+    ("setup", "code"),
+    [
+        ("empty", "done"),
+        ("all", "done"),
+        ("limit", "limit"),
+        ("stop", "stop"),
+        ("login", "login"),
+        ("site", "site"),
+        ("uncertain", "error"),
+        ("sleep", "sleep"),
+    ],
+)
+def test_session_stop_code_for_screen(env, monkeypatch, setup, code):
+    if setup != "empty":
+        add(env, "1342", 1342)
+        add(env, "1400", 1400, "2025-05-01T10:00:00")
+    if setup == "limit":
+        env.run(limit=1)
+    else:
+        if setup == "stop":
+            env.on_submit = lambda: publish.request(env.conn, "stop")
+        if setup == "login":
+            env.session.logins = [False]
+        if setup == "site":
+            monkeypatch.setattr(
+                publish, "execute", lambda *a, **k: (_ for _ in ()).throw(FieldMissing("Сезон"))
+            )
+        if setup == "uncertain":
+            env.results.append(Submitted(True))
+        if setup == "sleep":
+            env.clock_jump = 3600.0
+        env.run()
+    last = env.conn.execute(
+        "SELECT stop_code, item_started_at FROM sessions ORDER BY id DESC"
+    ).fetchone()
+    assert last["stop_code"] == code
+    assert last["item_started_at"] is None  # сесія закінчилась — поточного товару немає
+
+
+def test_interrupt_and_crash_codes(env):
+    add(env)
+    env.raises = KeyboardInterrupt()
+    with pytest.raises(KeyboardInterrupt):
+        env.run()
+    assert env.conn.execute("SELECT stop_code FROM sessions").fetchone()[0] == "interrupted"
+    with env.conn:
+        env.conn.execute("INSERT INTO sessions (started_at) VALUES ('x')")
+    env.run()
+    codes = [r[0] for r in env.conn.execute("SELECT stop_code FROM sessions ORDER BY id")]
+    assert codes == ["interrupted", "crash", "done"]
+
+
+def test_item_started_at_set_while_item_in_work(env):
+    add(env)
+    seen = []
+    env.on_submit = lambda: seen.append(
+        env.conn.execute("SELECT item_started_at FROM sessions").fetchone()[0]
+    )
+    env.run()
+    assert seen[0]

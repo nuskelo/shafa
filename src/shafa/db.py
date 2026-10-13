@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class Status(StrEnum):
@@ -146,8 +146,17 @@ def _rebuild_items(conn: sqlite3.Connection) -> None:
         raise RuntimeError("Після перебудови бази порушено зв'язки таблиць")
 
 
+# Версія 5 (UI-002): «Це інший товар» (двигун більше не перевіряє Картку на схожі оголошення),
+# посилання на схоже оголошення, код причини зупинки сесії для екрана, коли почато поточний товар.
+CONTROL = """
+ALTER TABLE items ADD COLUMN duplicate_ok_at TEXT;
+ALTER TABLE items ADD COLUMN duplicate_url TEXT;
+ALTER TABLE sessions ADD COLUMN stop_code TEXT;
+ALTER TABLE sessions ADD COLUMN item_started_at TEXT;
+"""
+
 # Що виконати, щоб перейти з версії N на N + 1 (текст SQL або функція, що сама ставить версію).
-MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items}
+MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL}
 
 
 def now() -> str:

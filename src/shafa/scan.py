@@ -16,7 +16,7 @@ SCANNABLE = (Status.NEW, Status.PROBLEM)
 
 # «Липкі» проблеми публікації (D2): товар міг уже з'явитися на Шафі. Сканування їх не чіпає —
 # повертає лише людина, перевіривши Шафу. Інакше Картка пішла б у new → ШІ → друга публікація.
-STICKY = ("publish_uncertain", "possible_duplicate", "publish_error")
+STICKY = ("publish_uncertain", "possible_duplicate", "publish_error", "already_published")
 
 
 def robot_problem(problem_code: str | None) -> bool:

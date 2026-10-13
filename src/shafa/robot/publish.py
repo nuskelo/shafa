@@ -49,6 +49,15 @@ UNCERTAIN = (
 )
 
 
+@dataclass(frozen=True)
+class Stop:
+    """Чому сесія закінчилась. `code` — для екрана: done, limit, stop, login, sleep, site, error,
+    interrupted (і crash — сесію закрив recover після падіння)."""
+
+    code: str
+    text: str
+
+
 class SetupError(Exception):
     """Налаштування для публікації неправильні. Текст — для людини."""
 
@@ -60,6 +69,7 @@ class Report:
     problems: list[tuple[int | None, str, str]] = field(default_factory=list)  # (пост, код, текст)
     notes: list[str] = field(default_factory=list)
     reason: str = ""
+    code: str = ""
 
     def text(self) -> str:
         lines = [
@@ -158,7 +168,7 @@ def recover(conn: sqlite3.Connection) -> list[int]:
     with conn:
         conn.execute(
             "UPDATE sessions SET ended_at = ?, stop_reason = 'обрив (робот не завершив сесію)', "
-            "command = NULL WHERE ended_at IS NULL",
+            "stop_code = 'crash', command = NULL WHERE ended_at IS NULL",
             (now(),),
         )
     return ids
@@ -247,15 +257,17 @@ class Run:
                 "INSERT INTO sessions (started_at) VALUES (?)", (now(),)
             ).lastrowid
         report = Report(session_id)
+        stop = Stop("error", "невідома помилка")
         try:
-            report.reason = self._loop(report, limit, day_limit)
+            stop = self._loop(report, limit, day_limit)
         except KeyboardInterrupt:
-            report.reason = "перервано (Ctrl+C)"
+            stop = Stop("interrupted", "перервано (Ctrl+C)")
             raise
         except Exception as error:  # закритий браузер, обрив зв'язку
-            report.reason = f"збій: {type(error).__name__}: {str(error)[:200]}"
+            stop = Stop("error", f"збій: {type(error).__name__}: {str(error)[:200]}")
             raise
         finally:
+            report.reason, report.code = stop.text, stop.code
             self._finish(report)
         return report
 
@@ -263,35 +275,35 @@ class Run:
         with self.conn:
             self.conn.execute(
                 "UPDATE sessions SET ended_at = ?, published = ?, problems = ?, stop_reason = ?, "
-                "command = NULL WHERE id = ?",
-                (now(), len(report.published), len(report.problems), report.reason,
+                "stop_code = ?, item_started_at = NULL, command = NULL WHERE id = ?",
+                (now(), len(report.published), len(report.problems), report.reason, report.code,
                  report.session_id),
             )  # fmt: skip
         self.log(report.text())
 
-    def _loop(self, report: Report, limit: int, day_limit: int) -> str:
+    def _loop(self, report: Report, limit: int, day_limit: int) -> Stop:
         today = self.today()
         for name in purge_published(self.conn, self.root, today):
             report.notes.append(f"Видалено з «{PUBLISHED_DIR}»: {name}")
         allowed = min(limit, day_limit - started_today(self.conn, today))
         if allowed <= 0:
-            return f"ліміт доби ({day_limit}) вичерпано"
+            return Stop("limit", f"ліміт доби ({day_limit}) вичерпано")
         ids = queue(self.conn)
         if not ids:
-            return "черга порожня"
+            return Stop("done", "черга порожня")
         if not self.session.open_form():
-            return "немає входу на Шафу: python -m shafa robot --login"
+            return Stop("login", "немає входу на Шафу")
         try:
             listings = self.load_listings(self.session)
         except listings_mod.ListingsError as error:
-            return f"не прочитано її товари на Шафі ({error}) — дублі не перевірити"
+            return Stop("error", f"не прочитано її товари на Шафі ({error}) — дублі не перевірити")
         self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)}")
 
         driver = self.make_driver(self.session)
         done, previous = 0, None
         for item_id in ids:
             if done >= allowed:
-                return "ліміт" + (" доби" if allowed < limit else " запуску")
+                return Stop("limit", "ліміт" + (" доби" if allowed < limit else " запуску"))
             if (stop := self._wait_command(report.session_id)) is not None:
                 return stop
             if previous is True and (stop := self._pause(report.session_id)) is not None:
@@ -299,17 +311,17 @@ class Run:
             previous = self._one(report, item_id, driver, listings)
             if previous is True:
                 done += 1
-            elif isinstance(previous, str):
+            elif isinstance(previous, Stop):
                 return previous
-        return "черга закінчилась"
+        return Stop("done", "черга закінчилась")
 
-    def _wait_command(self, session_id: int) -> str | None:
+    def _wait_command(self, session_id: int) -> Stop | None:
         """Стоп → причина; Пауза → чекати, доки не скасують."""
         while (what := command(self.conn, session_id)) == "pause":
             self.sleep(TICK)
-        return "Стоп" if what == "stop" else None
+        return Stop("stop", "Стоп") if what == "stop" else None
 
-    def _pause(self, session_id: int) -> str | None:
+    def _pause(self, session_id: int) -> Stop | None:
         """Пауза людини між товарами; Стоп і сон ноутбука перериває її."""
         left = self.rand(*PAUSE)
         while left > 0:
@@ -317,7 +329,7 @@ class Run:
             started = self.clock()
             self.sleep(step)
             if self.clock() - started > SLEEP_JUMP:
-                return "ноутбук засинав — робот зупинився"
+                return Stop("sleep", "ноутбук засинав — робот зупинився")
             left -= step
             if (stop := self._wait_command(session_id)) is not None:
                 return stop
@@ -340,43 +352,55 @@ class Run:
 
     def _one(
         self, report: Report, item_id: int, driver: Driver, listings: list
-    ) -> bool | str | None:
-        """Одна Картка. True — опубліковано; рядок — причина зупинки; None — далі."""
+    ) -> bool | Stop | None:
+        """Одна Картка. True — опубліковано; Stop — причина зупинки; None — далі."""
         card = review.load_card(self.conn, item_id)
         if card is None or card.status != Status.APPROVED:
             return None
         ok = Status.APPROVED
         if other := already_published(self.conn, card.id, card.post_id):
-            self._problem(report, card, ok, "possible_duplicate",
-                          f"Пост {card.post_id} уже опубліковано (папка {other})")  # fmt: skip
+            self._problem(report, card, ok, "already_published",
+                          f"Цей пост уже опубліковано з іншої папки ({other})")  # fmt: skip
             return None
         try:
             steps, notes = plan(card, self.root)
         except PlanError as error:
             self._problem(report, card, ok, "robot_not_ready", str(error))
             return None
-        if duplicate := card_duplicate(card, listings):
+        checked = self.conn.execute(
+            "SELECT duplicate_ok_at FROM items WHERE id = ?", (card.id,)
+        ).fetchone()[0]  # «Це інший товар» — Продавчиня вже перевірила
+        if not checked and (duplicate := card_duplicate(card, listings)):
             self._problem(report, card, ok, "possible_duplicate",
                           f"На Шафі вже є схоже оголошення: «{duplicate.name}» — {duplicate.url}")  # fmt: skip
+            with self.conn:
+                self.conn.execute(
+                    "UPDATE items SET duplicate_url = ? WHERE id = ?", (duplicate.url, card.id)
+                )
             return None
+
+        with self.conn:  # для екрана: «чекаю, поки допишеться поточний товар (~N хв)»
+            self.conn.execute(
+                "UPDATE sessions SET item_started_at = ? WHERE id = ?", (now(), report.session_id)
+            )
 
         if not self.session.open_form():
             self._problem(report, card, ok, "robot_logged_out", "Робот не увійшов на Шафу")
-            return "немає входу на Шафу"
+            return Stop("login", "немає входу на Шафу")
         try:
             notes += execute(steps, driver, strict=True)
         except FieldMissing as error:
             shot = self._shot(card, "нема-поля")
             self._problem(report, card, ok, "robot_field_missing",
                           f"Робот не знайшов на Шафі поле «{error}». Екран: {shot.name}")  # fmt: skip
-            return "поле не знайдено — мабуть, Шафа змінила форму"
+            return Stop("site", "поле не знайдено — мабуть, Шафа змінила форму")
         except BrandMissing as error:
             self._problem(report, card, ok, "robot_brand_missing",
                           f"Бренду «{error}» немає в списку Шафи")  # fmt: skip
-            return "бренд не знайдено"
+            return Stop("site", "бренд не знайдено")
         except PhotosShort as error:
             self._problem(report, card, ok, "robot_photos", str(error))
-            return "не всі фото завантажились"
+            return Stop("site", "не всі фото завантажились")
         if attempts := self.session.publish_attempts():
             raise RuntimeError(f"Заблоковано спроби публікації до кліку: {attempts}")
 
@@ -403,7 +427,7 @@ class Run:
         except FieldMissing as error:  # до кліку: нічого не надіслано
             self._problem(report, card, pub, "robot_field_missing",
                           f"Робот не знайшов на Шафі «{error}»")  # fmt: skip
-            return "кнопку «Додати річ» не знайдено"
+            return Stop("site", "кнопку «Додати річ» не знайдено")
         except BaseException:
             self._problem(report, card, pub, "publish_uncertain", UNCERTAIN)
             raise
@@ -430,16 +454,16 @@ class Run:
         if not result.sent and result.blocked:
             self._problem(report, card, pub, "robot_publish_blocked",
                           "Захист не пропустив запит публікації — товар не створено")  # fmt: skip
-            return "захист заблокував запит публікації"
+            return Stop("error", "захист заблокував запит публікації")
         if not result.sent:
             self._problem(report, card, pub, "robot_not_sent",
                           "Форма не надіслалась — мабуть, Шафа вимагає поле, якого робот не знає. "
                           f"Екран: {shot.name}")  # fmt: skip
-            return "форма не надіслалась"
+            return Stop("site", "форма не надіслалась")
         if result.errors:
             self._problem(report, card, pub, "publish_error",
                           "Шафа не прийняла товар: " + "; ".join(result.errors))  # fmt: skip
-            return "Шафа не прийняла товар"
+            return Stop("error", "Шафа не прийняла товар")
         self._problem(report, card, pub, "publish_uncertain",
                       f"{UNCERTAIN} ({result.failure or 'немає id у відповіді'})")  # fmt: skip
-        return "немає певної відповіді Шафи"
+        return Stop("error", "немає певної відповіді Шафи")

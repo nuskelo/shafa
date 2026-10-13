@@ -6,12 +6,15 @@ from shafa import db
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 5
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions"
     }  # fmt: skip
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
-            "published_at", "session_id"} <= columns(conn, "items")  # fmt: skip
+            "published_at", "session_id", "duplicate_ok_at", "duplicate_url"} <= columns(
+        conn, "items"
+    )  # fmt: skip
+    assert {"stop_code", "item_started_at", "command"} <= columns(conn, "sessions")
 
 
 def tables(conn):
@@ -124,7 +127,7 @@ def test_version_3_migrated_keeps_photos_blanks_and_edits(tmp_path):
 
     conn = db.connect(path)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert conn.execute("SELECT count(*) FROM photos").fetchone()[0] == 1
     assert conn.execute("SELECT count(*) FROM blanks").fetchone()[0] == 1
     assert conn.execute("SELECT count(*) FROM edits").fetchone()[0] == 1
