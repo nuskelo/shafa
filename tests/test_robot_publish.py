@@ -569,3 +569,30 @@ def test_ticket_is_per_card(env):
     env.run()
     with pytest.raises(guard.Forbidden):
         env.session.arm_publish(next(iter(env.session.armed)), Status.PUBLISHING)
+
+
+def test_late_create_request_after_uncertain_click_is_blocked(env):
+    """Квиток на запит гасне після кліку: запізнілий запит (після тайм-ауту) не піде на Шафу."""
+    from shafa.robot.guard import CREATE_URL
+    from test_robot_form import FakeRequest, FakeRoute
+    from test_robot_publish_guard import create_body
+
+    add(env)
+    env.results.append(Submitted(True, failure="TimeoutError"))
+    env.run()
+
+    route = FakeRoute()
+    env.session._route(route, FakeRequest("POST", CREATE_URL, create_body()))
+    assert route.result == "abort" and env.session.creates == 0
+
+
+def test_strict_execute_stops_on_missing_brand_and_photos():
+    from shafa.robot.form import execute
+    from shafa.robot.plan import Step
+
+    driver = FakeDriver(None)
+    with pytest.raises(BrandMissing, match="Невідомий бренд"):
+        execute([Step("brand", "Бренд", "Невідомий бренд")], driver, strict=True)
+    driver.missing = "одне фото"
+    with pytest.raises(PhotosShort, match="1 з 2"):
+        execute([Step("photos", "Фото", ["a", "b"])], driver, strict=True)
