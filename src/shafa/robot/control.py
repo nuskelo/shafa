@@ -152,12 +152,12 @@ def state(
                  buttons)  # fmt: skip
 
 
-def command(args: list[str]) -> list[str]:
-    return [sys.executable, "-m", "shafa", "robot", *args]
+def command(args: list[str], program: str = "robot") -> list[str]:
+    return [sys.executable, "-m", "shafa", program, *args]
 
 
-def spawn(args: list[str], log: Path | None = None) -> subprocess.Popen:
-    """Запустити робота окремим процесом; вивід — у файл журналу в теці даних."""
+def spawn(args: list[str], log: Path | None = None, program: str = "robot") -> subprocess.Popen:
+    """Запустити робота (або бота) окремим процесом; вивід — у файл журналу в теці даних."""
     log = log or log_path()
     log.parent.mkdir(parents=True, exist_ok=True)
     options: dict = {}
@@ -168,6 +168,6 @@ def spawn(args: list[str], log: Path | None = None) -> subprocess.Popen:
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}  # кирилиця в журналі й на Windows
     with open(log, "ab") as out:
         return subprocess.Popen(
-            command(args), stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            command(args, program), stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
             env=env, **options,
         )  # fmt: skip

@@ -10,6 +10,8 @@
 Шафи: ручний вхід Власника, знімок довідників, заповнення форми БЕЗ публікації (до 3 Карток).
 `python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
 `--pause | --resume | --stop --db …` — керування запущеною публікацією (поточний товар дописується).
+`python -m shafa bot --db … --root … [--check]` — Telegram-бот: пост від Продавчині → прев'ю →
+«Опублікувати» → канал + папка з фото; `--check` — лише перевірити токен і права в каналі.
 
 Налаштування (`SHAFA_ROOT_DIR`, `TELEGRAM_CHANNEL_ID`, `ANTHROPIC_API_KEY`) — зі змінних
 середовища або з `.env` у корені проєкту.
@@ -128,6 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--batch", action="store_true", help="відправити пакет (−50%%)")
     mode.add_argument("--collect", action="store_true", help="забрати результати пакетів")
     mode.add_argument("--estimate", action="store_true", help="що піде в пакет — без запитів")
+    cmd = commands.add_parser("bot", help="Telegram-бот: пост → прев'ю → канал + папка з фото")
+    cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
+    _add_root(cmd)
+    cmd.add_argument("--check", action="store_true", help="лише перевірити токен і права в каналі")
     cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
@@ -419,6 +425,49 @@ def run_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0
 
 
+def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from shafa.bot import run
+    from shafa.bot.core import Bot
+    from shafa.bot.telegram import Telegram
+    from shafa.robot import lock
+
+    root = _root(parser, args)
+    if not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    try:
+        settings, token = run.settings(root), run.token()
+    except run.SetupError as error:
+        parser.error(str(error))
+    try:
+        held = lock.acquire("bot", config.data_dir() / run.LOCK_NAME)
+    except lock.Busy:
+        print("Бот уже працює — другий запуск нічого не чіпає")
+        return 2
+    tg = Telegram(token)
+    conn = db.connect(args.db)
+    try:
+        name = run.check_rights(tg, settings.channel_id)
+        print(f"Бот @{name}: права в каналі є")
+        if args.check:
+            return 0
+        run.set_status(conn, started=True)
+        bot = Bot(conn, tg, settings)
+        bot.recover()
+        print("Бот працює. Зупинити — Ctrl+C")
+        run.poll(bot, tg, conn, stop=lambda: False)
+    except run.SetupError as error:
+        print(f"Бот зупинився: {error}")
+        run.set_status(conn, error=str(error))
+        return 1
+    except KeyboardInterrupt:
+        print("Бота зупинено")
+    finally:
+        conn.close()
+        tg.close()
+        held.release()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -430,6 +479,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_ui(parser, args)
     if args.command == "robot":
         return run_robot(parser, args)
+    if args.command == "bot":
+        return run_bot(parser, args)
     root = _root(parser, args)
     if not args.export.is_file():
         parser.error(f"Файл Експорту не знайдено: {args.export}")
