@@ -556,3 +556,26 @@ def test_existing_folder_not_overwritten(conn, bot, tg, upd, clock, root):
     assert sorted(p.name for p in (root / "1401-бот").iterdir()) == ["1.jpg", "2.jpg"]
     assert any("«1401-бот»" in t for t in tg.texts(OWNER))
     assert len(tg.channel_posts) == 1
+
+
+def test_bot_post_becomes_card_and_survives_new_export(conn, bot, tg, upd, clock, root):
+    from shafa.export import Post
+    from shafa.folders import list_folders
+    from shafa.scan import scan
+
+    (root / "1401").mkdir()  # заважає: фото підуть у «1401-бот»
+    (root / "1401" / "a.jpg").write_bytes(jpeg())
+    send_post(bot, tg, upd, clock, files=2)
+    press(upd, bot, tg)
+    send_post(bot, tg, upd, clock, files=1, text="Кеди Ecco 38. 900грн")
+    press(upd, bot, tg, draft_id=2)
+
+    export = {1402: Post(1402, "2020-01-01T00:00:00", "старий текст з Експорту")}
+    result = scan(conn, export, list_folders(root, None))
+
+    cards = {r["folder_name"]: r for r in conn.execute("SELECT * FROM items")}
+    assert cards["1402"]["status"] == "new"
+    assert cards["1401-бот"]["problem_code"] == "bad_folder_name"
+    post = conn.execute("SELECT source, text FROM posts WHERE post_id = 1402").fetchone()
+    assert tuple(post) == ("bot", core.caption_of(["Кеди Ecco 38. 900грн"]))  # Експорт не затер
+    assert result.folders == 3
