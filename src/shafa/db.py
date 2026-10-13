@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class Status(StrEnum):
@@ -186,8 +186,53 @@ ALTER TABLE ai_requests ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ai_requests ADD COLUMN batch_id INTEGER REFERENCES ai_batches (id);
 """
 
+# Версія 7 (BOT-001): бот. `bot_updates` — оброблені оновлення Telegram (повторна доставка нічого
+# не робить). `bot_drafts` — чернетка поста з одного чату: `collecting` (збираємо, 2 хв) →
+# `preview` (прев'ю з кнопками, дійсне 24 год) → `publishing` (запис ДО відправки в канал) →
+# `published`; `uncertain` — відповіді каналу не було (не повторюємо), `failed` — не вийшло, нічого
+# не опубліковано, `canceled`, `expired`. `bot_draft_parts` — повідомлення чернетки: текст і фото
+# (`photo` — «як фото», `jpeg`/`png` — файлом). `bot_status` — стан процесу бота для екрана.
+BOT = """
+CREATE TABLE bot_updates (
+    update_id  INTEGER PRIMARY KEY,
+    handled_at TEXT NOT NULL
+);
+
+CREATE TABLE bot_drafts (
+    id                 INTEGER PRIMARY KEY,
+    chat_id            INTEGER NOT NULL,
+    state              TEXT NOT NULL CHECK (state IN ('collecting', 'preview', 'publishing',
+                       'published', 'uncertain', 'failed', 'canceled', 'expired')),
+    asked              INTEGER NOT NULL DEFAULT 0,
+    preview_message_id INTEGER,
+    preview_at         TEXT,
+    post_id            INTEGER,
+    folder_name        TEXT,
+    note               TEXT,
+    created_at         TEXT NOT NULL,
+    last_message_at    TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+
+CREATE TABLE bot_draft_parts (
+    draft_id   INTEGER NOT NULL REFERENCES bot_drafts (id),
+    message_id INTEGER NOT NULL,
+    text       TEXT,
+    file_id    TEXT,
+    kind       TEXT CHECK (kind IN ('photo', 'jpeg', 'png')),
+    PRIMARY KEY (draft_id, message_id)
+);
+
+CREATE TABLE bot_status (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    started_at   TEXT,
+    heartbeat_at TEXT,
+    error        TEXT
+);
+"""
+
 # Що виконати, щоб перейти з версії N на N + 1 (текст SQL або функція, що сама ставить версію).
-MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES}
+MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT}
 
 
 def now() -> str:

@@ -6,10 +6,10 @@ from shafa import db
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 7
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
-        "ai_batch_items",
+        "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
@@ -160,6 +160,8 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
             "created_at) VALUES (1, 'm', 9000, 500, 23000, 'x')"
         )
         conn.executescript(
+            "DROP TABLE bot_updates; DROP TABLE bot_draft_parts; DROP TABLE bot_drafts;"
+            "DROP TABLE bot_status;"
             "DROP TABLE ai_batch_items; DROP TABLE ai_batches;"
             "ALTER TABLE ai_requests DROP COLUMN batch_id;"
             "ALTER TABLE ai_requests DROP COLUMN cache_write_tokens;"
@@ -171,7 +173,7 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
 
     conn = db.connect(path)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     row = conn.execute("SELECT * FROM ai_requests").fetchone()
     assert (row["cost_micro_usd"], row["cache_write_tokens"], row["cache_read_tokens"]) == (
         23000, 0, 0
@@ -180,4 +182,31 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
     assert conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0] == sql
     with conn, pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO ai_batches (status, created_at) VALUES ('waiting', 'x')")
+    conn.close()
+
+
+def test_version_6_migrated_adds_bot_tables(tmp_path):
+    path = tmp_path / "база.sqlite"
+    conn = db.connect(path)
+    with conn:
+        conn.execute(
+            "INSERT INTO posts VALUES (1342, '2025-01-01T10:00:00', 'Кеди', 'export', 'x')"
+        )
+        conn.executescript(
+            "DROP TABLE bot_updates; DROP TABLE bot_draft_parts; DROP TABLE bot_drafts;"
+            "DROP TABLE bot_status;"
+        )
+        conn.execute("PRAGMA user_version = 6")
+    conn.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert {"bot_updates", "bot_drafts", "bot_draft_parts", "bot_status"} <= tables(conn)
+    assert conn.execute("SELECT count(*) FROM posts").fetchone()[0] == 1
+    with conn, pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO bot_drafts (chat_id, state, created_at, last_message_at, updated_at) "
+            "VALUES (1, 'sent', 'x', 'x', 'x')"
+        )
     conn.close()
