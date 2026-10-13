@@ -6,10 +6,12 @@ from shafa import db
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 6
     assert tables(conn) == {
-        "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions"
+        "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
+        "ai_batch_items",
     }  # fmt: skip
+    assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
             "published_at", "session_id", "duplicate_ok_at", "duplicate_url"} <= columns(
         conn, "items"
@@ -140,4 +142,42 @@ def test_version_3_migrated_keeps_photos_blanks_and_edits(tmp_path):
     with conn:  # зв'язки працюють і після перебудови: видалення Картки прибирає її фото
         conn.execute("DELETE FROM items")
     assert conn.execute("SELECT count(*) FROM photos").fetchone()[0] == 0
+    conn.close()
+
+
+def test_version_5_migrated_keeps_cost_records(tmp_path):
+    """Схема 6 (CORE-004): старі записи вартості лишаються, токени кешу — 0; `items` не
+    перебудовується (D3 — без нового статусу)."""
+    path = tmp_path / "база.sqlite"
+    conn = db.connect(path)
+    with conn:
+        conn.execute(
+            "INSERT INTO items (folder_name, post_id, status, created_at, updated_at) "
+            "VALUES ('1342', 1342, 'review', 'x', 'x')"
+        )
+        conn.execute(
+            "INSERT INTO ai_requests (item_id, model, input_tokens, output_tokens, cost_micro_usd, "
+            "created_at) VALUES (1, 'm', 9000, 500, 23000, 'x')"
+        )
+        conn.executescript(
+            "DROP TABLE ai_batch_items; DROP TABLE ai_batches;"
+            "ALTER TABLE ai_requests DROP COLUMN batch_id;"
+            "ALTER TABLE ai_requests DROP COLUMN cache_write_tokens;"
+            "ALTER TABLE ai_requests DROP COLUMN cache_read_tokens;"
+        )
+        conn.execute("PRAGMA user_version = 5")
+    sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0]
+    conn.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    row = conn.execute("SELECT * FROM ai_requests").fetchone()
+    assert (row["cost_micro_usd"], row["cache_write_tokens"], row["cache_read_tokens"]) == (
+        23000, 0, 0
+    )  # fmt: skip
+    assert row["batch_id"] is None
+    assert conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0] == sql
+    with conn, pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO ai_batches (status, created_at) VALUES ('waiting', 'x')")
     conn.close()

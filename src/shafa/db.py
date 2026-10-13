@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class Status(StrEnum):
@@ -155,8 +155,39 @@ ALTER TABLE sessions ADD COLUMN stop_code TEXT;
 ALTER TABLE sessions ADD COLUMN item_started_at TEXT;
 """
 
+# Версія 6 (CORE-004): ШІ пакетом. Пакет і рядок на кожну його Картку зі станом (рішення D3 — без
+# нового статусу Картки): `pending` — чекає результату (вдруге не відправляється), `done` — бланк,
+# `error` — помилка запиту, `returned` — не оброблено (expired/canceled/пакет не створено), Картка
+# знову в черзі. `estimate_micro_usd` — оцінка до відправки (запобіжник грошей, D5).
+# Стан пакета: `sending` — запис перед відправкою, `uncertain` — відповідь на створення не прийшла
+# (пакет міг створитися), `in_progress`, `ended` — результати забрано, `failed` — пакета немає.
+# У `ai_requests` — токени кешу і чи це пакет (вартість уже з урахуванням знижок).
+BATCHES = """
+CREATE TABLE ai_batches (
+    id           INTEGER PRIMARY KEY,
+    anthropic_id TEXT UNIQUE,
+    status       TEXT NOT NULL
+                 CHECK (status IN ('sending', 'uncertain', 'in_progress', 'ended', 'failed')),
+    note         TEXT,
+    created_at   TEXT NOT NULL,
+    ended_at     TEXT
+);
+
+CREATE TABLE ai_batch_items (
+    batch_id           INTEGER NOT NULL REFERENCES ai_batches (id),
+    item_id            INTEGER NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    estimate_micro_usd INTEGER NOT NULL,
+    state              TEXT NOT NULL CHECK (state IN ('pending', 'done', 'error', 'returned')),
+    PRIMARY KEY (batch_id, item_id)
+);
+
+ALTER TABLE ai_requests ADD COLUMN cache_write_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ai_requests ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ai_requests ADD COLUMN batch_id INTEGER REFERENCES ai_batches (id);
+"""
+
 # Що виконати, щоб перейти з версії N на N + 1 (текст SQL або функція, що сама ставить версію).
-MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL}
+MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES}
 
 
 def now() -> str:
