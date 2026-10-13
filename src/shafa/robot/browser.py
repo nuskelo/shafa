@@ -38,9 +38,6 @@ def operation(request: Any) -> str | None:
     return item.get("operationName") if isinstance(item, dict) else None
 
 
-MARK_SEEN = "() => document.querySelectorAll('button').forEach(b => b.dataset.robotSeen = '1')"
-
-
 def catalog_slug(request: Any) -> str | None:
     """`catalogSlug` запиту `WEB_ProductFormCatalog` (форма питає поля обраного розділу)."""
     try:
@@ -118,23 +115,26 @@ class Session:
     def choose_category(self, parts: list[str] | tuple[str, ...], slug: str) -> dict:
         """Клікнути шлях розділу; повернути відповідь форми про розділ (звірену за `slug`).
 
-        Тип може зватися як верхня гілка («Чоловічий одяг / Взуття / Аксесуари»): перед кожним
-        кліком наявні кнопки позначаються, і наступний рівень береться лише з нових кнопок.
+        Вибір розділу — вікно з колонками: кожен рівень відкриває нову колонку праворуч. Тип може
+        зватися як верхня гілка («Чоловічий одяг / Взуття / Аксесуари»), тож на рівнях після
+        першого береться остання видима кнопка — з найновішої колонки. Звірка `slug` — страховка.
         """
         for i, name in enumerate(parts):
-            button = self.page.get_by_role("button", name=name, exact=True).locator("visible=true")
-            if i:
-                button = button.and_(self.page.locator("button:not([data-robot-seen])"))
-            if not button.count():
+            buttons = self.page.get_by_role("button", name=name, exact=True).locator("visible=true")
+            for _ in range(20):  # колонка з'являється не миттєво — до 10 с
+                if buttons.count():
+                    break
+                self.page.wait_for_timeout(500)
+            else:
                 raise LookupError(name)
-            self.page.evaluate(MARK_SEEN)
+            button = buttons.last if i else buttons.first
             if i < len(parts) - 1:
-                self.click(button.first, f"розділ {name}")
+                self.click(button, f"розділ {name}")
                 continue
             with self.page.expect_response(
                 lambda r: catalog_slug(r.request) is not None, timeout=30000
             ) as info:
-                self.click(button.first, f"розділ {name}")
+                self.click(button, f"розділ {name}")
             got = catalog_slug(info.value.request)
             if got != slug:
                 raise LookupError(f"{name}: Шафа відкрила розділ {got}, а не {slug}")
