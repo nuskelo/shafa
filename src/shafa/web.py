@@ -101,6 +101,9 @@ MESSAGES = {
     "ai_no_key": "Немає ключа ШІ (ANTHROPIC_API_KEY) — скажіть Власнику",
     "ai_settings": "Неправильні налаштування ШІ — скажіть Власнику (подробиці на панелі)",
     "ai_photo": "Фото Картки не відкривається — ШІ не запускалось",
+    "bot_started": "Запускаю бота — за кілька секунд він з'явиться на панелі",
+    "bot_running": "Бот уже працює",
+    "bot_no_token": "Бот не налаштований: немає TELEGRAM_BOT_TOKEN у .env — скажіть Власнику",
 }
 PROBLEM_HINTS = {
     "bad_folder_name": "Перейменуйте папку на номер поста (наприклад, 1342).",
@@ -184,6 +187,19 @@ class AiState:
     note: str | None = None
 
 
+@dataclass
+class BotState:
+    """Панель: стан процесу бота."""
+
+    code: str  # running / stopped / failed / no_token
+    text: str
+    can_start: bool = False
+
+
+def _spawn_bot(args: list[str]) -> object:
+    return control.spawn(args, config.data_dir() / "bot-run.log", program="bot")
+
+
 def _thread(job: Callable[[], None]) -> None:
     threading.Thread(target=job, daemon=True).start()
 
@@ -208,6 +224,8 @@ class App:
         run: Callable[[Callable[[], None]], None] = _thread,
         clock: Callable[[], float] = time.monotonic,
         today: Callable[[], datetime] = lambda: datetime.now().astimezone(),
+        bot_spawner: Callable[[list[str]], object] = _spawn_bot,
+        bot_lock: Path | None = None,
     ) -> None:
         self.db_path = db_path
         self.root = root
@@ -226,6 +244,8 @@ class App:
         self.ai_busy: str | None = None
         self.ai_note: str | None = None
         self.collected_at: float | None = None
+        self.bot_spawner = bot_spawner
+        self.bot_lock = bot_lock
         self.env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(PACKAGE / "templates"),
             autoescape=True,
@@ -286,6 +306,8 @@ class App:
             return self.robot_post(request)
         if path == "/ai" and request.method == "POST":
             return self.ai_post(request)
+        if path == "/bot" and request.method == "POST":
+            return self.bot_post(request)
         if path.strip("/") in CARD_TABS and get:
             return self.tab_page(Status(path.strip("/")), request)
         if match := _ITEM.fullmatch(path):
@@ -317,9 +339,49 @@ class App:
             "counts": counts,
             "robot": self.robot_state(conn),
             "ai": self.ai_state(conn),
+            "bot": self.bot_state(conn),
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
         }
+
+    # --- Бот ---
+
+    def _bot_lock(self) -> Path:
+        from shafa.bot import run
+
+        return self.bot_lock or config.data_dir() / run.LOCK_NAME
+
+    def bot_state(self, conn) -> BotState:
+        from shafa.bot import run
+
+        row = conn.execute("SELECT error FROM bot_status WHERE id = 1").fetchone()
+        error = row["error"] if row else None
+        if lock.busy(self._bot_lock()) is not None:
+            return BotState("running", f"працює{', але: ' + error if error else ''}")
+        if config.setting(run.TOKEN) is None:
+            return BotState("no_token", "не налаштований (немає токена)")
+        if error:
+            return BotState("failed", f"зупинився: {error}", can_start=True)
+        return BotState("stopped", "вимкнений", can_start=True)
+
+    def start_bot(self) -> str:
+        """Запустити бота окремим процесом (як робота). Повертає код повідомлення."""
+        from shafa.bot import run
+
+        if config.setting(run.TOKEN) is None:
+            return "bot_no_token"
+        if lock.busy(self._bot_lock()) is not None:
+            return "bot_running"
+        self.bot_spawner(["--db", str(self.db_path), "--root", str(self.root)])
+        return "bot_started"
+
+    def bot_post(self, request: Request) -> Response:
+        action = (request.form.get("action") or [""])[0]
+        back = safe_back((request.form.get("back") or [""])[0])
+        sep = "&" if "?" in back else "?"
+        if action != "start":
+            return text(400, "Невідома дія")
+        return redirect(f"{back}{sep}msg={self.start_bot()}")
 
     # --- ШІ ---
 
@@ -442,6 +504,7 @@ class App:
         try:
             html = self.env.get_template("panel.html").render(
                 token=self.token, robot=self.robot_state(conn), ai=self.ai_state(conn),
+                bot=self.bot_state(conn),
                 back=safe_back(request.arg("back")), fake=self.fake_shafa,
             )  # fmt: skip
         finally:

@@ -305,6 +305,8 @@ def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     server = web.make_server(app, args.port)
     url = f"http://{web.HOST}:{app.port}/"
     print(f"Екран перевірки: {url}\nЗупинити — Ctrl+C")
+    if not args.fake_shafa and app.start_bot() == "bot_started":  # бот — разом з екраном
+        print("Бот запускається окремим процесом (журнал — bot-run.log у теці даних)")
     if not args.no_browser:
         webbrowser.open(url)
     try:
