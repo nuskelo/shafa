@@ -1,7 +1,8 @@
 import pytest
 
 from conftest import CHANNEL_ID, make_folder
-from shafa.__main__ import main
+from shafa.__main__ import format_rules, main
+from shafa.export import Post
 
 
 @pytest.fixture(autouse=True)
@@ -36,3 +37,45 @@ def test_root_required(tmp_path, export_path, capsys):
     with pytest.raises(SystemExit):
         main(["scan", "--export", str(export_path), "--db", str(tmp_path / "б.sqlite")])
     assert "SHAFA_ROOT_DIR" in capsys.readouterr().err
+
+
+def test_rules_prints_fields_for_one_post(export_path, capsys):
+    code = main(["rules", "--export", str(export_path), "--post", "23"])
+
+    assert code == 0
+    assert capsys.readouterr().out == (
+        "Пост 23\n"
+        "Ціна: 900 → 1040\n"
+        "Стан: Ідеальний\n"
+        "Устілка: —\n"
+        "Мембрана: —\n"
+        "Опис:\n"
+        "Куплені за 2000грн. Взуті раз. Ідеальний стан, без дефектів.\n"
+    )
+
+
+def test_rules_without_price(export_path, capsys):
+    main(["rules", "--export", str(export_path), "--post", "21"])
+    assert "Ціна: немає\n" in capsys.readouterr().out
+
+
+def test_rules_unknown_post(export_path, capsys):
+    with pytest.raises(SystemExit):
+        main(["rules", "--export", str(export_path), "--post", "999"])
+    assert "Поста з номером 999 немає в експорті" in capsys.readouterr().err
+
+
+def test_format_rules_insole_and_membrane():
+    post = Post(
+        5,
+        "2025-01-11T10:00:00",
+        "Термо черевики Lowa з мембраною gore-tex у відмінному стані. 38 розмір. "
+        "Устілка до згину на п'ятку 24,5см, від краю до краю 25,5см. Ширина устілки 9см. "
+        "1400грн\n#VS_38_розмір\n\nПишіть сюди 👉 @prodavchynia_test",
+    )
+    assert format_rules(post).splitlines()[1:5] == [
+        "Ціна: 1400 → 1610",
+        "Стан: Ідеальний",
+        "Устілка: 24,5 · 25 · 25,5",
+        "Мембрана: Gore-Tex",
+    ]
