@@ -129,7 +129,7 @@ def card_duplicate(
     f = {name: view.value for name, view in card.fields.items()}
     brand = catalog.canonical(f["brand"], catalog.brands()) if f["brand"] else None
     return listings_mod.find_duplicate(
-        f["title"], catalog.section(card.path)["slug"],
+        f["title"], listings_mod.group_slugs(card.path),
         [catalog.shafa_size(s) for s in f["sizes"] or []], brand or f["brand"], listings,
     )  # fmt: skip
 
@@ -351,7 +351,7 @@ class Run:
             return None
         if duplicate := card_duplicate(card, listings):
             self._problem(report, card, ok, "possible_duplicate",
-                          f"На Шафі вже є схожий товар: «{duplicate.name}» {duplicate.url}")  # fmt: skip
+                          f"На Шафі вже є схоже оголошення: «{duplicate.name}» — {duplicate.url}")  # fmt: skip
             return None
 
         if not self.session.open_form():

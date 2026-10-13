@@ -8,7 +8,14 @@ from shafa.db import Status
 from shafa.folders import PUBLISHED_DIR
 from shafa.robot import browser, guard, publish
 from shafa.robot.form import BrandMissing, FieldMissing, PhotosShort, Submitted, outcome
-from shafa.robot.listings import Listing, ListingsError, find_duplicate, parse_feed
+from shafa.robot.listings import (
+    Listing,
+    ListingsError,
+    find_duplicate,
+    group_slugs,
+    parse_feed,
+    sizes_close,
+)
 from test_robot_form import FakeDriver, FakeLocator, FakePage
 
 OK = Submitted(sent=True, product_id=555)
@@ -333,18 +340,39 @@ def test_similar_listing_on_shafa_is_possible_duplicate(env):
     env.listings = [SAME]
     report = env.run()
     assert state(env.conn, item) == (Status.PROBLEM, "possible_duplicate")
-    assert SAME.url in row(env.conn, item)["problem_text"]
+    text = row(env.conn, item)["problem_text"]
+    assert SAME.url in text and f"«{SAME.name}»" in text  # Продавчиня перевіряє одним кліком
     assert state(env.conn, other) == (Status.PROBLEM, "possible_duplicate")  # той самий товар
     assert report.published == []
+
+
+def test_duplicate_in_other_gender_section_found_by_engine(env):
+    """ШІ поставило «жіночі черевики», а в неї той самий товар у чоловічих кросівках."""
+    item = add(env)
+    env.listings = [Listing(**{**SAME.__dict__, "slug": "obuv/krossovki", "sizes": ("38.5",)})]
+    env.run()
+    assert state(env.conn, item) == (Status.PROBLEM, "possible_duplicate")
+
+
+FOOTWEAR = "Жіночий одяг / Взуття / Черевики"
 
 
 @pytest.mark.parametrize(
     ("change", "duplicate"),
     [
         ({}, True),
-        ({"slug": "zhenskaya-obuv/krossovki"}, False),
-        ({"sizes": ("39",)}, False),
-        ({"sizes": ("37", "38")}, True),
+        # ШІ плутає стать: дубль шукається в усьому взутті (жіноче, чоловіче, дитяче)
+        ({"slug": "zhenskaya-obuv/krossovki"}, True),
+        ({"slug": "obuv/krossovki"}, True),
+        ({"slug": "dlya-devochek/krossovki-i-kedy"}, True),
+        ({"slug": "vsi-sumky/sumky"}, False),  # аксесуари — окрема група
+        ({"slug": "kofty/hudi"}, False),  # не наша частина дерева
+        # розмір: будь-який наш не далі 0,5 від будь-якого її
+        ({"sizes": ("39",)}, True),  # 38,5 і 39
+        ({"sizes": ("37.5",)}, True),  # 38 і 37,5
+        ({"sizes": ("39.5",)}, False),
+        ({"sizes": ("37",)}, False),
+        ({"sizes": ()}, False),
         ({"brand": "Clarks"}, False),
         ({"brand": None}, False),
         ({"name": "Жіноча сумка ecco"}, False),
@@ -354,15 +382,53 @@ def test_similar_listing_on_shafa_is_possible_duplicate(env):
 def test_duplicate_rule(change, duplicate):
     listing = Listing(**{**SAME.__dict__, **change})
     found = find_duplicate(
-        "Шкіряні черевики ecco 38 розміру", "zhenskaya-obuv/botinki", ["38", "38.5"], "Ecco",
+        "Шкіряні черевики ecco 38 розміру", group_slugs(FOOTWEAR), ["38", "38.5"], "Ecco",
         [listing],
     )  # fmt: skip
     assert (found is not None) is duplicate
 
 
+def test_groups_footwear_together_accessories_apart():
+    footwear = group_slugs(FOOTWEAR)
+    assert {"zhenskaya-obuv/botinki", "obuv/krossovki", "dlya-malchikov/butsy",
+            "dlya-malyshey/krossovki"} <= footwear  # fmt: skip
+    assert "vsi-sumky/sumky" not in footwear
+    accessories = group_slugs("Аксесуари / Сумки та рюкзаки / Сумки")
+    assert accessories == {
+        "vsi-sumky/ryukzaky", "vsi-sumky/sumky", "hamantsi-portmone/hamantsi",
+        "remeni-poyasy/remeni",
+    }  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("ours", "theirs", "close"),
+    [
+        (["37,5"], ("37",), True),
+        (["37.5"], ("38",), True),
+        (["37"], ("38",), False),
+        (["One size"], ("One size",), True),
+        (["One size"], ("38",), False),
+        ([], (), True),
+        ([], ("38",), False),
+    ],
+)
+def test_sizes_close(ours, theirs, close):
+    assert sizes_close(ours, theirs) is close
+
+
+def test_most_similar_listing_reported():
+    rough = Listing(**{**SAME.__dict__, "id": 2, "name": "Черевики ecco 38 розміру шкіряні нові"})
+    found = find_duplicate(
+        "Шкіряні черевики ecco 38 розміру в ідеальному стані", group_slugs(FOOTWEAR), ["38"],
+        "Ecco", [rough, SAME],
+    )  # fmt: skip
+    assert found == SAME
+
+
 def test_no_brand_and_no_size_match_each_other():
-    bag = Listing(2, "Шкіряна сумка", None, "sumki", (), "u")
-    assert find_duplicate("Шкіряна сумка", "sumki", [], None, [bag]) == bag
+    bag = Listing(2, "Шкіряна сумка", None, "vsi-sumky/sumky", (), "u")
+    slugs = group_slugs("Аксесуари / Сумки та рюкзаки / Сумки")
+    assert find_duplicate("Шкіряна сумка", slugs, [], None, [bag]) == bag
 
 
 def test_unreadable_listings_stop_before_any_publication(env):

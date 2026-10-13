@@ -1,9 +1,10 @@
 """Її товари на Шафі — для перевірки дублів перед публікацією (D4, п. 3.13.1 оферти).
 
 Читаються з кабінету «Мої речі» раз на запуск: Активні, На модерації, Відхилені (Деактивовані —
-продане чи зняте — не рахуються). Збіг: той самий розділ, спільний розмір (або обидва без
-розміру), той самий бренд (або обидва без бренду) і схожа назва. Сумнів — краще «Проблема»,
-ніж друге оголошення.
+продане чи зняте — не рахуються). Збіг: та сама група розділів (усе взуття — жіноче, чоловіче й
+дитяче разом; або всі аксесуари: ШІ плутає стать), розмір відрізняється не більше ніж на 0,5 (або
+обидва без розміру), той самий бренд (або обидва без бренду) і схожа назва. Сумнів — краще
+«Проблема», ніж друге оголошення.
 """
 
 import json
@@ -13,6 +14,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Any
 
+from shafa import catalog
 from shafa.robot import browser
 
 FEED_OP = "WEB_MyClothesProductsFeed"
@@ -21,7 +23,8 @@ TABS = {
     "MODERATED": "https://shafa.ua/uk/my/clothes/moderated",
     "DECLINED": "https://shafa.ua/uk/my/clothes/declined",
 }
-SIMILAR = 0.6  # схожість назв (0…1) за однакових розділу, розміру й бренду
+SIMILAR = 0.6  # схожість назв (0…1) за однакових групи розділів, розміру й бренду
+SIZE_STEP = 0.5  # «вказаний 38, ідуть на 37,5»: сусідній розмір — теж збіг
 SITE = "https://shafa.ua"
 STALL_ROUNDS = 20  # прокруток поспіль без нових товарів — список не довантажується
 
@@ -64,25 +67,58 @@ def _words(title: str) -> str:
     return " ".join(re.findall(r"\w+", title.casefold()))
 
 
+def _ratio(a: str, b: str) -> float:
+    return SequenceMatcher(None, _words(a), _words(b)).ratio()
+
+
 def similar(a: str, b: str) -> bool:
-    return SequenceMatcher(None, _words(a), _words(b)).ratio() >= SIMILAR
+    return _ratio(a, b) >= SIMILAR
+
+
+def group_slugs(path: str) -> frozenset[str]:
+    """Розділи, серед яких шукати дубль: усе взуття знімка або всі аксесуари."""
+    accessory = catalog.section_kind(path) is catalog.Kind.ACCESSORY
+    return frozenset(
+        entry["slug"]
+        for name, entry in catalog.snapshot()["sections"].items()
+        if (catalog.section_kind(name) is catalog.Kind.ACCESSORY) == accessory
+    )
+
+
+def _number(size: str) -> float | None:
+    try:
+        return float(size.replace(",", "."))
+    except ValueError:
+        return None
+
+
+def sizes_close(ours: list[str], theirs: tuple[str, ...]) -> bool:
+    """Будь-який наш розмір не далі 0,5 від будь-якого її; нечислові («One size») — рівні."""
+    if not ours and not theirs:
+        return True
+    for a in ours:
+        for b in theirs:
+            x, y = _number(a), _number(b)
+            if (x is not None and y is not None and abs(x - y) <= SIZE_STEP) or a == b:
+                return True
+    return False
 
 
 def find_duplicate(
-    title: str, slug: str, sizes: list[str], brand: str | None, listings: list[Listing]
-) -> Listing | None:
-    """Перший її товар, схожий на Картку, або None."""
+    title: str, slugs: frozenset[str], sizes: list[str], brand: str | None,
+    listings: list[Listing],
+) -> Listing | None:  # fmt: skip
+    """Її товар, найсхожіший на Картку, або None."""
     wanted_brand = (brand or "").casefold()
-    for listing in listings:
-        if listing.slug != slug:
-            continue
-        if (listing.brand or "").casefold() != wanted_brand:
-            continue
-        if (sizes or listing.sizes) and not set(sizes) & set(listing.sizes):
-            continue
-        if similar(title, listing.name):
-            return listing
-    return None
+    found = [
+        listing
+        for listing in listings
+        if listing.slug in slugs
+        and (listing.brand or "").casefold() == wanted_brand
+        and sizes_close(sizes, listing.sizes)
+        and similar(title, listing.name)
+    ]
+    return max(found, key=lambda x: _ratio(title, x.name), default=None)
 
 
 # --- Живе читання (у тестах не викликається) ---
