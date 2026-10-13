@@ -12,8 +12,11 @@ import os
 import re
 import secrets
 import sys
+import time
 import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -24,6 +27,7 @@ from PIL import UnidentifiedImageError
 from shafa import catalog, db, photos, review
 from shafa.db import Status
 from shafa.folders import list_folders
+from shafa.robot import control, lock, publish
 from shafa.scan import STICKY, rescan_folder
 
 HOST = "127.0.0.1"
@@ -40,8 +44,18 @@ STATIC = {
 TAB_TITLES = {
     Status.REVIEW: "На перевірку",
     Status.APPROVED: "Схвалені",
+    Status.PUBLISHED: "Опубліковані",
     Status.PROBLEM: "Проблеми",
+    "sessions": "Сесії",
     Status.ARCHIVED: "Архів",
+}
+CARD_TABS = (Status.REVIEW, Status.APPROVED, Status.PROBLEM, Status.ARCHIVED)
+MY_ITEMS = "https://shafa.ua/uk/my/clothes/active"
+STICKY_TITLES = {  # проблеми публікації — простими словами, без кодів
+    "publish_uncertain": "Не впевнений, чи товар з'явився на Шафі — перевір",
+    "publish_error": "Шафа не прийняла товар",
+    "possible_duplicate": "Схожий товар уже є на Шафі",
+    "already_published": "Цей пост уже опубліковано з іншої папки",
 }
 MESSAGES = {
     "saved": "Збережено",
@@ -60,7 +74,21 @@ MESSAGES = {
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
     "recheck_new": "Папку перевірено: усе добре, Картка чекає на ШІ",
     "recheck_problem": "Папку перевірено: проблема лишилась",
-    "sticky": "Спершу перевірте Шафу. Повернути цю Картку зможе лише людина (кнопки — згодом)",
+    "sticky": "Спершу перевірте Шафу і скористайтеся кнопками нижче",
+    "on_shafa": "Картку перенесено в Опубліковані",
+    "bad_link": "Це не посилання на Шафу. Вставте посилання на товар з shafa.ua або його номер",
+    "not_on_shafa": "Картку повернуто в Схвалені — робот опублікує її при наступному запуску",
+    "other_item": "Картку повернуто в Схвалені — на схожість її більше не перевірятимемо",
+    "duplicate_archived": "Картку перенесено в Архів",
+    "robot_started": "Робот запускається — за хвилину з'явиться вікно Chrome",
+    "robot_cannot_start": "Робота не запущено",
+    "robot_paused": "Пауза: робот допише поточний товар і зачекає",
+    "robot_resumed": "Продовжуємо",
+    "robot_stopping": "Стоп: робот допише поточний товар і зупиниться",
+    "robot_not_running": "Робот зараз не публікує",
+    "robot_login": "Відкриваю вікно входу на Шафу — увійдіть і закрийте вікно",
+    "robot_busy": "Робот уже працює",
+    "robot_fake_login": "У підставному режимі вхід на Шафу не потрібен",
 }
 PROBLEM_HINTS = {
     "bad_folder_name": "Перейменуйте папку на номер поста (наприклад, 1342).",
@@ -89,6 +117,7 @@ SECURITY_HEADERS = {
     # Сторінки беруть лише свої файли: жодних зовнішніх скриптів, стилів, шрифтів, фото.
     "Content-Security-Policy": (
         "default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; "
+        "connect-src 'self'; "
         "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     ),
     "X-Content-Type-Options": "nosniff",
@@ -98,6 +127,7 @@ SECURITY_HEADERS = {
 }
 
 _ITEM = re.compile(r"/item/(\d+)")
+_SESSION = re.compile(r"/session/(\d+)")
 _PHOTO = re.compile(r"/(photo|thumb)/(\d+)/(\d+)")
 _STATIC = re.compile(r"/static/([\w.-]+)")
 
@@ -139,6 +169,9 @@ class App:
         port: int = DEFAULT_PORT,
         channel_id: str | None = None,
         token: str | None = None,
+        fake_shafa: bool = False,
+        spawner: Callable[[list[str]], object] | None = None,
+        lock_file: Path | None = None,
     ) -> None:
         self.db_path = db_path
         self.root = root
@@ -146,6 +179,11 @@ class App:
         self.port = port
         self.channel_id = channel_id
         self.token = token or secrets.token_urlsafe(32)
+        self.fake_shafa = fake_shafa
+        self.spawner = spawner or control.spawn
+        self.lock_file = lock_file
+        self.process = None  # останній запущений з екрана процес робота
+        self.started_at = 0.0
         self.env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(PACKAGE / "templates"),
             autoescape=True,
@@ -194,7 +232,17 @@ class App:
         get = request.method == "GET"
         if path == "/" and get:
             return redirect("/" + Status.REVIEW)
-        if path.strip("/") in TAB_TITLES and get:
+        if path == "/published" and get:
+            return self.published_page(request)
+        if path == "/sessions" and get:
+            return self.sessions_page(request)
+        if (match := _SESSION.fullmatch(path)) and get:
+            return self.session_page(int(match[1]), request)
+        if path == "/robot/panel" and get:
+            return self.panel(request)
+        if path == "/robot" and request.method == "POST":
+            return self.robot_post(request)
+        if path.strip("/") in CARD_TABS and get:
             return self.tab_page(Status(path.strip("/")), request)
         if match := _ITEM.fullmatch(path):
             item_id = int(match[1])
@@ -213,12 +261,77 @@ class App:
         return db.connect(self.db_path)
 
     def page(self, template: str, status: int = 200, **context) -> Response:
-        html = self.env.get_template(template).render(token=self.token, **context)
+        html = self.env.get_template(template).render(token=self.token, local=local_time, **context)
         return Response(status, html.encode("utf-8"))
 
-    def _chrome(self, conn) -> dict:
-        """Спільне для всіх сторінок: вкладки з лічильниками."""
-        return {"tabs": TAB_TITLES, "counts": review.counts(conn)}
+    def _chrome(self, conn, request: Request) -> dict:
+        """Спільне для всіх сторінок: вкладки з лічильниками і панель робота."""
+        counts = review.counts(conn)
+        counts["sessions"] = conn.execute("SELECT count(*) FROM sessions").fetchone()[0]
+        return {
+            "tabs": TAB_TITLES,
+            "counts": counts,
+            "robot": self.robot_state(conn),
+            "back": safe_back(request.path),
+            "fake": self.fake_shafa,
+        }
+
+    # --- Робот ---
+
+    def robot_state(self, conn) -> control.State:
+        process = self.process
+        code = process.poll() if process is not None else None
+        starting = process is not None and code is None and time.monotonic() - self.started_at < 60
+        failed = process is not None and code not in (None, 0, 130)
+        state = control.state(conn, self.lock_file, starting=starting, failed=failed)
+        if state.code == "failed":
+            state.text += ": " + last_log_line(control.log_path())
+        return state
+
+    def panel(self, request: Request) -> Response:
+        conn = self.connect()
+        try:
+            html = self.env.get_template("panel.html").render(
+                token=self.token, robot=self.robot_state(conn),
+                back=safe_back(request.arg("back")), fake=self.fake_shafa,
+            )  # fmt: skip
+        finally:
+            conn.close()
+        return Response(200, html.encode("utf-8"))
+
+    def robot_post(self, request: Request) -> Response:
+        action = (request.form.get("action") or [""])[0]
+        back = safe_back((request.form.get("back") or [""])[0])
+        sep = "&" if "?" in back else "?"
+        conn = self.connect()
+        try:
+            if action == "start":
+                state = self.robot_state(conn)
+                if not state.can_start:
+                    return redirect(f"{back}{sep}msg=robot_cannot_start")
+                args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
+                self._spawn(args + (["--fake-shafa"] if self.fake_shafa else []))
+                return redirect(f"{back}{sep}msg=robot_started")
+            if action == "login":
+                if self.fake_shafa:
+                    return redirect(f"{back}{sep}msg=robot_fake_login")
+                if lock.busy(self.lock_file):
+                    return redirect(f"{back}{sep}msg=robot_busy")
+                self._spawn(["--login"])
+                return redirect(f"{back}{sep}msg=robot_login")
+            commands = {"pause": "pause", "resume": None, "stop": "stop"}
+            if action in commands:
+                done = publish.request(conn, commands[action])
+                message = {"pause": "robot_paused", "resume": "robot_resumed",
+                           "stop": "robot_stopping"}[action]  # fmt: skip
+                return redirect(f"{back}{sep}msg={message if done else 'robot_not_running'}")
+            return text(400, "Невідома дія")
+        finally:
+            conn.close()
+
+    def _spawn(self, args: list[str]) -> None:
+        self.process = self.spawner(args)
+        self.started_at = time.monotonic()
 
     # --- Сторінки ---
 
@@ -231,7 +344,7 @@ class App:
             cards = review.list_tab(conn, status, query)
             return self.page(
                 "list.html",
-                **self._chrome(conn),
+                **self._chrome(conn, request),
                 current=status,
                 cards=cards,
                 query=query,
@@ -248,9 +361,17 @@ class App:
             if card is None:
                 return text(404, "Картку не знайдено")
             bad = {name for name in request.query.get("bad", []) if name in review.SPEC}
+            row = conn.execute(
+                "SELECT duplicate_url, shafa_url FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
             return self.page(
                 "card.html",
-                **self._chrome(conn),
+                **self._chrome(conn, request),
+                duplicate_url=shafa_link(row["duplicate_url"]),
+                shafa_url=shafa_link(row["shafa_url"]),
+                my_items=MY_ITEMS,
+                sticky=STICKY,
+                sticky_titles=STICKY_TITLES,
                 current=card.status,
                 card=card,
                 bad=bad,
@@ -289,6 +410,19 @@ class App:
                 if message in review.APPROVE_BLOCKS or message == "stale":
                     return redirect(f"{back}?msg={message}")
                 return redirect(f"/{card.status}?msg={message}")
+            decisions = {
+                "on_shafa": lambda: publish.on_shafa(
+                    conn, self.root, item_id, (request.form.get("shafa_link") or [""])[0]
+                ),
+                "not_on_shafa": lambda: publish.not_on_shafa(conn, item_id),
+                "other_item": lambda: publish.other_item(conn, item_id),
+                "to_archive": lambda: publish.to_archive(conn, item_id),
+            }
+            if action in decisions:
+                message = decisions[action]()
+                if message in ("stale", "bad_link"):
+                    return redirect(f"{back}?msg={message}")
+                return redirect(f"/{Status.PROBLEM}?msg={message}")
             if action == "recheck" and (card.problem_code or "").startswith("robot_"):
                 if review.robot_retry(conn, item_id):
                     return redirect(f"/{Status.PROBLEM}?msg=robot_retry")
@@ -302,6 +436,73 @@ class App:
                     return redirect(f"/{Status.PROBLEM}?msg=recheck_new")
                 return redirect(f"{back}?msg={'recheck_problem' if status else 'stale'}")
             return text(400, "Невідома дія")
+        finally:
+            conn.close()
+
+    def published_page(self, request: Request) -> Response:
+        conn = self.connect()
+        try:
+            query = request.arg("q").strip()
+            cards = review.list_tab(conn, Status.PUBLISHED, query)
+            extra = {
+                r["id"]: (shafa_link(r["shafa_url"]), r["published_at"])
+                for r in conn.execute(
+                    "SELECT id, shafa_url, published_at FROM items WHERE status = ?",
+                    (Status.PUBLISHED,),
+                )
+            }
+            cards.sort(key=lambda c: extra[c.id][1] or "", reverse=True)
+            return self.page(
+                "published.html",
+                **self._chrome(conn, request),
+                current=Status.PUBLISHED,
+                cards=cards,
+                extra=extra,
+                query=query,
+                message=MESSAGES.get(request.arg("msg")),
+            )
+        finally:
+            conn.close()
+
+    def sessions_page(self, request: Request) -> Response:
+        conn = self.connect()
+        try:
+            sessions = conn.execute("SELECT * FROM sessions ORDER BY id DESC LIMIT 200").fetchall()
+            return self.page(
+                "sessions.html",
+                **self._chrome(conn, request),
+                current="sessions",
+                sessions=sessions,
+                reasons=control.LAST,
+                message=MESSAGES.get(request.arg("msg")),
+            )
+        finally:
+            conn.close()
+
+    def session_page(self, session_id: int, request: Request) -> Response:
+        conn = self.connect()
+        try:
+            row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            if row is None:
+                return text(404, "Сесію не знайдено")
+            ids = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM items WHERE session_id = ? ORDER BY published_at, id",
+                    (session_id,),
+                )
+            ]
+            cards = [c for i in ids if (c := review.load_card(conn, i))]
+            return self.page(
+                "session.html",
+                **self._chrome(conn, request),
+                current="sessions",
+                session=row,
+                cards=cards,
+                reasons=control.LAST,
+                sticky_titles=STICKY_TITLES,
+                message=None,
+            )
         finally:
             conn.close()
 
@@ -332,6 +533,35 @@ class App:
         except (OSError, UnidentifiedImageError):
             return text(404, "Фото не відкривається")
         return Response(200, body, "image/jpeg")
+
+
+def safe_back(path: str) -> str:
+    """Куди повернутись після кнопки панелі: лише свій шлях (не `//чужий.сайт`)."""
+    if not path.startswith("/") or path.startswith("//") or "\\" in path:
+        return "/" + Status.REVIEW
+    return path
+
+
+def shafa_link(url: str | None) -> str | None:
+    """Посилання з бази — у сторінку лише якщо це справді shafa.ua (не `javascript:`)."""
+    return url if url and url.startswith("https://shafa.ua/") else None
+
+
+def local_time(stamp: str | None) -> str:
+    if not stamp:
+        return ""
+    try:
+        return datetime.fromisoformat(stamp).astimezone().strftime("%d.%m.%Y %H:%M")
+    except ValueError:
+        return stamp
+
+
+def last_log_line(path: Path) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").strip().splitlines()
+    except OSError:
+        return "журналу немає"
+    return lines[-1][:200] if lines else "журнал порожній"
 
 
 # --- Сервер ---

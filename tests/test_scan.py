@@ -263,7 +263,8 @@ def test_published_folder_is_not_a_product_folder(conn, posts, root):
 
 @pytest.mark.parametrize(
     "code",
-    ["publish_uncertain", "possible_duplicate", "publish_error", "robot_field_missing",
+    ["publish_uncertain", "possible_duplicate", "publish_error", "already_published",
+     "robot_field_missing",
      "robot_brand_missing", "robot_not_sent"],
 )  # fmt: skip
 def test_scan_never_resets_publication_or_robot_problem(conn, posts, root, code):

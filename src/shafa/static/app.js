@@ -38,3 +38,18 @@ if (form) {
     if (dirty) event.preventDefault();
   });
 }
+
+// Панель робота оновлюється сама кожні 5 с (лише свій сервер — CSP connect-src 'self').
+const robot = document.getElementById("robot");
+if (robot) {
+  setInterval(async () => {
+    if (document.hidden) return;
+    if (robot.contains(document.activeElement) && document.activeElement.tagName === "BUTTON") return;
+    try {
+      const response = await fetch(robot.dataset.panel, { cache: "no-store" });
+      if (response.ok) robot.innerHTML = await response.text();
+    } catch (error) {
+      // сервер зупинили — панель лишається як є
+    }
+  }, 5000);
+}

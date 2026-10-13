@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Сесії · Шафа-помічник{% endblock %}
+{% block main %}
+{% if not sessions %}<p class="empty">Робот ще не запускався.</p>{% endif %}
+<table class="sessions">
+  {% if sessions %}
+  <thead><tr><th>Початок</th><th>Кінець</th><th>Опубліковано</th><th>У Проблемах</th><th>Чому зупинився</th></tr></thead>
+  {% endif %}
+  <tbody>
+  {% for s in sessions %}
+    <tr>
+      <td><a href="/session/{{ s.id }}">{{ local(s.started_at) }}</a></td>
+      <td>{{ local(s.ended_at) if s.ended_at else "працює" }}</td>
+      <td>{{ s.published }}</td>
+      <td>{{ s.problems }}</td>
+      <td>{{ reasons.get(s.stop_code or "", "") or (s.stop_reason or "") }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
