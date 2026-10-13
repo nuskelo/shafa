@@ -188,9 +188,13 @@ class PageDriver:
         combo.first.fill(name)
         browser.pause(1.5, 2.5)
         options = self.page.locator("[class*=option]")
-        for i in range(options.count()):
-            if options.nth(i).inner_text().strip().casefold() == name.casefold():
-                self.session.click(options.nth(i), f"бренд {name}")
+        texts = options.all_inner_texts()  # список перемальовується — читаємо все за раз
+        found = next((x.strip() for x in texts if x.strip().casefold() == name.casefold()), None)
+        if found:
+            exact = re.compile(rf"^\s*{re.escape(found)}\s*$")
+            option = options.filter(has_text=exact)
+            if option.count():
+                self.session.click(option.first, f"бренд {name}")
                 return True
         combo.first.fill("")
         self.session.press("Escape")
