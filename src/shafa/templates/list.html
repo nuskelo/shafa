@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ tabs[current] }} · Шафа-помічник{% endblock %}
+{% block main %}
+<form class="search" method="get" action="/{{ current }}">
+  <input type="search" name="q" value="{{ query }}" placeholder="Назва, бренд, номер поста або слово з тексту" aria-label="Пошук">
+  <button type="submit">Шукати</button>
+  {% if query %}<a href="/{{ current }}">Скинути</a>{% endif %}
+</form>
+
+{% if not cards %}
+<p class="empty">{% if query %}Нічого не знайдено.{% else %}Тут поки порожньо.{% endif %}</p>
+{% endif %}
+
+<ul class="rows">
+{% for card in cards %}
+  <li>
+    <a class="row" href="/item/{{ card.id }}">
+      {% if card.photos %}
+      <img class="thumb" src="/thumb/{{ card.id }}/{{ card.photos[0].position }}" alt="" loading="lazy">
+      {% else %}
+      <span class="thumb none">немає фото</span>
+      {% endif %}
+      <span class="info">
+        <span class="name">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</span>
+        {% if current == "problem" %}
+        <span class="problem">{{ card.problem_text }}</span>
+        {% else %}
+        <span class="details">{{ [(card.fields["price"].value ~ " грн") if card.fields["price"].value, card.fields["section"].value] | select | join(" · ") }}</span>
+        {% endif %}
+        <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, card.post_date[:10] if card.post_date, ("видалиться " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if current == "archived" and card.archived_at] | select | join(" · ") }}</span>
+      </span>
+      {% if card.yellow and current != "problem" %}
+      <span class="badge">Жовтих: {{ card.yellow }}</span>
+      {% endif %}
+    </a>
+  </li>
+{% endfor %}
+</ul>
+{% endblock %}
