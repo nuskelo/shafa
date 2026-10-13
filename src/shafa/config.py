@@ -28,12 +28,12 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def setting(name: str, env_file: Path = ENV_FILE) -> str | None:
+def setting(name: str, env_file: Path | None = None) -> str | None:
     """Налаштування: змінна середовища, інакше `.env`; порожнє значення = немає."""
-    return os.environ.get(name) or read_env_file(env_file).get(name) or None
+    return os.environ.get(name) or read_env_file(env_file or ENV_FILE).get(name) or None
 
 
-def api_key(env_file: Path = ENV_FILE) -> str:
+def api_key(env_file: Path | None = None) -> str:
     """Ключ Claude API або ConfigError із текстом без жодного значення."""
     key = setting(API_KEY, env_file)
     if key is None:
