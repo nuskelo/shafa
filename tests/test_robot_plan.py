@@ -70,10 +70,10 @@ def test_values_outside_shafa_are_noted_not_filled(conn, root):
     ]
     steps, notes = plan(approved(conn, root, blank=blank), root)
 
-    labels = {s.label for s in steps}
-    assert "Бренд" not in labels and "Тип" not in labels
-    assert "Бренду «Невідомий бренд» немає у списку Шафи — не заповнено (OQ-004)" in notes
-    assert "Тип: немає у списку Шафи — Мартінси" in notes
+    got = by_label(steps)
+    assert got[("brand", "Бренд")] == "Невідомий бренд"  # шукається у формі наживо
+    assert ("choice", "Тип") not in got
+    assert notes == ["Тип: немає у списку Шафи — Мартінси"]
 
 
 def test_backpack_has_no_sizes_and_gender_is_filled(conn, root):

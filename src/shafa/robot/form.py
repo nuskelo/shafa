@@ -32,10 +32,15 @@ class Driver(Protocol):
     def choose_category(self, parts: list[str], slug: str) -> None: ...
     def pick(self, label: str, values: list[str]) -> None: ...
     def keywords(self, words: list[str]) -> None: ...
+    def brand(self, name: str) -> bool: ...
 
 
-def execute(steps: list[Step], driver: Driver) -> None:
-    """Виконати кроки по черзі. Розмір/колір/стан/характеристики — вибір у блоці з підписом."""
+def execute(steps: list[Step], driver: Driver) -> list[str]:
+    """Виконати кроки по черзі. Розмір/колір/стан/характеристики — вибір у блоці з підписом.
+
+    Повертає нотатки (бренд не знайшовся на Шафі — поле лишилось порожнім).
+    """
+    notes = []
     for step in steps:
         if step.kind == "photos":
             driver.set_photos(step.value)
@@ -47,12 +52,16 @@ def execute(steps: list[Step], driver: Driver) -> None:
             driver.choose_category(step.value, step.target)
         elif step.kind == "keywords":
             driver.keywords(step.value)
-        elif step.kind in ("condition", "brand", "size_system"):
+        elif step.kind == "brand":
+            if not driver.brand(step.value):
+                notes.append(f"Бренду «{step.value}» немає на Шафі — не заповнено (OQ-004)")
+        elif step.kind in ("condition", "size_system"):
             driver.pick(step.label, [step.value])
         elif step.kind in ("sizes", "colors", "choice"):
             driver.pick(step.label, step.value)
         else:
             raise ValueError(f"Невідомий крок {step.kind}")
+    return notes
 
 
 # --- Справжній драйвер ---
@@ -158,6 +167,23 @@ class PageDriver:
             self.session.click(option.first, f"{label}: {value}")
             self.session.press("Escape")
 
+    def brand(self, name: str) -> bool:
+        """Пошук у полі «Бренд»: лише варіант, що точно збігається. «Додати бренд» — ніколи."""
+        combo = self._block("Бренд").locator("input[role=combobox]")
+        if not combo.count():
+            raise FieldMissing("Бренд")
+        combo.first.click()
+        combo.first.fill(name)
+        browser.pause(1.5, 2.5)
+        options = self.page.locator("[class*=option]")
+        for i in range(options.count()):
+            if options.nth(i).inner_text().strip().casefold() == name.casefold():
+                self.session.click(options.nth(i), f"бренд {name}")
+                return True
+        combo.first.fill("")
+        self.session.press("Escape")
+        return False
+
     def keywords(self, words: list[str]) -> None:
         combo = self._block("Ключові слова").locator("input[role=combobox]")
         if not combo.count():
@@ -218,7 +244,7 @@ def dry_fill(
             break
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         try:
-            execute(steps, make_driver(session))
+            notes += execute(steps, make_driver(session))
         except FieldMissing as error:
             shot = screens / f"{stamp}-{post_id}-нема-поля.png"
             session.page.screenshot(path=str(shot), full_page=True)

@@ -36,6 +36,10 @@ class FakeDriver:
     def keywords(self, words):
         self._call("keywords", *words)
 
+    def brand(self, name):
+        self._call("brand", name)
+        return name != "Невідомий бренд"
+
 
 class FakePage:
     def __init__(self):
@@ -272,3 +276,12 @@ def test_catalog_slug_of_form_request():
     assert browser.catalog_slug(request) == "obuv/aksessuary"
     request.post_data = '{"operationName": "WEB_HeaderUser"}'
     assert browser.catalog_slug(request) is None
+
+
+def test_brand_not_found_on_shafa_is_noted():
+    driver = FakeDriver(None)
+    notes = execute(
+        [Step("brand", "Бренд", "Ecco"), Step("brand", "Бренд", "Невідомий бренд")], driver
+    )
+    assert driver.calls == [("brand", "Ecco"), ("brand", "Невідомий бренд")]
+    assert notes == ["Бренду «Невідомий бренд» немає на Шафі — не заповнено (OQ-004)"]

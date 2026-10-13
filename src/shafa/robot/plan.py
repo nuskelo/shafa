@@ -1,7 +1,7 @@
 """Картка → кроки заповнення форми Шафи (чиста функція, без браузера).
 
-Значення поза знімком Шафи не заповнюються — потрапляють у нотатки звіту. Бренд, якого немає у
-списку Шафи, не заповнюється: «Додати бренд» робот не натискає (OQ-004).
+Значення поза знімком Шафи не заповнюються — потрапляють у нотатки звіту. Бренд шукається у формі
+наживо; не знайшовся — не заповнюється: «Додати бренд» робот не натискає (OQ-004).
 """
 
 import re
@@ -66,12 +66,9 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
         Step("category", "Розділ", path.split(catalog.SEP), catalog.section(path)["slug"]),
         Step("condition", "Стан", f["condition"]),
     ]
-    if f["brand"]:
-        brand = catalog.canonical(f["brand"], catalog.brands(path))
-        if brand:
-            steps.append(Step("brand", "Бренд", brand))
-        else:
-            notes.append(f"Бренду «{f['brand']}» немає у списку Шафи — не заповнено (OQ-004)")
+    if f["brand"]:  # список Шафи у знімку обрізаний (~500) — шукаємо наживо, тут лише написання
+        brand = catalog.canonical(f["brand"], catalog.brands(path)) or f["brand"]
+        steps.append(Step("brand", "Бренд", brand))
     if f["description"]:
         steps.append(Step("text", "Опис", f["description"], "descriptionUk"))
     if f["keywords"]:
