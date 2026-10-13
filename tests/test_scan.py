@@ -4,7 +4,7 @@ from conftest import CHANNEL_ID, make_folder
 from shafa.db import Status
 from shafa.export import read_export
 from shafa.folders import list_folders
-from shafa.scan import scan
+from shafa.scan import rescan_folder, scan
 
 
 @pytest.fixture
@@ -183,3 +183,69 @@ def test_photos_updated_for_new_card(conn, posts, root):
     run(conn, posts, root)
 
     assert photos(conn, "10") == ["IMG_1.JPG", "IMG_2.JPG"]
+
+
+def rescan(conn, root, name):
+    return rescan_folder(conn, name, list_folders(root, CHANNEL_ID))
+
+
+def test_rescan_one_folder_fixes_problem_and_leaves_others_alone(conn, posts, root):
+    make_folder(root, "10", [])  # немає фото → Проблема
+    make_folder(root, "11", ["1.jpg"])
+    make_folder(root, "Сукня", ["1.jpg"])
+    run(conn, posts, root)
+    (root / "11" / "1.jpg").unlink()
+    (root / "11").rmdir()  # папку 11 прибрали, але повного scan не було
+    (root / "10" / "1.jpg").write_bytes(b"")
+
+    assert rescan(conn, root, "10") == Status.NEW
+
+    assert items(conn) == {
+        "10": ("new", None, None),
+        "11": ("new", None, None),  # не folder_missing: інші Картки не перевіряються
+        "Сукня": ("problem", "bad_folder_name", "Назва папки не номер поста"),
+    }
+    assert photos(conn, "10") == ["1.jpg"]
+
+
+def test_rescan_uses_post_texts_from_db(conn, posts, root):
+    make_folder(root, "999", ["1.jpg"])
+    run(conn, posts, root)
+    with conn:
+        conn.execute("INSERT INTO posts VALUES (999, 'd', 'Кеди 500грн', 'bot', 'x')")
+
+    assert rescan(conn, root, "999") == Status.NEW
+
+
+def test_rescan_finds_twin_folders(conn, posts, root):
+    make_folder(root, "10", ["1.jpg"])
+    run(conn, posts, root)
+    with conn:
+        conn.execute("UPDATE items SET status = 'problem', problem_code = 'ai_error'")
+    make_folder(root, CHANNEL_ID + "10", ["1.jpg"])
+
+    assert rescan(conn, root, "10") == Status.PROBLEM
+    assert items(conn)["10"][1] == "duplicate_post"
+    assert CHANNEL_ID + "10" not in items(conn)  # чужа папка не додається
+
+
+def test_rescan_missing_folder(conn, posts, root):
+    make_folder(root, "Сукня", ["1.jpg"])
+    run(conn, posts, root)
+    (root / "Сукня" / "1.jpg").unlink()
+    (root / "Сукня").rmdir()
+
+    assert rescan(conn, root, "Сукня") == Status.PROBLEM
+    assert items(conn)["Сукня"] == ("problem", "folder_missing", "Папку не знайдено")
+
+
+@pytest.mark.parametrize("status", [Status.REVIEW, Status.APPROVED, Status.ARCHIVED])
+def test_rescan_leaves_cards_in_work_alone(conn, posts, root, status):
+    make_folder(root, "10", ["1.jpg"])
+    run(conn, posts, root)
+    with conn:
+        conn.execute("UPDATE items SET status = ?", (status,))
+
+    assert rescan(conn, root, "10") is None
+    assert rescan(conn, root, "нема") is None
+    assert items(conn)["10"] == (status, None, None)

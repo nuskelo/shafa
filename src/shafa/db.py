@@ -1,11 +1,11 @@
-"""База SQLite: пости, Картки, фото Карток, бланки ШІ і вартість запитів."""
+"""База SQLite: пости, Картки, фото Карток, бланки ШІ, ручні правки і вартість запитів."""
 
 import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class Status(StrEnum):
@@ -72,8 +72,24 @@ CREATE TABLE ai_requests (
 );
 """
 
+# Версія 3 (UI-001): ручні правки Продавчині поверх бланка ШІ й полів коду (новий бланк ШІ їх
+# не стирає); дата відхилення і дата очищення архіву (Картка лишається прихованим записом, щоб
+# повторний `scan` не створив її знову).
+EDITS = """
+CREATE TABLE edits (
+    item_id   INTEGER NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    field     TEXT NOT NULL,
+    value     TEXT,               -- JSON
+    edited_at TEXT NOT NULL,
+    PRIMARY KEY (item_id, field)
+);
+
+ALTER TABLE items ADD COLUMN archived_at TEXT;
+ALTER TABLE items ADD COLUMN purged_at TEXT;
+"""
+
 # Що виконати, щоб перейти з версії N на N + 1.
-MIGRATIONS = {1: BLANKS}
+MIGRATIONS = {1: BLANKS, 2: EDITS}
 
 
 def now() -> str:
@@ -92,7 +108,7 @@ def connect(path: Path) -> sqlite3.Connection:
         raise RuntimeError(f"Невідома версія бази {version} (очікується {SCHEMA_VERSION})")
     if version == 0:
         with conn:
-            conn.executescript(SCHEMA + BLANKS)
+            conn.executescript(SCHEMA + BLANKS + EDITS)
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         return conn
     while version < SCHEMA_VERSION:  # старіша база: таблиці додаються, дані лишаються

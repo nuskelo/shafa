@@ -10,6 +10,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic==1.9.0",
+    "Jinja2==3.1.6",
+    "MarkupSafe==3.0.3",
     "Pillow==12.3.0",
 ]
 
@@ -30,7 +32,7 @@ include = ["*.py", "*.pyi", "**/pyproject.toml"]
 extend-select = ["I"]
 
 [tool.setuptools.package-data]
-shafa = ["prompts/*.md"]
+shafa = ["prompts/*.md", "templates/*.html", "static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

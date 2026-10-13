@@ -3,7 +3,14 @@ import io
 import pytest
 from PIL import Image
 
-from shafa.photos import image_tokens, prepare
+from shafa.photos import (
+    THUMB_SIDE,
+    cached_thumbnail,
+    drop_thumbnails,
+    image_tokens,
+    prepare,
+    thumbnail,
+)
 
 ORIENTATION = 0x0112
 
@@ -64,3 +71,32 @@ def test_grayscale_converted_to_rgb(tmp_path):
 )
 def test_image_tokens(size, tokens):
     assert image_tokens(*size) == tokens
+
+
+def test_thumbnail_small_and_rotated(tmp_path):
+    path = make_photo(tmp_path / "IMG_1.JPG", (2400, 1800), orientation=6)
+    before = path.read_bytes()
+
+    image = Image.open(io.BytesIO(thumbnail(path)))
+
+    assert image.size == (THUMB_SIDE * 3 // 4, THUMB_SIDE)  # боком → стоячи
+    assert path.read_bytes() == before
+
+
+def test_thumbnail_cache_in_given_folder_and_refreshed(tmp_path):
+    cache = tmp_path / "дані" / "thumbs"
+    (tmp_path / "фото").mkdir()
+    photo = make_photo(tmp_path / "фото" / "IMG_1.JPG", (800, 600))
+    first = cached_thumbnail(cache, 7, photo)
+    assert len(list((cache / "7").glob("*.jpg"))) == 1
+    assert sorted(p.name for p in photo.parent.iterdir()) == ["IMG_1.JPG"]
+    assert cached_thumbnail(cache, 7, photo) == first
+
+    make_photo(photo, (600, 800))  # фото замінили
+    second = cached_thumbnail(cache, 7, photo)
+
+    assert Image.open(io.BytesIO(second)).size == (240, 320)
+    assert len(list((cache / "7").glob("*.jpg"))) == 1  # стара мініатюра прибрана
+
+    drop_thumbnails(cache, 7)
+    assert not (cache / "7").exists()

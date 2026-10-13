@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}{{ card.fields["title"].value or card.folder_name }} · Шафа-помічник{% endblock %}
+
+{% macro options(values, selected, blank=True) %}
+  {% if blank %}<option value="">—</option>{% endif %}
+  {% for value in values %}
+  <option value="{{ value }}"{% if value == selected %} selected{% endif %}>{{ value }}</option>
+  {% endfor %}
+  {% if selected and selected not in values %}
+  <option value="{{ selected }}" selected>{{ selected }} (немає в довіднику)</option>
+  {% endif %}
+{% endmacro %}
+
+{% macro widget(f) %}
+  {% set name = f.spec.name %}
+  {% set off = "" if editable else " disabled" %}
+  {% if f.spec.widget == "textarea" %}
+  <textarea id="f-{{ name }}" name="{{ name }}" rows="9"{{ off }}>{{ f.inputs[0] }}</textarea>
+  {% elif f.spec.widget == "section" %}
+  <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" list="sections"{{ off }}>
+  {% elif f.spec.widget == "sizes" %}
+  <span class="pair">
+    <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" inputmode="decimal"{{ off }}>
+    <input name="{{ name }}" value="{{ f.inputs[1] }}" inputmode="decimal" aria-label="Другий розмір"{{ off }}>
+  </span>
+  {% elif f.spec.widget == "colors" %}
+  <span class="pair">
+    <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0]) }}</select>
+    <select name="{{ name }}" aria-label="Другий колір"{{ off }}>{{ options(f.spec.options, f.inputs[1]) }}</select>
+  </span>
+  {% elif f.spec.widget == "select" %}
+  <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0]) }}</select>
+  {% elif f.spec.widget == "condition" %}
+  <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0], blank=False) }}</select>
+  {% elif f.spec.widget == "yesno" %}
+  <select id="f-{{ name }}" name="{{ name }}"{{ off }}>
+    <option value="">—</option>
+    <option value="yes"{% if f.inputs[0] == "yes" %} selected{% endif %}>так</option>
+    <option value="no"{% if f.inputs[0] == "no" %} selected{% endif %}>ні</option>
+  </select>
+  {% elif f.spec.widget == "price" %}
+  <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" inputmode="numeric" class="short"{{ off }}>
+  {% else %}
+  <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}"{{ off }}>
+  {% endif %}
+  {% if f.spec.widget == "list" %}<small>через кому</small>{% endif %}
+  {% if f.spec.widget == "numbers" %}<small>кілька — через «;»</small>{% endif %}
+{% endmacro %}
+
+{% block main %}
+{% set order = card.fields["photo_order"] %}
+<p class="back"><a href="/{{ card.status }}">← {{ tabs.get(card.status, "Назад") }}</a></p>
+<h1>{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</h1>
+<p class="meta">
+  Папка {{ card.folder_name }}{% if card.post_id %} · пост {{ card.post_id }}{% endif %}{% if card.post_date %} від {{ card.post_date[:10] }}{% endif %}
+  {% if card.status == "archived" and card.archived_at %} · в Архіві, видалиться {{ deletion_date(card.archived_at).strftime("%d.%m.%Y") }}{% endif %}
+</p>
+
+<div class="card">
+  <section class="left">
+    {% if order.yellow %}
+    <p class="note yellow">Порядок фото: {{ order.reason }}</p>
+    {% endif %}
+    <div class="photos">
+      {% for photo in card.photos %}
+      <a class="photo" href="/photo/{{ card.id }}/{{ photo.position }}" title="{{ photo.file_name }}">
+        <img src="/thumb/{{ card.id }}/{{ photo.position }}" alt="Фото {{ loop.index }}" loading="lazy">
+      </a>
+      {% else %}
+      <p class="empty">Немає фото</p>
+      {% endfor %}
+    </div>
+    {% if card.post_text %}
+    <h2>Текст поста</h2>
+    <div class="post">{{ card.post_text }}</div>
+    {% endif %}
+  </section>
+
+  <section class="right">
+    {% if card.status == "problem" %}
+    <div class="problem-box">
+      <p class="problem">{{ card.problem_text }}</p>
+      {% if hint %}<p>{{ hint }}</p>{% endif %}
+      <form method="post" action="/item/{{ card.id }}">
+        <input type="hidden" name="token" value="{{ token }}">
+        <button name="action" value="recheck">Перевірити ще раз</button>
+      </form>
+    </div>
+    {% endif %}
+
+    {% if card.status != "problem" %}
+    <form method="post" action="/item/{{ card.id }}" class="fields">
+      <input type="hidden" name="token" value="{{ token }}">
+      {# Перша кнопка форми — та, що спрацьовує від Enter: хай це буде «Зберегти». #}
+      <button name="action" value="save" class="hidden-default" tabindex="-1" aria-hidden="true">Зберегти</button>
+      {% if editable %}
+      <input type="hidden" name="photo_order" value="{{ order.inputs[0] }}">
+      {% if order.yellow %}
+      <p class="order-buttons">
+        <button name="action" value="confirm:photo_order" class="ok">Порядок фото — так, вірно</button>
+        <button name="action" value="folder_order">Як у папці</button>
+      </p>
+      {% endif %}
+      {% endif %}
+
+      {% for f in card.visible if f.spec.widget != "order" %}
+      <div class="field{% if f.yellow %} yellow{% endif %}{% if f.spec.name in bad %} bad{% endif %}">
+        <label for="f-{{ f.spec.name }}">{{ f.spec.label }}</label>
+        <div class="input">
+          {{ widget(f) }}
+          {% if f.spec.name in bad %}<p class="error">{{ bad_input.get(f.spec.widget, "неправильне значення") }}</p>{% endif %}
+          {% if f.yellow %}
+          <p class="reason">{{ f.reason or "перевірте" }}
+            {% if editable %}<button name="action" value="confirm:{{ f.spec.name }}" class="ok">Так, вірно</button>{% endif %}
+          </p>
+          {% elif f.edited %}
+          <p class="edited">змінено вручну</p>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="actions">
+        {% if card.status == "review" %}
+        <button name="action" value="save">Зберегти</button>
+        <button name="action" value="approve" class="approve">Схвалити</button>
+        <button name="action" value="reject" class="reject">Відхилити</button>
+        {% if block %}<p class="block">{{ block }}</p>{% endif %}
+        {% elif card.status == "approved" %}
+        <button name="action" value="unapprove">Скасувати схвалення</button>
+        {% elif card.status == "archived" %}
+        <button name="action" value="restore">Повернути</button>
+        {% endif %}
+      </div>
+    </form>
+    {% endif %}
+  </section>
+</div>
+
+<datalist id="sections">
+  {% for section in sections %}<option value="{{ section }}">{% endfor %}
+</datalist>
+
+<dialog id="viewer">
+  <img alt="">
+  <p>Закрити — клік або Esc · ← → інші фото</p>
+</dialog>
+{% endblock %}

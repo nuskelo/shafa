@@ -3,6 +3,7 @@
 `python -m shafa scan --export … --root … --db …` — зіставити папки й пости.
 `python -m shafa rules --export … --post N` — поля, які заповнює код, для одного поста.
 `python -m shafa fill --db … --root … [--post N] [--limit K] [--dry-run]` — ШІ-бланк для Карток.
+`python -m shafa ui --db … --root … [--port P] [--no-browser]` — екран перевірки в браузері.
 
 Налаштування (`SHAFA_ROOT_DIR`, `TELEGRAM_CHANNEL_ID`, `ANTHROPIC_API_KEY`) — зі змінних
 середовища або з `.env` у корені проєкту.
@@ -10,9 +11,10 @@
 
 import argparse
 import sys
+import webbrowser
 from pathlib import Path
 
-from shafa import ai, config, db, fill, rules
+from shafa import ai, config, db, fill, photos, review, rules, web
 from shafa.export import Post, read_export
 from shafa.folders import list_folders
 from shafa.scan import ScanResult, scan
@@ -116,7 +118,43 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument(
         "--dry-run", action="store_true", help="зібрати запити й порахувати, нічого не надсилати"
     )
+    cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
+    cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
+    _add_root(cmd)
+    cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
+    cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
     return parser
+
+
+def thumbs_dir(db_path: Path) -> Path:
+    """Кеш мініатюр — у теці даних поруч із базою, не в папках з фото."""
+    return db_path.resolve().parent / "thumbs"
+
+
+def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    root = _root(parser, args)
+    if not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    cache_dir = thumbs_dir(args.db)
+    conn = db.connect(args.db)
+    try:
+        for item_id in review.purge_archive(conn):
+            photos.drop_thumbnails(cache_dir, item_id)
+    finally:
+        conn.close()
+    app = web.App(args.db, root, cache_dir, channel_id=config.setting("TELEGRAM_CHANNEL_ID"))
+    server = web.make_server(app, args.port)
+    url = f"http://{web.HOST}:{app.port}/"
+    print(f"Екран перевірки: {url}\nЗупинити — Ctrl+C")
+    if not args.no_browser:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
 
 
 def run_rules(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
@@ -180,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_rules(parser, args)
     if args.command == "fill":
         return run_fill(parser, args)
+    if args.command == "ui":
+        return run_ui(parser, args)
     root = _root(parser, args)
     if not args.export.is_file():
         parser.error(f"Файл Експорту не знайдено: {args.export}")

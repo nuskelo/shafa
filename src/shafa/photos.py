@@ -1,6 +1,9 @@
-"""Фото для ШІ: поворот за EXIF, зменшення, JPEG у пам'яті. Оригінали не змінюються."""
+"""Фото для ШІ й мініатюри: поворот за EXIF, зменшення, JPEG. Оригінали не змінюються."""
 
+import hashlib
 import io
+import shutil
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,3 +40,43 @@ def prepare(path: Path, max_side: int = MAX_SIDE) -> PreparedPhoto:
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=JPEG_QUALITY)
     return PreparedPhoto(path.name, buffer.getvalue(), image.width, image.height)
+
+
+# Мініатюри для екрана перевірки. Кеш — у теці даних програми (поруч із базою), не в папках з фото.
+THUMB_SIDE = 320
+
+
+def thumbnail(path: Path, side: int = THUMB_SIDE) -> bytes:
+    """Мініатюра JPEG: поворот за EXIF; `draft` читає JPEG одразу зменшеним — у рази швидше."""
+    with Image.open(path) as original:
+        original.draft("RGB", (side, side))
+        image = ImageOps.exif_transpose(original).convert("RGB")
+    image.thumbnail((side, side))
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=JPEG_QUALITY)
+    return buffer.getvalue()
+
+
+def cached_thumbnail(cache_dir: Path, item_id: int, path: Path) -> bytes:
+    """Мініатюра з кешу `cache_dir/<id Картки>/`; змінене фото (час, розмір) робиться знову."""
+    stat = path.stat()
+    key = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:16]
+    folder = cache_dir / str(item_id)
+    target = folder / f"{key}-{stat.st_mtime_ns}-{stat.st_size}.jpg"
+    if target.is_file():
+        return target.read_bytes()
+    data = thumbnail(path)
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in folder.glob(f"{key}-*.jpg"):
+            old.unlink()
+        temp = folder / f"{key}.{uuid.uuid4().hex}.tmp"  # кілька запитів одночасно — не заважають
+        temp.write_bytes(data)
+        temp.replace(target)
+    except OSError:
+        pass  # кеш не обов'язковий: мініатюру вже маємо
+    return data
+
+
+def drop_thumbnails(cache_dir: Path, item_id: int) -> None:
+    shutil.rmtree(cache_dir / str(item_id), ignore_errors=True)

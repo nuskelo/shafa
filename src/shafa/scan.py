@@ -123,6 +123,14 @@ def _save_item(conn: sqlite3.Connection, folder: Folder, problem: tuple[str, str
     )
 
 
+def _twins(folders: list[Folder]) -> dict[int, list[str]]:
+    twins: dict[int, list[str]] = defaultdict(list)
+    for folder in folders:
+        if folder.post_id is not None:
+            twins[folder.post_id].append(folder.name)
+    return twins
+
+
 def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
     rows = conn.execute(
         "SELECT id, folder_name, problem_code FROM items WHERE status IN (?, ?)", SCANNABLE
@@ -141,15 +149,16 @@ def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
         )
 
 
+def _texts(conn: sqlite3.Connection) -> dict[int, str]:
+    return {r[0]: r[1] for r in conn.execute("SELECT post_id, text FROM posts")}
+
+
 def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]) -> ScanResult:
     """Створити або оновити Картки для папок. Повторний запуск нічого не дублює."""
     with conn:
         save_posts(conn, posts)
-        texts = {r[0]: r[1] for r in conn.execute("SELECT post_id, text FROM posts")}
-        twins: dict[int, list[str]] = defaultdict(list)
-        for folder in folders:
-            if folder.post_id is not None:
-                twins[folder.post_id].append(folder.name)
+        texts = _texts(conn)
+        twins = _twins(folders)
         for folder in folders:
             _save_item(conn, folder, find_problem(folder, texts, twins))
         _mark_missing(conn, {f.name for f in folders})
@@ -164,3 +173,30 @@ def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]
     ]
     problems.sort(key=lambda p: natural_key(p.folder_name))
     return ScanResult(len(folders), new, problems)
+
+
+def rescan_folder(conn: sqlite3.Connection, folder_name: str, folders: list[Folder]) -> str | None:
+    """Перевірити ще раз одну Картку `new`/`problem`: тексти — з бази, інші Картки не чіпає.
+
+    `folders` — усі папки Головної зараз (для пошуку двох папок одного поста).
+    Повертає новий статус або None, якщо Картки немає чи її перевіряти не можна.
+    """
+    with conn:
+        row = conn.execute(
+            "SELECT id, status FROM items WHERE folder_name = ?", (folder_name,)
+        ).fetchone()
+        if row is None or row["status"] not in SCANNABLE:
+            return None
+        folder = next((f for f in folders if f.name == folder_name), None)
+        if folder is None:
+            conn.execute(
+                """
+                UPDATE items SET status = ?, problem_code = 'folder_missing',
+                                 problem_text = 'Папку не знайдено', updated_at = ?
+                WHERE id = ?
+                """,
+                (Status.PROBLEM, now(), row["id"]),
+            )
+            return Status.PROBLEM
+        _save_item(conn, folder, find_problem(folder, _texts(conn), _twins(folders)))
+        return conn.execute("SELECT status FROM items WHERE id = ?", (row["id"],)).fetchone()[0]
