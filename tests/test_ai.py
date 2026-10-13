@@ -72,7 +72,7 @@ def by_name(fields):
 
 
 def check(**changes):
-    return by_name(ai.check_answer(answer(**changes), NAMES))
+    return by_name(ai.check_answer(answer(**changes), NAMES, POST))
 
 
 # --- Запит ---
@@ -215,7 +215,7 @@ def test_make_client_uses_explicit_key(monkeypatch):
 
 
 def test_good_answer_has_no_yellow():
-    fields = ai.check_answer(GOOD, NAMES)
+    fields = ai.check_answer(GOOD, NAMES, POST)
     assert [f.name for f in fields] == list(ai.FIELDS)
     assert not [f for f in fields if f.yellow]
     assert by_name(fields)["sizes"].value == ["38"]
@@ -370,7 +370,76 @@ def test_doubts_make_fields_yellow_and_keep_code_reason():
 
 
 def test_missing_and_wrong_types_do_not_crash():
-    fields = by_name(ai.check_answer({"title": 5, "colors": "Чорний", "doubts": "ні"}, NAMES))
+    fields = by_name(ai.check_answer({"title": 5, "colors": "Чорний", "doubts": "ні"}, NAMES, POST))
     assert [f.name for f in fields.values()] == list(ai.FIELDS)
     assert fields["title"].yellow and fields["section"].yellow and fields["colors"].yellow
     assert fields["brand"].value is None
+
+
+def test_prompt_rules_from_text_only():
+    prompt = ai.system_prompt()
+    assert "лише якщо вони є в тексті поста" in prompt
+    assert "«Бутси Adidas …» → «… / Бутси»" in prompt
+    assert "лише до 22 розміру включно" in prompt
+
+
+@pytest.mark.parametrize(
+    ("section", "sizes", "reason"),
+    [
+        (
+            "Дитячий одяг / Для малюків / Взуття / Кросівки",
+            ["24"],
+            "розділ не звірено з довідником; Для малюків лише до 22 розміру",
+        ),
+        (
+            "Дитячий одяг / Для малюків / Взуття / Кросівки",
+            ["22"],
+            "розділ не звірено з довідником",
+        ),
+        (
+            "Дитячий одяг / Для дівчаток / Взуття / Кеди",
+            ["22"],
+            "розмір 22 зазвичай з іншого розділу",
+        ),
+        (
+            "Чоловічий одяг / Взуття / Кеди",
+            ["38"],
+            "розділ не звірено з довідником; розмір 38 зазвичай з іншого розділу",
+        ),
+    ],
+)
+def test_size_hint_reasons(section, sizes, reason):
+    field = check(section=section, sizes=sizes)["section"]
+    assert (field.yellow, field.reason) == (True, reason)
+
+
+@pytest.mark.parametrize(
+    ("lining", "text", "yellow"),
+    [
+        ("Текстиль", "Шкіряні кросівки. Верх - натуральна шкіра. 990грн", True),
+        ("Шкіра", "Кросівки. Верх і всередині - натуральна шкіра. 1500грн", False),
+        ("Хутро", "Зимові черевики на хутрі. 1200грн", False),
+        ("Фліс", "Черевики з флісом всередині. 900грн", False),
+        (None, "Кросівки. 990грн", False),
+    ],
+)
+def test_lining_must_be_in_text(lining, text, yellow):
+    field = by_name(ai.check_answer(answer(material_lining=lining), NAMES, text))["material_lining"]
+    assert field.value == lining
+    assert field.yellow is yellow
+    assert field.reason == ("немає в тексті" if yellow else None)
+
+
+@pytest.mark.parametrize(
+    ("word", "text", "found"),
+    [
+        ("Шкіра", "шкіряні кросівки", True),
+        ("Текстиль", "текстильний верх", True),
+        ("Вовна", "вовняна підкладка", True),
+        ("Шкіра", "штучна замша", False),
+        ("Нубук", "бук", False),
+        ("Шкіра", "верх — екошкіра", False),
+    ],
+)
+def test_in_text(word, text, found):
+    assert ai.in_text(word, text) is found

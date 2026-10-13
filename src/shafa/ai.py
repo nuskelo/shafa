@@ -5,6 +5,7 @@
 
 import base64
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -262,7 +263,7 @@ def expected_kinds(size: float) -> set[Kind]:
     if size <= 22:
         return {Kind.BABIES}
     if size < 35:
-        return {Kind.KIDS, Kind.BABIES}
+        return {Kind.KIDS}
     if size < 37:
         return {Kind.KIDS, Kind.WOMEN}
     if size < 41:
@@ -294,12 +295,33 @@ def check_sizes(value: Any, kind: Kind | None) -> tuple[Field, float | None]:
 
 
 def check_size_hint(section: Field, kind: Kind | None, size: float | None) -> Field:
-    """Розділ жовтіє, якщо розмір підказує іншу групу (дитяче / жіноче / чоловіче)."""
-    if section.yellow or kind is None or size is None or kind in expected_kinds(size):
+    """Розділ жовтіє, якщо розмір підказує іншу групу (малюки / дитяче / жіноче / чоловіче)."""
+    if kind is None or size is None or kind in expected_kinds(size):
         return section
-    return Field(
-        "section", section.value, True, f"розмір {_number(size)} зазвичай з іншого розділу"
-    )
+    if kind is Kind.BABIES:
+        reason = "Для малюків лише до 22 розміру"
+    else:
+        reason = f"розмір {_number(size)} зазвичай з іншого розділу"
+    return Field("section", section.value, True, _join(section.reason, reason))
+
+
+def _join(*reasons: str | None) -> str:
+    return "; ".join(r for r in reasons if r)
+
+
+def in_text(word: str, text: str) -> bool:
+    """Слово є в тексті з будь-яким закінченням: «Шкіра» → «шкіряні», «Хутро» → «хутром»."""
+    stem = word.strip().casefold()
+    if len(stem) > 4:
+        stem = stem[:-1]
+    return re.search(r"(?<!\w)" + re.escape(stem), text.casefold()) is not None
+
+
+def check_lining(value: Any, post_text: str) -> Field:
+    lining = _text(value)
+    if lining is not None and not in_text(lining, post_text):
+        return Field("material_lining", lining, True, "немає в тексті")
+    return Field("material_lining", lining)
 
 
 def check_colors(value: Any) -> Field:
@@ -372,14 +394,12 @@ def _with_doubts(fields: list[Field], doubts: Any) -> list[Field]:
         if field.name not in reasons:
             result.append(field)
             continue
-        parts = ([field.reason] if field.reason else []) + [
-            "ШІ не впевнене: " + r for r in reasons[field.name]
-        ]
-        result.append(Field(field.name, field.value, True, "; ".join(parts)))
+        doubt = _join(*("ШІ не впевнене: " + r for r in reasons[field.name]))
+        result.append(Field(field.name, field.value, True, _join(field.reason, doubt)))
     return result
 
 
-def check_answer(answer: dict[str, Any], photo_names: list[str]) -> list[Field]:
+def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str) -> list[Field]:
     """Відповідь ШІ → поля бланка в порядку FIELDS, з жовтими позначками й причинами."""
     section, kind = check_section(answer.get("section"))
     sizes, first_size = check_sizes(answer.get("sizes"), kind)
@@ -392,7 +412,7 @@ def check_answer(answer: dict[str, Any], photo_names: list[str]) -> list[Field]:
         check_colors(answer.get("colors")),
         Field("brand", _text(answer.get("brand"))),
         check_materials(answer.get("material_upper"), kind),
-        Field("material_lining", _text(answer.get("material_lining"))),
+        check_lining(answer.get("material_lining"), post_text),
         check_choice("season", answer.get("season"), catalog.SEASONS),
         Field("type", _text(answer.get("type"))),
         Field("style", _text(answer.get("style"))),

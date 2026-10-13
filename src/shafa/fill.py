@@ -23,6 +23,7 @@ class Planned:
     item_id: int
     folder_name: str
     post_id: int
+    post_text: str
     photos: list[PreparedPhoto]
     request: dict[str, Any]
     estimate: ai.Usage
@@ -72,8 +73,9 @@ def plan(conn: sqlite3.Connection, root: Path, row: sqlite3.Row) -> Planned | Sk
         except (OSError, UnidentifiedImageError):
             return Skipped(row["folder_name"], f"Фото не відкривається: {name}")
     request = ai.build_request(text[0], photos)
+    estimate = ai.estimate(request, photos)
     return Planned(
-        row["id"], row["folder_name"], row["post_id"], photos, request, ai.estimate(request, photos)
+        row["id"], row["folder_name"], row["post_id"], text[0], photos, request, estimate
     )
 
 
@@ -132,7 +134,7 @@ def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
             log_request(conn, planned.item_id, error.usage, str(error))
             _set_status(conn, planned.item_id, str(error))
         return Filled(planned.folder_name, error.usage, error=str(error))
-    fields = ai.check_answer(answer, [p.file_name for p in planned.photos])
+    fields = ai.check_answer(answer, [p.file_name for p in planned.photos], planned.post_text)
     with conn:
         log_request(conn, planned.item_id, usage, None)
         if _set_status(conn, planned.item_id, None):  # Картку вже взяли в роботу — бланк не чіпаємо

@@ -146,3 +146,19 @@ def test_status_changes_only_from_new(conn, root, status):
     assert item(conn, item_id)["status"] == status
     assert conn.execute("SELECT count(*) FROM blanks").fetchone()[0] == 0
     assert conn.execute("SELECT count(*) FROM ai_requests").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize(
+    ("lining", "row"), [("Текстиль", (1, "немає в тексті")), ("Шкіра", (0, None))]
+)
+def test_lining_checked_against_post_text(conn, root, lining, row):
+    item_id = add_item(conn, root)  # текст поста: «Шкіряні черевики Pavers…»
+    good = {**GOOD, "photo_order": ["IMG_1.JPG", "IMG_2.JPG"], "material_lining": lining}
+
+    fill.fill(conn, FakeClient(message(good)), planned_for(conn, root))
+
+    saved = conn.execute(
+        "SELECT yellow, reason FROM blanks WHERE item_id = ? AND field = 'material_lining'",
+        (item_id,),
+    ).fetchone()
+    assert tuple(saved) == row
