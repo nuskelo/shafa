@@ -6,6 +6,8 @@
 `python -m shafa ui --db … --root … [--port P] [--no-browser]` — екран перевірки в браузері.
 `python -m shafa robot --login | --sync-catalog | --dry-fill --db … --post N [--post M …]` — робот
 Шафи: ручний вхід Власника, знімок довідників, заповнення форми БЕЗ публікації (до 3 Карток).
+`python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
+`--pause | --resume | --stop --db …` — керування запущеною публікацією (поточний товар дописується).
 
 Налаштування (`SHAFA_ROOT_DIR`, `TELEGRAM_CHANNEL_ID`, `ANTHROPIC_API_KEY`) — зі змінних
 середовища або з `.env` у корені проєкту.
@@ -125,22 +127,61 @@ def build_parser() -> argparse.ArgumentParser:
     _add_root(cmd)
     cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
     cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
-    cmd = commands.add_parser("robot", help="робот Шафи (без публікації)")
+    cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
     mode.add_argument("--login", action="store_true", help="відкрити профіль робота для входу")
     mode.add_argument("--sync-catalog", action="store_true", help="оновити знімок довідників")
     mode.add_argument("--dry-fill", action="store_true", help="заповнити форму, не публікувати")
-    cmd.add_argument("--db", type=Path, help="файл бази SQLite (для --dry-fill)")
+    mode.add_argument("--publish", action="store_true", help="ОПУБЛІКУВАТИ схвалені на Шафі")
+    mode.add_argument("--pause", action="store_true", help="пауза публікації після товару")
+    mode.add_argument("--resume", action="store_true", help="продовжити після паузи")
+    mode.add_argument("--stop", action="store_true", help="зупинити публікацію після товару")
+    cmd.add_argument("--db", type=Path, help="файл бази SQLite")
     _add_root(cmd)
     cmd.add_argument("--post", type=int, action="append", help="номер поста (до 3 разів)")
+    cmd.add_argument("--limit", type=int, help="скільки опублікувати (не більше ліміту доби)")
     return parser
 
 
+def run_control(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """Пауза / Продовжити / Стоп для публікації, що йде в іншому вікні (UI-002 — кнопками)."""
+    from shafa.robot import publish
+
+    if args.db is None or not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    what = "pause" if args.pause else "stop" if args.stop else None
+    conn = db.connect(args.db)
+    try:
+        found = publish.request(conn, what)
+    finally:
+        conn.close()
+    if not found:
+        print("Робот зараз не публікує")
+        return 1
+    print({"pause": "Пауза після поточного товару", "stop": "Стоп після поточного товару"}.get(
+        what, "Продовжуємо"))  # fmt: skip
+    return 0
+
+
 def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if args.pause or args.resume or args.stop:
+        return run_control(parser, args)
+
     from playwright.sync_api import sync_playwright
 
-    from shafa.robot import browser, form, sync
+    from shafa.robot import browser, form, listings, publish, sync
 
+    if args.publish:
+        root = _root(parser, args)
+        if args.db is None or not args.db.is_file():
+            parser.error(f"Базу не знайдено: {args.db}")
+        try:
+            day_limit = publish.daily_limit()
+        except publish.SetupError as error:
+            parser.error(str(error))
+        limit = day_limit if args.limit is None else args.limit
+        if not 1 <= limit <= day_limit:
+            parser.error(f"--limit від 1 до {day_limit} (ліміт доби)")
     if args.dry_fill:
         root = _root(parser, args)
         if args.db is None or not args.db.is_file():
@@ -153,8 +194,21 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             browser.wait_for_manual_login(p)
             print("Вікно закрито.")
             return 0
-        session = browser.Session(p, allow_upload=args.dry_fill)
+        session = browser.Session(p, allow_upload=args.dry_fill, publish=args.publish)
         try:
+            if args.publish:
+                conn = db.connect(args.db)
+                try:
+                    publish.Run(
+                        conn, root, session, form.PageDriver,
+                        lambda s: listings.load(s, log=lambda x: print(x, flush=True)),
+                        form.screens_dir(), log=lambda x: print(x, flush=True),
+                    ).start(limit, day_limit)  # fmt: skip
+                except KeyboardInterrupt:  # звіт сесії вже надруковано
+                    return 130
+                finally:
+                    conn.close()
+                return 0
             if args.sync_catalog:
                 snapshot = sync.crawl(session, sync.CACHE, log=lambda s: print(s, flush=True))
                 sync.save(snapshot)
