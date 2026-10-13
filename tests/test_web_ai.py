@@ -266,3 +266,16 @@ def test_real_time_default_is_local(tmp_path, root):
     app = web.App(tmp_path / "б.sqlite", root, tmp_path / "t", PORT, token=TOKEN)
     assert app.today().tzinfo is not None
     assert abs(app.today() - datetime.now(UTC)) < timedelta(minutes=1)
+
+
+def test_no_open_batches_no_background_work(conn, app, root, clock):
+    """Без незібраних пакетів сторінки не запускають збору (і не займають замок ШІ)."""
+    made = []
+    app.ai_client = lambda: made.append(1)
+    new_card(conn, root)
+    clock.now += 10 * web.COLLECT_EVERY
+
+    get(app, "/review")
+    get(app, "/robot/panel?back=/review")
+
+    assert made == [] and app.collected_at is None
