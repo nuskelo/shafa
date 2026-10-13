@@ -145,7 +145,7 @@ def test_tabs_with_counts(conn, app, root, item_id):
     assert 'Схвалені <span class="count">1</span>' in page
     assert f'href="/item/{item_id}"' in page
     assert "Жовтих: 3" in page
-    assert "1380 грн · Чоловічий одяг / Взуття / Кеди" in page
+    assert "1380 грн · Чоловічий одяг / Взуття / Кросівки" in page
 
 
 def test_waiting_for_ai_counter(conn, app, root, item_id):
@@ -190,7 +190,7 @@ def test_unknown_pages(app):
 def test_save_edit(conn, app, item_id):
     response = post(app, f"/item/{item_id}", action="save", brand="ECCO", season="Зима")
     assert location(response) == f"/item/{item_id}?msg=saved"
-    assert edits(conn, item_id) == {"brand": "ECCO", "season": "Зима"}
+    assert edits(conn, item_id) == {"brand": "ECCO", "season": ["Зима"]}
     assert "змінено вручну" in html(get(app, f"/item/{item_id}?msg=saved"))
 
 
@@ -216,7 +216,7 @@ def test_approve_blocked_then_confirmed(conn, app, item_id):
 
 
 def test_approve_saves_changed_section_first(conn, app, item_id):
-    post(app, f"/item/{item_id}", action="approve", section="Жіночий одяг / Взуття / Кеди")
+    post(app, f"/item/{item_id}", action="approve", section="Жіночий одяг / Взуття / Кросівки")
     assert status(conn, item_id) == Status.APPROVED
 
 

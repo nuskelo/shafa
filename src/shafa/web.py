@@ -51,8 +51,13 @@ MESSAGES = {
     "restored": "Повернуто на перевірку",
     "section_yellow": "Схвалити не можна: розділ жовтий — змініть його або натисніть «Так, вірно»",
     "no_section": "Схвалити не можна: немає розділу",
+    "section_unknown": "Схвалити не можна: такого розділу немає на Шафі — оберіть зі списку",
+    "no_sizes": "Схвалити не можна: немає розміру",
+    "no_colors": "Схвалити не можна: немає кольору",
+    "no_gender": "Схвалити не можна: для малюків Шафа вимагає «Стать»",
     "bad": "Не збережено поля, позначені червоним",
     "stale": "Картку вже змінено — сторінку оновлено",
+    "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
     "recheck_new": "Папку перевірено: усе добре, Картка чекає на ШІ",
     "recheck_problem": "Папку перевірено: проблема лишилась",
 }
@@ -66,6 +71,7 @@ PROBLEM_HINTS = {
     "no_photos": "Додайте в папку фото .jpg.",
     "too_many_photos": "Залиште в папці не більше 10 фото.",
     "folder_missing": "Папку перейменовано або видалено.",
+    "robot_field_missing": "Шафа, мабуть, змінила форму. Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
     "ai_error": "ШІ не заповнило бланк. «Перевірити ще раз» поверне Картку в чергу на ШІ.",
 }
 
@@ -241,7 +247,7 @@ class App:
                 bad_input=review.BAD_INPUT,
                 message=MESSAGES.get(request.arg("msg")),
                 block=MESSAGES.get(card.approve_block() or ""),
-                sections=catalog.VERIFIED_SECTIONS + catalog.UNVERIFIED_SECTIONS,
+                sections=catalog.sections(),
                 hint=PROBLEM_HINTS.get(card.problem_code or ""),
                 deletion_date=review.deletion_date,
                 editable=card.status == Status.REVIEW,
@@ -270,9 +276,13 @@ class App:
                     return redirect(back + "?msg=saved")
             if action in review.ACTIONS:
                 message = review.act(conn, item_id, action)
-                if message in ("section_yellow", "no_section", "stale"):
+                if message in review.APPROVE_BLOCKS or message == "stale":
                     return redirect(f"{back}?msg={message}")
                 return redirect(f"/{card.status}?msg={message}")
+            if action == "recheck" and (card.problem_code or "").startswith("robot_"):
+                if review.robot_retry(conn, item_id):
+                    return redirect(f"/{Status.PROBLEM}?msg=robot_retry")
+                return redirect(f"{back}?msg=stale")
             if action == "recheck":
                 folders = list_folders(self.root, self.channel_id)
                 status = rescan_folder(conn, card.folder_name, folders)

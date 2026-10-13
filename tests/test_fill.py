@@ -149,7 +149,7 @@ def test_status_changes_only_from_new(conn, root, status):
 
 
 @pytest.mark.parametrize(
-    ("lining", "row"), [("Текстиль", (1, "немає в тексті")), ("Шкіра", (0, None))]
+    ("lining", "row"), [("Текстиль", (1, "немає в тексті: Текстиль")), ("Шкіра", (0, None))]
 )
 def test_lining_checked_against_post_text(conn, root, lining, row):
     item_id = add_item(conn, root)  # текст поста: «Шкіряні черевики Pavers…»

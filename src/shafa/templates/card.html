@@ -20,16 +20,17 @@
   <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" list="sections"{{ off }}>
   {% elif f.spec.widget == "sizes" %}
   <span class="pair">
-    <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" inputmode="decimal"{{ off }}>
-    <input name="{{ name }}" value="{{ f.inputs[1] }}" inputmode="decimal" aria-label="Другий розмір"{{ off }}>
+    <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" inputmode="decimal" list="sizes-list"{{ off }}>
+    <input name="{{ name }}" value="{{ f.inputs[1] }}" inputmode="decimal" list="sizes-list" aria-label="Другий розмір"{{ off }}>
   </span>
+  <datalist id="sizes-list">{% for size in f.options %}<option value="{{ size }}">{% endfor %}</datalist>
   {% elif f.spec.widget == "colors" %}
   <span class="pair">
     <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0]) }}</select>
     <select name="{{ name }}" aria-label="Другий колір"{{ off }}>{{ options(f.spec.options, f.inputs[1]) }}</select>
   </span>
-  {% elif f.spec.widget == "select" %}
-  <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0]) }}</select>
+  {% elif f.spec.widget == "choice" %}
+  <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.options, f.inputs[0]) }}</select>
   {% elif f.spec.widget == "condition" %}
   <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0], blank=False) }}</select>
   {% elif f.spec.widget == "yesno" %}
@@ -43,7 +44,7 @@
   {% else %}
   <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}"{{ off }}>
   {% endif %}
-  {% if f.spec.widget == "list" %}<small>через кому</small>{% endif %}
+  {% if f.spec.widget == "list" %}<small>через кому{% if f.options %}; варіанти Шафи: {{ f.options | join(", ") }}{% endif %}</small>{% endif %}
   {% if f.spec.widget == "numbers" %}<small>кілька — через «;»</small>{% endif %}
 {% endmacro %}
 

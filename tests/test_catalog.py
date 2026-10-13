@@ -3,90 +3,97 @@ import pytest
 from shafa import catalog
 from shafa.catalog import Kind
 
-
-def test_reference_lists_match_shafa_form():
-    assert len(catalog.COLORS) == 32
-    assert len(catalog.SHOE_MATERIALS) == 30
-    assert len(catalog.BAG_MATERIALS) == 6
-    assert len(catalog.WOMEN_SHOES) == 28
-    assert len(set(catalog.COLORS)) == 32
+WOMEN_SNEAKERS = "Жіночий одяг / Взуття / Кросівки"
+WOMEN_BOOTS = "Жіночий одяг / Взуття / Черевики"
+MEN_SNEAKERS = "Чоловічий одяг / Взуття / Кросівки"
+GIRLS = "Дитячий одяг / Для дівчаток / Взуття / Кросівки"
+BOYS_BOOTS = "Дитячий одяг / Для хлопчиків / Взуття / Бутси"
+BABIES = "Дитячий одяг / Для малюків / Взуття / Кросівки"
+BACKPACKS = "Аксесуари / Сумки та рюкзаки / Рюкзаки"
 
 
 @pytest.mark.parametrize(
     ("path", "expected"),
     [
-        ("Жіночий одяг / Взуття / Кросівки", ("Жіночий одяг / Взуття / Кросівки", True)),
-        ("жіночий одяг/взуття/ кросівки", ("Жіночий одяг / Взуття / Кросівки", True)),
-        ("Жіночий одяг / Взуття / В’єтнамки", ("Жіночий одяг / Взуття / В'єтнамки", True)),
-        (
-            "Дитячий одяг / Для дівчаток / Взуття / Черевики",
-            ("Дитячий одяг / Для дівчаток / Взуття / Черевики", True),
-        ),
-        (
-            "Аксесуари / Сумки та рюкзаки / Рюкзаки",
-            ("Аксесуари / Сумки та рюкзаки / Рюкзаки", True),
-        ),
-        ("Чоловічий одяг / Взуття / Черевики", ("Чоловічий одяг / Взуття / Черевики", False)),
-        (
-            "Дитячий одяг / Для хлопчиків / Взуття / Кросівки",
-            ("Дитячий одяг / Для хлопчиків / Взуття / Кросівки", False),
-        ),
-        ("Аксесуари / Сумки та рюкзаки / Сумки", ("Аксесуари / Сумки та рюкзаки / Сумки", False)),
-        ("Аксесуари / Ремені та пояси / Ремені", ("Аксесуари / Ремені та пояси / Ремені", False)),
-        ("Жіночий одяг / Взуття / Ласти", (None, False)),
-        ("Чоловічий одяг / Взуття / Ботильйони", (None, False)),
-        ("Взуття", (None, False)),
+        (WOMEN_SNEAKERS, WOMEN_SNEAKERS),
+        ("жіночий одяг/взуття/ кросівки", WOMEN_SNEAKERS),
+        (BOYS_BOOTS, BOYS_BOOTS),
+        ("Дитячий одяг / Для дівчаток / Взуття / Бутси", None),  # бутси — лише в хлопчиків
+        ("Жіночий одяг / Взуття / Ласти", None),
+        ("Взуття", None),
     ],
 )
-def test_find_section(path, expected):
+def test_find_section_only_from_snapshot(path, expected):
     assert catalog.find_section(path) == expected
 
 
 @pytest.mark.parametrize(
     ("path", "kind"),
     [
-        ("Жіночий одяг / Взуття / Кросівки", Kind.WOMEN),
-        ("Чоловічий одяг / Взуття / Кеди", Kind.MEN),
-        ("Дитячий одяг / Для дівчаток / Взуття / Кеди", Kind.KIDS),
-        ("Дитячий одяг / Для хлопчиків / Взуття / Кеди", Kind.KIDS),
-        ("Дитячий одяг / Для малюків / Взуття / Кеди", Kind.BABIES),
-        ("Аксесуари / Гаманці та портмоне / Гаманці", Kind.ACCESSORY),
-        ("Жіночий одяг / Сукні", None),
-        ("Аксесуарии / Щось", None),
+        (WOMEN_SNEAKERS, Kind.WOMEN),
+        (MEN_SNEAKERS, Kind.MEN),
+        (GIRLS, Kind.KIDS),
+        (BOYS_BOOTS, Kind.KIDS),
+        (BABIES, Kind.BABIES),
+        (BACKPACKS, Kind.ACCESSORY),
+        ("Для дому / Посуд / Чашки", None),
     ],
 )
 def test_section_kind(path, kind):
     assert catalog.section_kind(path) is kind
 
 
-def test_canonical_ignores_case_and_apostrophe():
+def test_sizes_are_explicit_lists():
+    men = catalog.sizes(MEN_SNEAKERS)
+    assert men[:4] == ["36", "37", "38", "38,5"]  # 36,5 і 37,5 у чоловічих немає
+    assert "48,5" not in men and men[-1] == "50"
+    kids = catalog.sizes(GIRLS)
+    assert "40,5" not in kids and kids[-2:] == ["40", "41"]
+    assert catalog.sizes(WOMEN_SNEAKERS)[0] == "34" and "46" in catalog.sizes(WOMEN_SNEAKERS)
+    assert "Другой" not in men and "One size" not in men
+    assert catalog.sizes(BACKPACKS) == []
+
+
+def test_babies_use_ukrainian_sizes():
+    assert catalog.size_system(BABIES) == "Український"
+    assert catalog.sizes(BABIES) == [
+        "15", "16", "17", "17,5", "18", "18,5", "19", "19,5", "20", "20,5", "21", "21,5", "22",
+    ]  # fmt: skip
+    assert catalog.size_system(WOMEN_SNEAKERS) == "Європейський"
+    assert catalog.size_system(BACKPACKS) is None
+    assert catalog.shafa_size("38,5") == "38.5"
+
+
+def test_characteristics_depend_on_type():
+    assert catalog.characteristic(WOMEN_SNEAKERS, "material_upper")["title"] == "Матеріал"
+    assert catalog.characteristic(WOMEN_BOOTS, "material_upper")["title"] == "Матеріал верху"
+    assert catalog.characteristic(WOMEN_SNEAKERS, "material_lining") is None
+    assert "Хутро" in catalog.characteristic(WOMEN_BOOTS, "material_lining")["choices"]
+    assert catalog.characteristic(WOMEN_BOOTS, "type")["choices"] == ["Берці", "Челсі"]
+    assert catalog.characteristic(GIRLS, "style")["title"] == "Стиль взуття"
+    assert catalog.characteristic(WOMEN_SNEAKERS, "season")["max"] == 4
+    gender = catalog.characteristic(BABIES, "gender")
+    assert gender["required"] and gender["choices"] == ["Для дівчаток", "Для хлопчиків", "Унісекс"]
+    assert catalog.characteristic(GIRLS, "teen")["choices"] == ["Для дітей", "Для підлітків"]
+    assert catalog.characteristic("Свій / Шлях", "season") is None
+
+
+def test_brands_per_section():
+    assert "Skechers" in catalog.brands(WOMEN_SNEAKERS)
+    assert catalog.brands("Свій / Шлях") == []
+
+
+def test_canonical():
     assert catalog.canonical("чорний", catalog.COLORS) == "Чорний"
     assert catalog.canonical(" м’ятний ", catalog.COLORS) == "М'ятний"
     assert catalog.canonical("Ультрамарин", catalog.COLORS) is None
 
 
-@pytest.mark.parametrize(
-    ("size", "kind", "ok"),
-    [
-        (38.0, Kind.WOMEN, True),
-        (38.5, Kind.WOMEN, True),
-        (33.5, Kind.WOMEN, False),
-        (46.5, Kind.WOMEN, False),
-        (38.3, Kind.WOMEN, False),
-        (22.0, Kind.KIDS, True),
-        (41.0, Kind.BABIES, True),
-        (21.5, Kind.KIDS, False),
-        (47.0, Kind.MEN, True),
-        (44.2, Kind.MEN, False),
-    ],
-)
-def test_size_in_range(size, kind, ok):
-    assert catalog.size_in_range(size, kind) is ok
-
-
-def test_render_lists_everything():
+def test_render_for_prompt():
     text = catalog.render()
-    for value in (
-        catalog.COLORS + catalog.SHOE_MATERIALS + catalog.SEASONS + catalog.GENDERS + ("Рюкзаки",)
-    ):
-        assert value in text
+    assert "Жіночий одяг / Взуття / … : Кросівки, Черевики" in text
+    assert "- Дитячий одяг / Для малюків / Взуття: система «Український»: 15, 16, 17" in text
+    assert "- Аксесуари / Сумки та рюкзаки: розміру немає" in text
+    assert "type («Тип», до 1): Берці, Челсі" in text
+    assert "gender («Стать» *, до 1): Для дівчаток, Для хлопчиків, Унісекс" in text
+    assert all(color in text for color in catalog.COLORS)

@@ -41,3 +41,14 @@ def conn(tmp_path: Path):
     connection = db.connect(tmp_path / "база.sqlite")
     yield connection
     connection.close()
+
+
+@pytest.fixture(autouse=True)
+def shafa_snapshot(monkeypatch):
+    """Тести бачать маленький знімок довідників Шафи з `fixtures/`, а не справжній."""
+    from shafa import catalog
+
+    monkeypatch.setattr(catalog, "SNAPSHOT", FIXTURES / "shafa-catalog.json")
+    catalog.snapshot.cache_clear()
+    yield
+    catalog.snapshot.cache_clear()
