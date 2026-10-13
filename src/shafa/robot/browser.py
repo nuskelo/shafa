@@ -2,6 +2,10 @@
 
 Кожен запит проходить через `guard.request_verdict`, кожен клік — через `guard.click_allowed`,
 кожна клавіша — через `guard.key_allowed`. Пароль робот не бачить: вхід робить Власник руками.
+
+Публікація (лише `Session(publish=True)`): `arm_publish` видає на Картку в `publishing` рівно
+один квиток на клік «Додати річ» і один на запит `WEB_CreateProduct`; повторно на ту саму Картку —
+ніколи. `disarm` гасить невикористані квитки (запізнілий запит після тайм-ауту буде заблоковано).
 """
 
 import json
@@ -12,11 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from shafa import config
+from shafa.db import Status
 from shafa.robot import guard
 
 NEW_URL = "https://shafa.ua/uk/new"
 LOGIN_PATH = "/login"
-PUBLISH = re.compile(r"\b(CreateProduct|EditProduct|\w*Publish\w*)\b")
+# Сторінка шле операції з префіксом `WEB_` (`WEB_CreateProduct`), тож без `\b` на початку.
+PUBLISH = re.compile(r"CreateProduct|EditProduct|Publish")
 
 
 def profile_dir() -> Path:
@@ -59,16 +65,54 @@ def launch(playwright: Any) -> Any:
 
 
 class Session:
-    """Відкритий профіль робота із захистом. `allow_upload` — лише для `--dry-fill` (D3)."""
+    """Відкритий профіль робота із захистом.
 
-    def __init__(self, playwright: Any, allow_upload: bool = False) -> None:
-        self.allow_upload = allow_upload
-        self.blocked: list[tuple[str, str]] = []
-        self.uploads = 0
+    `allow_upload` — завантаження фото (`--dry-fill`, `--publish`); `publish` — режим публікації.
+    """
+
+    def __init__(self, playwright: Any, allow_upload: bool = False, publish: bool = False) -> None:
+        self._setup(allow_upload or publish, publish)
         self.context = launch(playwright)
         self.context.route("**/*", self._route)
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         self.page.on("dialog", self._dialog)
+
+    def _setup(self, allow_upload: bool, publish: bool) -> None:
+        self.allow_upload = allow_upload
+        self.publish_mode = publish
+        self.blocked: list[tuple[str, str]] = []
+        self.uploads = 0
+        self.creates = 0  # скільки запитів публікації пропущено за весь запуск
+        self.armed: set[int] = set()  # Картки, на які вже видано квиток
+        self._click_ticket: int | None = None
+        self._create_ticket: int | None = None
+
+    def arm_publish(self, item_id: int, status: str) -> None:
+        """Квиток на одну публікацію Картки. Лише режим публікації, лише `publishing`, раз."""
+        if not self.publish_mode:
+            raise guard.Forbidden("Публікація поза режимом --publish")
+        if status != Status.PUBLISHING:
+            raise guard.Forbidden(f"Публікація Картки не в стані publishing ({status})")
+        if item_id in self.armed:
+            raise guard.Forbidden(f"Повторна публікація Картки {item_id}")
+        self.armed.add(item_id)
+        self._click_ticket = self._create_ticket = item_id
+
+    def disarm(self) -> None:
+        self._click_ticket = self._create_ticket = None
+
+    def click_publish(self, locator: Any) -> None:
+        """Клік «Додати річ» за квитком. Квиток згорає до кліку: другого кліку не буде."""
+        if self._click_ticket is None:
+            raise guard.Forbidden("Клік «Додати річ» без квитка")
+        info = locator.evaluate(
+            "e => ({text: [e.innerText, e.value, e.getAttribute('aria-label')].join(' '),"
+            " type: e.getAttribute('type')})"
+        )
+        if not guard.publish_click_allowed(info["text"], info["type"]):
+            raise guard.Forbidden(f"Не кнопка публікації: {info['text'].strip()[:60]!r}")
+        self._click_ticket = None
+        locator.click()
 
     @staticmethod
     def _dialog(dialog: Any) -> None:
@@ -85,9 +129,13 @@ class Session:
             request.headers.get("content-type", ""),
             request.post_data_buffer,
             self.allow_upload,
+            allow_create=self._create_ticket is not None,
         )
         if allowed:
             self.uploads += reason == "завантаження фото"
+            if reason == guard.PUBLISHED:
+                self._create_ticket = None  # один запит на квиток
+                self.creates += 1
             route.continue_()
         else:
             self.blocked.append((request.url.split("?")[0], reason))
