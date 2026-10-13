@@ -579,3 +579,20 @@ def test_bot_post_becomes_card_and_survives_new_export(conn, bot, tg, upd, clock
     post = conn.execute("SELECT source, text FROM posts WHERE post_id = 1402").fetchone()
     assert tuple(post) == ("bot", core.caption_of(["Кеди Ecco 38. 900грн"]))  # Експорт не затер
     assert result.folders == 3
+
+
+def test_button_in_her_chat_pressed_by_someone_else(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock)
+    query = {
+        "id": "cb", "from": {"id": STRANGER}, "data": "pub:1",
+        "message": {"message_id": last_preview_id(tg), "chat": chat(SELLER)},
+    }  # fmt: skip
+    bot.handle(upd(callback_query=query))
+    assert tg.channel_posts == [] and state(conn) == "preview"
+
+
+def test_largest_photo_size_taken_whatever_the_order(conn, bot, tg, upd, clock):
+    sizes = [{"file_id": "big", "width": 1280, "height": 960},
+             {"file_id": "small", "width": 90, "height": 67}]  # fmt: skip
+    bot.handle(upd(message=message(11, photo=sizes, caption=TEXT)))
+    assert conn.execute("SELECT file_id FROM bot_draft_parts").fetchone()[0] == "big"
