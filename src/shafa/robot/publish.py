@@ -11,6 +11,7 @@
 """
 
 import random
+import re
 import shutil
 import sqlite3
 import time
@@ -19,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from shafa import catalog, config, review
 from shafa.db import Status, now
@@ -467,3 +469,86 @@ class Run:
         self._problem(report, card, pub, "publish_uncertain",
                       f"{UNCERTAIN} ({result.failure or 'немає id у відповіді'})")  # fmt: skip
         return Stop("error", "немає певної відповіді Шафи")
+
+
+# --- Рішення людини щодо «липких» проблем публікації (UI-002) ---
+
+SHAFA_HOSTS = {"shafa.ua", "www.shafa.ua"}
+_ITEM_ID = re.compile(r"(\d{4,12})(?:-[\w-]*)?")
+UNSURE = ("publish_uncertain", "publish_error")
+
+
+def parse_shafa_link(text: str) -> tuple[int, str] | None:
+    """Посилання на оголошення Шафи або голий ID → (id, канонічне посилання); інше — None (D6)."""
+    text = text.strip()
+    if text.isdigit() and 4 <= len(text) <= 12:
+        return int(text), ITEM_URL.format(id=int(text))
+    parts = urlsplit(text if "://" in text else "https://" + text)
+    if parts.scheme not in ("http", "https") or (parts.hostname or "") not in SHAFA_HOSTS:
+        return None
+    if parts.port or parts.username or parts.password:
+        return None
+    segments = [s for s in parts.path.split("/") if s]
+    match = _ITEM_ID.fullmatch(segments[-1]) if segments else None
+    if not match:
+        return None
+    return int(match[1]), "https://shafa.ua/" + "/".join(segments)
+
+
+def _decide(
+    conn: sqlite3.Connection, item_id: int, codes: tuple[str, ...], sets: str, values: tuple
+) -> bool:
+    with conn:
+        cursor = conn.execute(
+            f"UPDATE items SET {sets}, updated_at = ? WHERE id = ? AND status = ? "
+            f"AND problem_code IN ({', '.join('?' * len(codes))})",
+            (*values, now(), item_id, Status.PROBLEM, *codes),
+        )
+    return cursor.rowcount == 1
+
+
+def on_shafa(conn: sqlite3.Connection, root: Path, item_id: int, link: str) -> str:
+    """«На Шафі є → в Опубліковані». Повертає код повідомлення екрана."""
+    parsed = parse_shafa_link(link)
+    if parsed is None:
+        return "bad_link"
+    shafa_id, url = parsed
+    done = _decide(
+        conn, item_id, UNSURE,
+        "status = ?, shafa_id = ?, shafa_url = ?, published_at = ?, problem_code = NULL, "
+        "problem_text = NULL",
+        (Status.PUBLISHED, shafa_id, url, now()),
+    )  # fmt: skip
+    if not done:
+        return "stale"
+    folder = conn.execute("SELECT folder_name FROM items WHERE id = ?", (item_id,)).fetchone()[0]
+    move_published(root, folder)
+    return "on_shafa"
+
+
+def not_on_shafa(conn: sqlite3.Connection, item_id: int) -> str:
+    """«На Шафі немає → у Схвалені»: робот спробує ще раз (людина перевірила Шафу)."""
+    done = _decide(
+        conn, item_id, UNSURE, "status = ?, problem_code = NULL, problem_text = NULL",
+        (Status.APPROVED,),
+    )  # fmt: skip
+    return "not_on_shafa" if done else "stale"
+
+
+def other_item(conn: sqlite3.Connection, item_id: int) -> str:
+    """«Це інший товар → у Схвалені»: на схожі оголошення ця Картка більше не перевіряється."""
+    done = _decide(
+        conn, item_id, ("possible_duplicate",),
+        "status = ?, problem_code = NULL, problem_text = NULL, duplicate_ok_at = ?",
+        (Status.APPROVED, now()),
+    )  # fmt: skip
+    return "other_item" if done else "stale"
+
+
+def to_archive(conn: sqlite3.Connection, item_id: int) -> str:
+    """«Справді дубль → в Архів» (і для «пост уже опубліковано»): прибирається через 7 днів."""
+    done = _decide(
+        conn, item_id, ("possible_duplicate", "already_published"),
+        "status = ?, archived_at = ?", (Status.ARCHIVED, now()),
+    )  # fmt: skip
+    return "duplicate_archived" if done else "stale"
