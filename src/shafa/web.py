@@ -28,7 +28,7 @@ from PIL import UnidentifiedImageError
 
 from shafa import ai, batch, catalog, config, db, fill, photos, review
 from shafa.db import Status
-from shafa.folders import list_folders
+from shafa.folders import PUBLISHED_DIR, list_folders
 from shafa.robot import control, lock, publish
 from shafa.scan import STICKY, rescan_folder, scan
 
@@ -664,7 +664,7 @@ class App:
         try:
             row = conn.execute(
                 """
-                SELECT folder_name, file_name FROM photos JOIN items ON items.id = item_id
+                SELECT folder_name, file_name, status FROM photos JOIN items ON items.id = item_id
                 WHERE item_id = ? AND position = ? AND purged_at IS NULL
                 """,
                 (item_id, position),
@@ -674,8 +674,11 @@ class App:
         if row is None:
             return text(404, "Фото не знайдено")
         root = self.root.resolve()
-        path = (root / row["folder_name"] / row["file_name"]).resolve()
-        if not path.is_relative_to(root) or not path.is_file():
+        folders = [root / row["folder_name"]]
+        if row["status"] == Status.PUBLISHED:  # робот переносить папку в «Опубліковано» (TD-016)
+            folders.insert(0, root / PUBLISHED_DIR / row["folder_name"])
+        path = next((p for f in folders if (p := (f / row["file_name"]).resolve()).is_file()), None)
+        if path is None or not path.is_relative_to(root):
             return text(404, "Фото не знайдено")
         try:
             if kind == "thumb":
