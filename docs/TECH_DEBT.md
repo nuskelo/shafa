@@ -3,9 +3,10 @@
 Формат рядка: `TD-NNN · що · де · умова закриття`
 
 - TD-002 · немає захисту `main` і обов'язкових перевірок на GitHub (Free, приватний репозиторій → 403); правило: мерж лише при зелених `quality` і `windows-tests` · GitHub, налаштування репозиторію · GitHub Pro або публічний репозиторій, після чого увімкнути захист `main`
-- TD-003 · `python -m shafa` працює лише з `PYTHONPATH=src` (пакет не встановлюється в `.venv`) · Makefile, запуск на Mac/Windows · тікет про запуск програми на ноутбуці Продавчині (ярлик/скрипт або `pip install -e .`)
 - TD-004 · `scan` не оновлює фото й пост у Картках `review`/`approved`/`published` (змінена папка такої Картки лишається непоміченою) · `src/shafa/scan.py`, `SCANNABLE` · тікет екрана перевірки: правило для змін папки після перевірки
+- TD-005 · немає lock-файлу: закріплені лише прямі залежності (`anthropic`, `Pillow`), транзитивні (`httpx2`, `pydantic`, `anyio`, `jiter`…) ставляться найновіші · `pyproject.toml`, `make setup`, CI · до пілоту на Windows: lock-файл або файл обмежень з `==`
 
 ## Закриті
 
+- ~~TD-003~~ · `python -m shafa` працює лише з `PYTHONPATH=src` (пакет не встановлюється в `.venv`) · Makefile, запуск на Mac/Windows · тікет про запуск програми на ноутбуці Продавчині (ярлик/скрипт або `pip install -e .`) · **закрито 13.10.2026** (CORE-003): `[build-system]`, `make setup` і CI ставлять `pip install -e . --group dev`
 - ~~TD-001~~ · локально тести йдуть на Python 3.14, продакшн буде 3.12; ruff `target-version = "py312"` ловить лише синтаксис, не API · Mac Власника, `make ci` · CI або локальний прогін на Python 3.12 (INF-002 або Windows-тікет) · **закрито 12.10.2026** (INF-002): CI на Python 3.12 (Ubuntu) і на Windows, перший зелений прогін https://github.com/nuskelo/shafa/actions/runs/38279866416

@@ -83,9 +83,9 @@ DRIFT зупиняє, якщо міняє те, що будуємо, або ви
 | `scan.py` | папка ↔ пост → Картка `new` або `problem` з кодом і текстом; повтор не дублює; чіпає лише `new`/`problem` |
 | `rules.py` | поля коду за `docs/rules.md`: ціна (остання) → ціна Шафи, стан, чистий опис, довжина устілки, мембрана; `many_items` |
 
-Зіставлення: `PYTHONPATH=src .venv/bin/python -m shafa scan --export <result.json> --root <Головна папка> --db <файл.sqlite>`.
+Зіставлення: `.venv/bin/python -m shafa scan --export <result.json> --root <Головна папка> --db <файл.sqlite>`.
 `--root` за замовчуванням із `SHAFA_ROOT_DIR`, id каналу — з `TELEGRAM_CHANNEL_ID` (без нього розпізнаються лише назви-номери).
-Поля одного поста: `PYTHONPATH=src .venv/bin/python -m shafa rules --export <result.json> --post <номер>`.
+Поля одного поста: `.venv/bin/python -m shafa rules --export <result.json> --post <номер>`.
 Справжні дані й базу — лише поза репозиторієм.
 
 ## Перевірки

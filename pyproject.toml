@@ -1,10 +1,17 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "shafa"
 version = "0.1.0"
 description = "Шафа-помічник: пости Telegram-каналу → оголошення на Shafa.ua"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "anthropic==1.9.0",
+    "Pillow==12.3.0",
+]
 
 [dependency-groups]
 dev = [
@@ -22,6 +29,8 @@ include = ["*.py", "*.pyi", "**/pyproject.toml"]
 [tool.ruff.lint]
 extend-select = ["I"]
 
+[tool.setuptools.package-data]
+shafa = ["prompts/*.md"]
+
 [tool.pytest.ini_options]
-pythonpath = ["src"]
 testpaths = ["tests"]
