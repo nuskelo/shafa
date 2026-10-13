@@ -258,3 +258,23 @@ def test_ui_needs_existing_db_and_root(tmp_path, root, fake_server, capsys):
         main(["ui", "--db", str(tmp_path / "нема.sqlite")])
     assert "Головна папка" in capsys.readouterr().err
     assert fake_server == ([], [])
+
+
+# --- robot ---
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--dry-fill", "--post", "1342"], "Базу не знайдено"),
+        (["--dry-fill", "--db", "{db}"], "--post від 1 до 3"),
+        (["--dry-fill", "--db", "{db}"] + ["--post", "1"] * 4, "--post від 1 до 3"),
+        (["--login", "--sync-catalog"], "not allowed with argument"),
+        ([], "one of the arguments"),
+    ],
+)
+def test_robot_arguments_checked_before_browser(db_path, root, args, message, capsys):
+    args = [a.replace("{db}", str(db_path)) for a in args]
+    with pytest.raises(SystemExit):
+        main(["robot", "--root", str(root), *args])
+    assert message in capsys.readouterr().err

@@ -25,8 +25,8 @@ OUTPUT_MICRO_USD = 10
 # число — у `usage` відповіді.
 CHARS_PER_TOKEN = 2.5
 OUTPUT_TOKENS_ESTIMATE = 1000
-# Орієнтир; ліміт довжини назви у формі Шафи не звірено (TD).
-TITLE_MAX = 100
+# Ліміт поля «Назва» у формі Шафи (`maxlength`, звірено 13.10.2026, ROBOT-001).
+TITLE_MAX = 150
 
 PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "blank.md"
 CATALOG_MARK = "{{ДОВІДНИКИ}}"
@@ -61,8 +61,8 @@ SCHEMA: dict[str, Any] = {
         "colors": {"type": "array", "items": {"type": "string", "enum": list(catalog.COLORS)}},
         "brand": _NULLABLE,
         "material_upper": _STRINGS,
-        "material_lining": _NULLABLE,
-        "season": _NULLABLE,
+        "material_lining": _STRINGS,
+        "season": _STRINGS,
         "type": _NULLABLE,
         "style": _NULLABLE,
         "teen": {"anyOf": [{"type": "boolean"}, {"type": "null"}]},
@@ -241,14 +241,11 @@ def check_section(value: Any) -> tuple[Field, Kind | None]:
     path = _text(value)
     if path is None:
         return Field("section", None, True, "немає розділу"), None
-    found, verified = catalog.find_section(path)
+    found = catalog.find_section(path)
     if found is None:
         path = catalog.normalize_section(path)
         return Field("section", path, True, "розділу немає в довіднику Шафи"), None
-    kind = catalog.section_kind(found)
-    if not verified:
-        return Field("section", found, True, "розділ не звірено з довідником"), kind
-    return Field("section", found), kind
+    return Field("section", found), catalog.section_kind(found)
 
 
 def _parse_size(text: str) -> float | None:
@@ -273,13 +270,15 @@ def expected_kinds(size: float) -> set[Kind]:
     return {Kind.MEN}
 
 
-def check_sizes(value: Any, kind: Kind | None) -> tuple[Field, float | None]:
+def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, float | None]:
+    """Розміри за списком Шафи для розділу (D6) і правилом ярлика (rules.md §7, D4)."""
     sizes = _strings(value)
     if sizes is None:
         return Field("sizes", [], True, "немає у відповіді ШІ"), None
-    if kind is Kind.ACCESSORY:
+    allowed = catalog.sizes(path) if path else None
+    if path and not allowed:
         if sizes:
-            return Field("sizes", [], True, "у аксесуарів розміру немає"), None
+            return Field("sizes", [], True, "у цього розділу розміру немає"), None
         return Field("sizes", []), None
     if not sizes:
         return Field("sizes", [], True, "немає розміру"), None
@@ -289,8 +288,10 @@ def check_sizes(value: Any, kind: Kind | None) -> tuple[Field, float | None]:
     shown = [_number(n) for n in numbers]
     if len(sizes) > 2:
         return Field("sizes", shown, True, "більше двох розмірів"), numbers[0]
-    if kind is not None and not all(catalog.size_in_range(n, kind) for n in numbers):
-        return Field("sizes", shown, True, "розміру немає у списку розділу"), numbers[0]
+    if allowed and not all(s in allowed for s in shown):
+        return Field("sizes", shown, True, "розміру немає у списку Шафи для розділу"), numbers[0]
+    if len(shown) == 2 and rules.condition(post_text) == rules.NEW:
+        return Field("sizes", shown, True, "нове — лише розмір з ярлика"), numbers[0]
     return Field("sizes", shown), numbers[0]
 
 
@@ -317,13 +318,6 @@ def in_text(word: str, text: str) -> bool:
     return re.search(r"(?<!\w)" + re.escape(stem), text.casefold()) is not None
 
 
-def check_lining(value: Any, post_text: str) -> Field:
-    lining = _text(value)
-    if lining is not None and not in_text(lining, post_text):
-        return Field("material_lining", lining, True, "немає в тексті")
-    return Field("material_lining", lining)
-
-
 def check_colors(value: Any) -> Field:
     colors = _strings(value)
     if not colors:
@@ -338,28 +332,54 @@ def check_colors(value: Any) -> Field:
     return Field("colors", known)
 
 
-def check_materials(value: Any, kind: Kind | None) -> Field:
-    materials = _strings(value)
-    if materials is None:
-        return Field("material_upper", [], True, "немає у відповіді ШІ")
-    options = catalog.BAG_MATERIALS if kind is Kind.ACCESSORY else catalog.SHOE_MATERIALS
-    found = [catalog.canonical(m, options) for m in materials]
-    unknown = [m for m, f in zip(materials, found, strict=True) if f is None]
-    known = [f for f in found if f]
+def _as_list(value: Any) -> list[str] | None:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    return _strings(value)
+
+
+def check_values(name: str, value: Any, path: str | None, single: bool = False) -> Field:
+    """Значення поля — лише з варіантів цього типу розділу у знімку Шафи (D7)."""
+    values = _as_list(value)
+    if values is None:
+        return Field(name, None if single else [], True, "немає у відповіді ШІ")
+
+    def shown(items: list[str]) -> Any:
+        return (items[0] if items else None) if single else items
+
+    if path is None:  # розділ невідомий — він сам жовтий
+        return Field(name, shown(values))
+    spec = catalog.characteristic(path, name)
+    if spec is None:
+        if values:
+            return Field(name, shown(values), True, "у цьому розділі Шафи такого поля немає")
+        return Field(name, shown([]))
+    found = [catalog.canonical(v, spec["choices"]) for v in values]
+    unknown = [v for v, f in zip(values, found, strict=True) if f is None]
     if unknown:
-        reason = "матеріалу немає в довіднику: " + ", ".join(unknown)
-        return Field("material_upper", known, True, reason)
-    return Field("material_upper", known)
+        return Field(name, shown(values), True, "немає у списку Шафи: " + ", ".join(unknown))
+    found = list(dict.fromkeys(found))
+    if len(found) > spec["max"] or (single and len(found) > 1):
+        return Field(name, shown(found), True, f"більше {1 if single else spec['max']}")
+    if not found and spec["required"]:
+        return Field(name, shown(found), True, "обов'язкове поле Шафи")
+    return Field(name, shown(found))
 
 
-def check_choice(name: str, value: Any, options: tuple[str, ...]) -> Field:
-    text = _text(value)
-    if text is None:
-        return Field(name, None)
-    found = catalog.canonical(text, options)
-    if found is None:
-        return Field(name, text, True, "значення немає в довіднику")
-    return Field(name, found)
+def check_lining(value: Any, path: str | None, post_text: str) -> Field:
+    field = check_values("material_lining", value, path)
+    absent = [v for v in field.value if not in_text(v, post_text)]
+    if absent and not field.yellow:
+        return Field(field.name, field.value, True, "немає в тексті: " + ", ".join(absent))
+    return field
+
+
+def check_teen(value: Any, path: str | None) -> Field:
+    if catalog.characteristic(path, "teen") is None or not isinstance(value, bool):
+        return Field("teen", None)
+    return Field("teen", value)
 
 
 def check_keywords(value: Any) -> Field:
@@ -402,26 +422,22 @@ def _with_doubts(fields: list[Field], doubts: Any) -> list[Field]:
 def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str) -> list[Field]:
     """Відповідь ШІ → поля бланка в порядку FIELDS, з жовтими позначками й причинами."""
     section, kind = check_section(answer.get("section"))
-    sizes, first_size = check_sizes(answer.get("sizes"), kind)
+    path = catalog.find_section(section.value) if section.value else None  # None — розділу немає
+    sizes, first_size = check_sizes(answer.get("sizes"), path, post_text)
     section = check_size_hint(section, kind, first_size)
-    teen = answer.get("teen")
     fields = [
         check_title(answer.get("title")),
         section,
         sizes,
         check_colors(answer.get("colors")),
         Field("brand", _text(answer.get("brand"))),
-        check_materials(answer.get("material_upper"), kind),
-        check_lining(answer.get("material_lining"), post_text),
-        check_choice("season", answer.get("season"), catalog.SEASONS),
-        Field("type", _text(answer.get("type"))),
-        Field("style", _text(answer.get("style"))),
-        Field("teen", teen if kind is Kind.KIDS and isinstance(teen, bool) else None),
-        (
-            check_choice("gender", answer.get("gender"), catalog.GENDERS)
-            if kind is Kind.ACCESSORY
-            else Field("gender", None)
-        ),
+        check_values("material_upper", answer.get("material_upper"), path),
+        check_lining(answer.get("material_lining"), path, post_text),
+        check_values("season", answer.get("season"), path),
+        check_values("type", answer.get("type"), path, single=True),
+        check_values("style", answer.get("style"), path, single=True),
+        check_teen(answer.get("teen"), path),
+        check_values("gender", answer.get("gender"), path, single=True),
         check_keywords(answer.get("keywords")),
         check_photo_order(answer.get("photo_order"), photo_names),
     ]

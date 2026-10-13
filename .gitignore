@@ -7,6 +7,10 @@ __pycache__/
 *.sqlite
 *.db
 data/
+# Знімок довідників Шафи — публічна таксономія сайту, не дані Продавчині (ROBOT-001).
+!src/shafa/data/
+src/shafa/data/*
+!src/shafa/data/shafa-catalog.json
 result.json
 *.jpg
 *.jpeg

@@ -22,8 +22,8 @@ GOOD = {
     "colors": ["Чорний"],
     "brand": "Pavers",
     "material_upper": ["Шкіра"],
-    "material_lining": None,
-    "season": "Демісезон",
+    "material_lining": [],
+    "season": ["Демісезон"],
     "type": None,
     "style": None,
     "teen": None,
@@ -107,7 +107,8 @@ def test_system_prompt_has_catalog():
     prompt = ai.system_prompt()
     assert ai.CATALOG_MARK not in prompt
     assert "Різнокольоровий" in prompt
-    assert "Жіночий одяг / Взуття / … : Черевики" in prompt
+    assert "Жіночий одяг / Взуття / … : Кросівки, Черевики" in prompt
+    assert "type («Тип», до 1): Берці, Челсі" in prompt
 
 
 def _walk(node):
@@ -230,12 +231,11 @@ def test_unknown_section_is_yellow():
     )
 
 
-def test_unverified_section_is_yellow():
-    field = check(section="чоловічий одяг/взуття/черевики", sizes=["44"])["section"]
-    assert (field.value, field.yellow, field.reason) == (
-        "Чоловічий одяг / Взуття / Черевики",
-        True,
-        "розділ не звірено з довідником",
+def test_section_from_snapshot_is_not_yellow():
+    field = check(section="чоловічий одяг/взуття/кросівки", sizes=["44"], material_upper=[])
+    assert (field["section"].value, field["section"].yellow) == (
+        "Чоловічий одяг / Взуття / Кросівки",
+        False,
     )
 
 
@@ -252,7 +252,9 @@ def test_size_41_fits_women_and_men():
 
 
 def test_kids_section_with_kids_size():
-    fields = check(section="Дитячий одяг / Для дівчаток / Взуття / Кеди", sizes=["31"], teen=False)
+    fields = check(
+        section="Дитячий одяг / Для дівчаток / Взуття / Кросівки", sizes=["31"], teen=False
+    )
     assert not fields["section"].yellow
     assert fields["teen"].value is False
 
@@ -264,7 +266,9 @@ def test_kids_section_with_kids_size():
         (["38", "38,5", "39"], ["38", "38,5", "39"], "більше двох розмірів"),
         (["38.5"], ["38,5"], None),
         (["тридцять"], ["тридцять"], "розмір не число"),
-        (["38,3"], ["38,3"], "розміру немає у списку розділу"),
+        (["38,3"], ["38,3"], "розміру немає у списку Шафи для розділу"),
+        (["46,5"], ["46,5"], "розміру немає у списку Шафи для розділу"),
+        (["41", "42"], ["41", "42"], None),  # вживане: ярлик і на який іде
         ("38", [], "немає у відповіді ШІ"),
     ],
 )
@@ -282,15 +286,44 @@ def test_accessory_fields():
         material_upper=["Шкіра", "Замша"],
     )
     assert not fields["section"].yellow
-    assert (fields["sizes"].value, fields["sizes"].reason) == ([], "у аксесуарів розміру немає")
+    assert (fields["sizes"].value, fields["sizes"].reason) == ([], "у цього розділу розміру немає")
     assert fields["gender"].value == "Для жінок"
-    assert fields["material_upper"].reason == "матеріалу немає в довіднику: Замша"
+    assert fields["material_upper"].reason == "немає у списку Шафи: Замша"
 
 
 def test_gender_and_teen_only_where_they_belong():
-    fields = check(gender="Для жінок", teen=True)
-    assert fields["gender"].value is None
+    fields = check(gender="Для жінок", teen=True)  # жіночі черевики: ні «Стать», ні «Категорія»
+    assert (fields["gender"].value, fields["gender"].reason) == (
+        "Для жінок",
+        "у цьому розділі Шафи такого поля немає",
+    )
     assert fields["teen"].value is None
+
+
+def test_sizes_new_item_only_label_size():
+    new_post = POST.replace("в ідеальному стані", "нові")
+    fields = by_name(ai.check_answer(answer(sizes=["41", "42"]), NAMES, new_post))
+    assert (fields["sizes"].yellow, fields["sizes"].reason) == (True, "нове — лише розмір з ярлика")
+
+
+def test_babies_ukrainian_sizes_and_required_gender():
+    babies = "Дитячий одяг / Для малюків / Взуття / Кросівки"
+    fields = check(section=babies, sizes=["17,5"], material_upper=[], season=[], gender=None)
+    assert not fields["sizes"].yellow
+    assert (fields["gender"].yellow, fields["gender"].reason) == (True, "обов'язкове поле Шафи")
+    fields = check(section=babies, sizes=["23"], material_upper=[], gender="унісекс")
+    assert fields["sizes"].reason == "розміру немає у списку Шафи для розділу"
+    assert (fields["gender"].value, fields["gender"].yellow) == ("Унісекс", False)
+
+
+def test_type_style_and_limits_from_section():
+    fields = check(type="челсі", style="Класичний", season=["Весна", "Осінь", "Зима", "Літо"])
+    assert (fields["type"].value, fields["type"].yellow) == ("Челсі", False)
+    assert (fields["style"].value, fields["style"].yellow) == ("Класичний", False)
+    assert not fields["season"].yellow  # до 4
+    fields = check(type="Кеди", material_upper=["Шкіра", "Замша", "Нубук", "Текстиль"])
+    assert fields["type"].reason == "немає у списку Шафи: Кеди"
+    assert fields["material_upper"].reason == "більше 3"
 
 
 @pytest.mark.parametrize(
@@ -322,9 +355,17 @@ def test_title(title, reason):
     assert field.yellow and field.reason == reason
 
 
+def test_title_up_to_150_is_fine():
+    title = "Шкіряні черевики pavers " + "дуже гарні " * 8 + "38 розміру"
+    assert 100 < len(title) <= ai.TITLE_MAX == 150
+    assert not check(title=title)["title"].yellow
+
+
 def test_season_outside_list():
-    field = check(season="Міжсезоння")["season"]
-    assert (field.value, field.yellow) == ("Міжсезоння", True)
+    field = check(season=["Міжсезоння"])["season"]
+    assert (field.value, field.yellow) == (["Міжсезоння"], True)
+    assert field.reason == "немає у списку Шафи: Міжсезоння"
+    assert check(season="Зима")["season"].value == ["Зима"]  # старий бланк: рядок
 
 
 @pytest.mark.parametrize(
@@ -354,17 +395,16 @@ def test_photo_order_not_matching_folder_keeps_folder_order(order):
 
 def test_doubts_make_fields_yellow_and_keep_code_reason():
     fields = check(
-        section="Чоловічий одяг / Взуття / Кеди",
+        section="Чоловічий одяг / Взуття / Кросівки",
         sizes=["41"],
+        material_upper=[],
         doubts=[
             {"field": "section", "reason": "не видно, жіночі чи чоловічі"},
             {"field": "brand", "reason": "бірка нечітка"},
             {"field": "невідоме", "reason": "x"},
         ],
     )
-    assert fields["section"].reason == (
-        "розділ не звірено з довідником; ШІ не впевнене: не видно, жіночі чи чоловічі"
-    )
+    assert fields["section"].reason == "ШІ не впевнене: не видно, жіночі чи чоловічі"
     assert (fields["brand"].value, fields["brand"].yellow) == ("Pavers", True)
     assert fields["brand"].reason == "ШІ не впевнене: бірка нечітка"
 
@@ -389,27 +429,18 @@ def test_prompt_rules_from_text_only():
         (
             "Дитячий одяг / Для малюків / Взуття / Кросівки",
             ["24"],
-            "розділ не звірено з довідником; Для малюків лише до 22 розміру",
+            "Для малюків лише до 22 розміру",
         ),
         (
-            "Дитячий одяг / Для малюків / Взуття / Кросівки",
-            ["22"],
-            "розділ не звірено з довідником",
-        ),
-        (
-            "Дитячий одяг / Для дівчаток / Взуття / Кеди",
+            "Дитячий одяг / Для дівчаток / Взуття / Кросівки",
             ["22"],
             "розмір 22 зазвичай з іншого розділу",
         ),
-        (
-            "Чоловічий одяг / Взуття / Кеди",
-            ["38"],
-            "розділ не звірено з довідником; розмір 38 зазвичай з іншого розділу",
-        ),
+        ("Чоловічий одяг / Взуття / Кросівки", ["38"], "розмір 38 зазвичай з іншого розділу"),
     ],
 )
 def test_size_hint_reasons(section, sizes, reason):
-    field = check(section=section, sizes=sizes)["section"]
+    field = check(section=section, sizes=sizes, material_upper=[], season=[])["section"]
     assert (field.yellow, field.reason) == (True, reason)
 
 
@@ -425,9 +456,9 @@ def test_size_hint_reasons(section, sizes, reason):
 )
 def test_lining_must_be_in_text(lining, text, yellow):
     field = by_name(ai.check_answer(answer(material_lining=lining), NAMES, text))["material_lining"]
-    assert field.value == lining
+    assert field.value == ([lining] if lining else [])
     assert field.yellow is yellow
-    assert field.reason == ("немає в тексті" if yellow else None)
+    assert field.reason == (f"немає в тексті: {lining}" if yellow else None)
 
 
 @pytest.mark.parametrize(

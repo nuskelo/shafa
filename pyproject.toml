@@ -10,9 +10,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "anthropic==1.9.0",
+    "greenlet==3.5.6",  # підзалежність playwright, закріплена (D1)
     "Jinja2==3.1.6",
     "MarkupSafe==3.0.3",
     "Pillow==12.3.0",
+    "playwright==1.63.0",
+    "pyee==13.0.1",  # підзалежність playwright, закріплена (D1)
 ]
 
 [dependency-groups]
@@ -32,7 +35,7 @@ include = ["*.py", "*.pyi", "**/pyproject.toml"]
 extend-select = ["I"]
 
 [tool.setuptools.package-data]
-shafa = ["prompts/*.md", "templates/*.html", "static/*"]
+shafa = ["prompts/*.md", "templates/*.html", "static/*", "data/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -4,6 +4,8 @@
 `python -m shafa rules --export … --post N` — поля, які заповнює код, для одного поста.
 `python -m shafa fill --db … --root … [--post N] [--limit K] [--dry-run]` — ШІ-бланк для Карток.
 `python -m shafa ui --db … --root … [--port P] [--no-browser]` — екран перевірки в браузері.
+`python -m shafa robot --login | --sync-catalog | --dry-fill --db … --post N [--post M …]` — робот
+Шафи: ручний вхід Власника, знімок довідників, заповнення форми БЕЗ публікації (до 3 Карток).
 
 Налаштування (`SHAFA_ROOT_DIR`, `TELEGRAM_CHANNEL_ID`, `ANTHROPIC_API_KEY`) — зі змінних
 середовища або з `.env` у корені проєкту.
@@ -123,7 +125,52 @@ def build_parser() -> argparse.ArgumentParser:
     _add_root(cmd)
     cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
     cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
+    cmd = commands.add_parser("robot", help="робот Шафи (без публікації)")
+    mode = cmd.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--login", action="store_true", help="відкрити профіль робота для входу")
+    mode.add_argument("--sync-catalog", action="store_true", help="оновити знімок довідників")
+    mode.add_argument("--dry-fill", action="store_true", help="заповнити форму, не публікувати")
+    cmd.add_argument("--db", type=Path, help="файл бази SQLite (для --dry-fill)")
+    _add_root(cmd)
+    cmd.add_argument("--post", type=int, action="append", help="номер поста (до 3 разів)")
     return parser
+
+
+def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from playwright.sync_api import sync_playwright
+
+    from shafa.robot import browser, form, sync
+
+    if args.dry_fill:
+        root = _root(parser, args)
+        if args.db is None or not args.db.is_file():
+            parser.error(f"Базу не знайдено: {args.db}")
+        if not args.post or len(args.post) > form.MAX_CARDS:
+            parser.error(f"--post від 1 до {form.MAX_CARDS} разів")
+    with sync_playwright() as p:
+        if args.login:
+            print("Увійдіть на Шафу у відкритому вікні й закрийте його.")
+            browser.wait_for_manual_login(p)
+            print("Вікно закрито.")
+            return 0
+        session = browser.Session(p, allow_upload=args.dry_fill)
+        try:
+            if args.sync_catalog:
+                snapshot = sync.crawl(session, sync.CACHE, log=lambda s: print(s, flush=True))
+                sync.save(snapshot)
+                print(f"Знімок збережено: розділів {len(snapshot['sections'])}")
+                return 0
+            conn = db.connect(args.db)
+            try:
+                form.dry_fill(
+                    conn, root, args.post, session, form.PageDriver, form.screens_dir(),
+                    log=lambda s: print(s, flush=True),
+                )  # fmt: skip
+            finally:
+                conn.close()
+        finally:
+            session.close()
+    return 0
 
 
 def thumbs_dir(db_path: Path) -> Path:
@@ -220,6 +267,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_fill(parser, args)
     if args.command == "ui":
         return run_ui(parser, args)
+    if args.command == "robot":
+        return run_robot(parser, args)
     root = _root(parser, args)
     if not args.export.is_file():
         parser.error(f"Файл Експорту не знайдено: {args.export}")

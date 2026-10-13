@@ -15,7 +15,9 @@ POST_TEXT = "Шкіряні кеди Ecco 38 розміру. Устілка 24,5
 
 BLANK = [
     ai.Field("title", "Шкіряні кеди Ecco 38 розміру"),
-    ai.Field("section", "Чоловічий одяг / Взуття / Кеди", True, "розділ не звірено з довідником"),
+    ai.Field(
+        "section", "Чоловічий одяг / Взуття / Кросівки", True, "розділ не звірено з довідником"
+    ),
     ai.Field("sizes", ["38"]),
     ai.Field("colors", ["Білий"]),
     ai.Field("brand", "Ecco"),
@@ -106,7 +108,7 @@ def test_teen_only_for_kids_and_gender_only_for_accessories(conn, root):
     names = {f.spec.name for f in c.visible}
     assert "teen" not in names and "gender" not in names
 
-    review.save(conn, c, form_of(c, section="Дитячий одяг / Для дівчаток / Взуття / Кеди"))
+    review.save(conn, c, form_of(c, section="Дитячий одяг / Для дівчаток / Взуття / Кросівки"))
     assert "teen" in {f.spec.name for f in card(conn, c.id).visible}
 
     review.save(conn, c, form_of(c, section="Аксесуари / Сумки та рюкзаки / Рюкзаки"))
@@ -132,7 +134,7 @@ def test_unchanged_form_saves_nothing(conn, root):
     c = card(conn, add_card(conn, root))
     form = form_of(c, description=c.fields["description"].inputs[0].replace("\n", "\r\n"))
 
-    assert review.save(conn, c, form) == ["season"]  # «Зимаа» немає в довіднику — треба обрати
+    assert review.save(conn, c, form) == []
     assert edits(conn, c.id) == {}
 
 
@@ -156,7 +158,7 @@ def test_changed_field_saved_and_no_longer_yellow(conn, root):
         c,
         form_of(
             c,
-            section="жіночий одяг/взуття/ кеди",
+            section="жіночий одяг/взуття/ кросівки",
             season="Зима",
             sizes=["38.5", ""],
             keywords="кеди, ecco , білі,",
@@ -167,8 +169,8 @@ def test_changed_field_saved_and_no_longer_yellow(conn, root):
 
     assert bad == []
     assert edits(conn, item_id) == {
-        "section": "Жіночий одяг / Взуття / Кеди",  # написання Шафи
-        "season": "Зима",
+        "section": "Жіночий одяг / Взуття / Кросівки",  # написання Шафи
+        "season": ["Зима"],
         "sizes": ["38,5"],
         "keywords": ["кеди", "ecco", "білі"],
         "insole": [25.0],
@@ -190,7 +192,7 @@ def test_confirm_records_same_value(conn, root):
 
     review.save(conn, c, form_of(c, season="Зима"), confirm="section")
 
-    assert edits(conn, c.id)["section"] == "Чоловічий одяг / Взуття / Кеди"
+    assert edits(conn, c.id)["section"] == "Чоловічий одяг / Взуття / Кросівки"
     assert not card(conn, c.id).fields["section"].yellow
 
 
@@ -200,7 +202,6 @@ def test_confirm_records_same_value(conn, root):
         ("price", "дорого"),
         ("price", "0"),
         ("price", "1 400"),
-        ("season", "Літечко"),
         ("colors", ["Фіолетовенький", ""]),
         ("condition", ""),
     ],
@@ -218,7 +219,7 @@ def test_bad_value_not_saved_others_saved(conn, root, field, value):
 def test_empty_values_clear_field(conn, root):
     c = card(conn, add_card(conn, root))
     review.save(conn, c, form_of(c, season="", brand="", sizes=["", ""], price=""))
-    assert edits(conn, c.id) == {"season": None, "brand": None, "sizes": [], "price": None}
+    assert edits(conn, c.id) == {"season": [], "brand": None, "sizes": [], "price": None}
 
 
 def test_condition_edit_changes_description_ending(conn, root):
@@ -277,7 +278,7 @@ def test_approve_blocked_by_yellow_section(conn, root):
 def test_approve_after_section_changed(conn, root):
     item_id = add_card(conn, root)
     c = card(conn, item_id)
-    review.save(conn, c, form_of(c, season="Зима", section="Жіночий одяг / Взуття / Кеди"))
+    review.save(conn, c, form_of(c, season="Зима", section="Жіночий одяг / Взуття / Кросівки"))
     assert review.act(conn, item_id, "approve") == "approved"
 
 
@@ -288,13 +289,20 @@ def test_approve_blocked_without_section(conn, root):
     assert review.act(conn, item_id, "approve") == "no_section"
 
 
+READY = [
+    ai.Field("section", "Жіночий одяг / Взуття / Кросівки"),
+    ai.Field("sizes", ["38"]),
+    ai.Field("colors", ["Білий"]),
+]
+
+
 def test_other_yellow_fields_do_not_block_approve(conn, root):
-    item_id = add_card(conn, root, blank=[ai.Field("section", "Жіночий одяг / Взуття / Кеди")])
+    item_id = add_card(conn, root, blank=[*READY, ai.Field("brand", "X", True, "сумнів")])
     assert review.act(conn, item_id, "approve") == "approved"
 
 
 def test_reject_restore_unapprove(conn, root):
-    item_id = add_card(conn, root, blank=[ai.Field("section", "Жіночий одяг / Взуття / Кеди")])
+    item_id = add_card(conn, root, blank=READY)
 
     assert review.act(conn, item_id, "reject") == "rejected"
     assert status(conn, item_id) == Status.ARCHIVED
@@ -430,6 +438,8 @@ def test_keywords_for_section(section, keywords, expected):
 def test_keywords_follow_changed_section(conn, root):
     blank = [
         ai.Field("section", MEN),
+        ai.Field("sizes", ["42"]),
+        ai.Field("colors", ["Чорний"]),
         ai.Field("keywords", ["кросівки", "кросівки чоловічі", "кросівки ecco", "42 розмір"]),
     ]
     item_id = add_card(conn, root, blank=blank)
@@ -461,3 +471,74 @@ def test_manual_keywords_not_touched(conn, root):
     review.save(conn, c, form_of(c, section=WOMEN))
 
     assert card(conn, item_id).fields["keywords"].value == ["кросівки чоловічі", "кеди"]
+
+
+# --- Перевірка за знімком Шафи (ROBOT-001) ---
+
+
+@pytest.mark.parametrize(
+    ("blank", "block"),
+    [
+        ([ai.Field("section", "Жіночий одяг / Взуття / Ласти"), *READY[1:]], "section_unknown"),
+        ([READY[0], READY[2]], "no_sizes"),
+        (READY[:2], "no_colors"),
+        (
+            [ai.Field("section", "Дитячий одяг / Для малюків / Взуття / Кросівки"),
+             ai.Field("sizes", ["18"]), READY[2]],
+            "no_gender",
+        ),
+    ],
+)  # fmt: skip
+def test_approve_blocked_until_shafa_required_fields(conn, root, blank, block):
+    item_id = add_card(conn, root, blank=blank)
+    assert review.act(conn, item_id, "approve") == block
+    assert status(conn, item_id) == Status.REVIEW
+
+
+def test_own_section_path_cannot_be_approved(conn, root):
+    item_id = add_card(conn, root, blank=READY)
+    c = card(conn, item_id)
+    review.save(conn, c, form_of(c, section="Жіночий одяг / Взуття / Мокасини дуже гарні"))
+
+    c = card(conn, item_id)
+    assert (c.fields["section"].yellow, c.fields["section"].reason) == (
+        True,
+        "розділу немає в довіднику Шафи",
+    )
+    assert c.approve_block() == "section_unknown"
+    review.save(conn, c, form_of(c), confirm="section")  # «Так, вірно» не допомагає
+    assert review.act(conn, item_id, "approve") == "section_unknown"
+
+
+def test_values_outside_shafa_list_stay_yellow_after_edit(conn, root):
+    item_id = add_card(conn, root, blank=READY)
+    c = card(conn, item_id)
+    review.save(conn, c, form_of(c, season="Зима, Міжсезоння", sizes=["46,5", ""]))
+
+    f = card(conn, item_id).fields
+    assert (f["season"].yellow, f["season"].reason) == (True, "немає у списку Шафи: Міжсезоння")
+    assert f["sizes"].reason == "розміру немає у списку Шафи для розділу"
+    assert "Зима" in f["season"].options and "38" in f["sizes"].options
+
+
+def test_fields_shown_by_section_type(conn, root):
+    item_id = add_card(conn, root, blank=READY)
+    names = {f.spec.name for f in card(conn, item_id).visible}
+    assert {"season", "material_upper", "membrane", "insole"} <= names
+    assert not {"material_lining", "type", "teen", "gender"} & names  # у жін. кросівок немає
+    c = card(conn, item_id)
+    review.save(conn, c, form_of(c, section="Жіночий одяг / Взуття / Черевики"))
+    names = {f.spec.name for f in card(conn, item_id).visible}
+    assert {"material_lining", "type", "style"} <= names
+    assert card(conn, item_id).fields["type"].options == ("Берці", "Челсі")
+
+
+def test_robot_problem_returns_to_approved_without_ai(conn, root):
+    item_id = add_card(conn, root, status=Status.PROBLEM)
+    with conn:
+        conn.execute("UPDATE items SET problem_code = 'robot_field_missing'")
+    assert review.robot_retry(conn, item_id)
+    assert status(conn, item_id) == Status.APPROVED
+    with conn:
+        conn.execute("UPDATE items SET status = 'problem', problem_code = 'no_photos'")
+    assert not review.robot_retry(conn, item_id)

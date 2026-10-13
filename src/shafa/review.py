@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from shafa import catalog, rules
+from shafa import ai, catalog, rules
 from shafa.catalog import Kind
 from shafa.db import Status, now
 from shafa.folders import natural_key
@@ -38,14 +38,14 @@ SPECS = (
     Spec("colors", "Колір", "colors", catalog.COLORS),
     Spec("brand", "Бренд", "text"),
     Spec("material_upper", "Матеріал верху", "list"),
-    Spec("material_lining", "Підкладка", "text"),
+    Spec("material_lining", "Матеріал підкладки", "list"),
     Spec("membrane", "Мембрана", "text", code=True),
     Spec("insole", "Довжина устілки, см", "numbers", code=True),
-    Spec("season", "Сезон", "select", catalog.SEASONS),
-    Spec("type", "Тип", "text"),
-    Spec("style", "Стиль", "text"),
+    Spec("season", "Сезон", "list"),
+    Spec("type", "Тип", "choice"),
+    Spec("style", "Стиль", "choice"),
     Spec("teen", "Для підлітків", "yesno"),
-    Spec("gender", "Стать", "select", catalog.GENDERS),
+    Spec("gender", "Стать", "choice"),
     Spec("keywords", "Ключові слова", "list"),
     Spec("description", "Опис", "textarea", code=True),
     Spec("price", "Ціна на Шафі, грн", "price", code=True),
@@ -58,7 +58,6 @@ LIST_WIDGETS = {"sizes", "colors", "list", "numbers", "order"}
 # Що не так із введеним значенням — за видом поля (текст для Продавчині).
 BAD_INPUT = {
     "colors": "оберіть колір зі списку",
-    "select": "оберіть зі списку",
     "price": "ціна — ціле число гривень",
     "condition": "оберіть стан",
 }
@@ -114,14 +113,13 @@ def parse(spec: Spec, inputs: list[str]) -> Any:
         if spec.widget == "condition":
             raise ValueError(spec.widget)
         return None
-    if spec.widget in ("select", "condition"):
+    if spec.widget == "condition":
         found = catalog.canonical(first, spec.options)
         if found is None:
             raise ValueError(spec.widget)
         return found
     if spec.widget == "section":
-        found, _ = catalog.find_section(first)
-        return found or catalog.normalize_section(first)
+        return catalog.find_section(first) or catalog.normalize_section(first)
     return first
 
 
@@ -133,6 +131,7 @@ class FieldView:
     yellow: bool
     reason: str | None
     edited: bool
+    options: tuple[str, ...] = ()  # варіанти саме цього розділу (зі знімка Шафи)
 
 
 @dataclass(frozen=True)
@@ -161,13 +160,27 @@ class Card:
         return catalog.section_kind(section) if section else None
 
     @property
+    def path(self) -> str | None:
+        """Розділ у знімку Шафи або None (порожній чи свій шлях)."""
+        section = self.fields["section"].value
+        return catalog.find_section(section) if section else None
+
+    @property
     def visible(self) -> list[FieldView]:
-        """Поля для показу: «Для підлітків» — лише дитяче, «Стать» — лише аксесуари."""
+        """Поля для показу: порожні поля, яких у цього типу на Шафі немає, сховані."""
+        path = self.path
         hidden = set()
-        if self.kind is not Kind.KIDS:
-            hidden.add("teen")
-        if self.kind is not Kind.ACCESSORY:
-            hidden.add("gender")
+        for name in catalog.FIELD_TITLES:
+            if path is None:
+                absent = (name == "teen" and self.kind is not Kind.KIDS) or (
+                    name == "gender" and self.kind not in (Kind.ACCESSORY, Kind.BABIES)
+                )
+            else:
+                absent = catalog.characteristic(path, name) is None
+            if absent and not self.fields[name].value:
+                hidden.add(name)
+        if path and not catalog.sizes(path) and not self.fields["sizes"].value:
+            hidden.add("sizes")
         return [f for f in self.fields.values() if f.spec.name not in hidden]
 
     @property
@@ -177,10 +190,20 @@ class Card:
     def approve_block(self) -> str | None:
         """Чому не можна схвалити (код повідомлення) або None."""
         section = self.fields["section"]
-        if section.yellow:
-            return "section_yellow"
         if not section.value:
             return "no_section"
+        path = self.path
+        if path is None:  # свій шлях: Шафа такого розділу не має (D8) — «Так, вірно» не допоможе
+            return "section_unknown"
+        if section.yellow:
+            return "section_yellow"
+        if catalog.sizes(path) and not self.fields["sizes"].value:
+            return "no_sizes"
+        if catalog.section(path)["color_required"] and not self.fields["colors"].value:
+            return "no_colors"
+        gender = catalog.characteristic(path, "gender")
+        if gender and gender["required"] and not self.fields["gender"].value:
+            return "no_gender"
         return None
 
 
@@ -239,6 +262,47 @@ def _code_values(text: str, condition: str | None) -> dict[str, Any]:
     }
 
 
+# Поля, значення яких — лише варіанти типу розділу (D7); True — одне значення.
+CHOICE_FIELDS = {
+    "material_upper": False,
+    "material_lining": False,
+    "season": False,
+    "type": True,
+    "style": True,
+    "gender": True,
+}
+
+
+def _merge(field: FieldView, check: Any, options: tuple[str, ...]) -> FieldView:
+    """Жовте від ШІ (якщо не правлено) і жовте від перевірки за Шафою — разом."""
+    reasons = [r for r in (field.reason, check.reason if check.yellow else None) if r]
+    yellow = field.yellow or check.yellow
+    reason = "; ".join(dict.fromkeys(reasons)) if yellow else None
+    return FieldView(field.spec, field.value, field.inputs, yellow, reason, field.edited, options)
+
+
+def _check_against_shafa(fields: dict[str, FieldView], post_text: str) -> None:
+    """Значення поза списком Шафи для розділу — жовті навіть після ручної правки (D6, D7)."""
+    section = fields["section"]
+    path = catalog.find_section(section.value) if section.value else None
+    if section.value and path is None and not section.yellow:
+        fields["section"] = FieldView(
+            section.spec, section.value, section.inputs, True,
+            "розділу немає в довіднику Шафи", section.edited,
+        )  # fmt: skip
+    fields["section"] = _merge(fields["section"], _OK, catalog.sections())
+    sizes = fields["sizes"]
+    check = ai.check_sizes(sizes.value, path, post_text)[0] if path else _OK
+    fields["sizes"] = _merge(sizes, check, tuple(catalog.sizes(path)) if path else ())
+    for name, single in CHOICE_FIELDS.items():
+        spec = catalog.characteristic(path, name)
+        check = ai.check_values(name, fields[name].value, path, single) if path else _OK
+        fields[name] = _merge(fields[name], check, tuple(spec["choices"]) if spec else ())
+
+
+_OK = ai.Field("", None)
+
+
 def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
     """Картка з усіма полями або None (немає або архів уже очищено)."""
     row = conn.execute(
@@ -271,6 +335,8 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
             value, yellow = edits[spec.name], False
         if value is None and spec.widget in LIST_WIDGETS:
             value = []
+        if isinstance(value, str) and spec.widget in LIST_WIDGETS:  # бланк до ROBOT-001: рядок
+            value = [value]
         fields[spec.name] = FieldView(
             spec, value, as_form(spec, value), yellow, reason if yellow else None, edited
         )
@@ -286,6 +352,8 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
             keywords.reason,
             False,
         )
+
+    _check_against_shafa(fields, row["post_text"] or "")
 
     photos = [
         Photo(r["position"], r["file_name"])
@@ -361,6 +429,16 @@ def save(
     return bad
 
 
+# Чому «Схвалити» заборонене (коди повідомлень, див. `Card.approve_block`).
+APPROVE_BLOCKS = (
+    "section_yellow",
+    "no_section",
+    "section_unknown",
+    "no_sizes",
+    "no_colors",
+    "no_gender",
+)
+
 # Дія → (зі статусу, у статус, код повідомлення після).
 ACTIONS = {
     "approve": (Status.REVIEW, Status.APPROVED, "approved"),
@@ -388,6 +466,19 @@ def act(conn: sqlite3.Connection, item_id: int, action: str) -> str:
             (target, archived_at, now(), item_id, source),
         )
     return done if cursor.rowcount == 1 else "stale"
+
+
+def robot_retry(conn: sqlite3.Connection, item_id: int) -> bool:
+    """Проблема робота (код `robot_…`) → назад у Схвалені. ШІ знову не викликається."""
+    with conn:
+        cursor = conn.execute(
+            """
+            UPDATE items SET status = ?, problem_code = NULL, problem_text = NULL, updated_at = ?
+            WHERE id = ? AND status = ? AND problem_code LIKE 'robot\\_%' ESCAPE '\\'
+            """,
+            (Status.APPROVED, now(), item_id, Status.PROBLEM),
+        )
+    return cursor.rowcount == 1
 
 
 def purge_archive(conn: sqlite3.Connection, today: datetime | None = None) -> list[int]:

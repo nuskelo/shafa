@@ -1,67 +1,27 @@
-"""Довідники форми «Додати товар» Шафи (`docs/research/shafa-form.md`, перевірено 12.10.2026).
+"""Довідники форми «Додати товар» Шафи — зі знімка `data/shafa-catalog.json` (ROBOT-001, D2).
 
-Звірені з формою: жіноче взуття, взуття для дівчаток, рюкзаки. Решта дерева (чоловіче взуття,
-хлопчики, малюки, інші аксесуари) відома лише назвами — такий розділ іде в «жовті».
+Знімок збирає `python -m shafa robot --sync-catalog` (робот у формі Шафи, лише читання); дата
+звірки — у полі `checked`. Розділи, розміри й поля — точно як на сайті: розміри — явні списки
+(D6), поля залежать від типу розділу (D7).
 """
 
+import json
 from enum import StrEnum
+from functools import cache
+from pathlib import Path
+from typing import Any
 
+SNAPSHOT = Path(__file__).resolve().parent / "data" / "shafa-catalog.json"
 SEP = " / "
-
-WOMEN_SHOES = (
-    "Черевики", "Ботильйони", "Чоботи", "Кросівки", "Кеди", "Снікерси", "Уггі", "Дутики",
-    "Ботфорти", "Гумові чоботи", "Валянки", "Сабо", "Шльопанці", "В'єтнамки", "Туфлі", "Балетки",
-    "Лофери", "Оксфорди", "Босоніжки", "Сандалі", "Сліпони", "Мокасини", "Еспадрільї", "Капці",
-    "Чешки", "Аквашузи", "Аксесуари для взуття", "Мюлі",
-)  # fmt: skip
-MEN_SHOES = (
-    "Кросівки", "Туфлі", "Мокасини", "Кеди", "Черевики", "Чоботи", "Уггі",
-    "Сліпони і Еспадрільї", "Сандалії", "Шльопанці", "Капці", "Аквашузи", "Гумові чоботи",
-    "Бутси", "Борцовки", "Аксесуари",
-)  # fmt: skip
-GIRLS_SHOES = (
-    "Кросівки", "Босоніжки та сандалі", "Туфлі", "Черевики", "Капці", "Кеди", "Чоботи",
-    "Шльопанці", "Чешки і балетки", "Аквашузи", "Аксесуари для взуття", "Сліпони", "Балетки",
-    "Мокасини", "Сабо", "В'єтнамки", "Уггі", "Гумові чоботи",
-)  # fmt: skip
-ACCESSORIES = {
-    "Сумки та рюкзаки": (
-        "Сумки", "Рюкзаки", "Бананки", "Крос-боді", "Шопери", "Клатчі", "Органайзери", "Валізи",
-        "Дорожні сумки", "Спортивні сумки", "Спортивні рюкзаки", "Пляжні сумки", "Барсетки",
-        "Портфелі", "Авоськи", "Аксесуари для сумок", "Кейси для косметики", "Косметички",
-    ),
-    "Гаманці та портмоне": (
-        "Гаманці", "Портмоне", "Картхолдери", "Ключниці", "Затискачі", "Візитниці", "Органайзери",
-    ),
-    "Ремені та пояси": ("Ремені", "Пояси", "Підтяжки", "Пряжки для ременя"),
-}  # fmt: skip
 
 WOMEN = "Жіночий одяг / Взуття"
 MEN = "Чоловічий одяг / Взуття"
 GIRLS = "Дитячий одяг / Для дівчаток / Взуття"
 BOYS = "Дитячий одяг / Для хлопчиків / Взуття"
 BABIES = "Дитячий одяг / Для малюків / Взуття"
-BACKPACKS = "Аксесуари / Сумки та рюкзаки / Рюкзаки"
+ACCESSORIES = "Аксесуари"
 
-VERIFIED_SECTIONS = (
-    tuple(f"{WOMEN}{SEP}{t}" for t in WOMEN_SHOES)
-    + tuple(f"{GIRLS}{SEP}{t}" for t in GIRLS_SHOES)
-    + (BACKPACKS,)
-)
-# Відомі з дерева, але поля форми не перевірені. Типи взуття хлопчиків і малюків невідомі —
-# беремо список дівчаток як найближчий.
-UNVERIFIED_SECTIONS = (
-    tuple(f"{MEN}{SEP}{t}" for t in MEN_SHOES)
-    + tuple(f"{BOYS}{SEP}{t}" for t in GIRLS_SHOES)
-    + tuple(f"{BABIES}{SEP}{t}" for t in GIRLS_SHOES)
-    + tuple(
-        f"Аксесуари{SEP}{group}{SEP}{t}"
-        for group, types in ACCESSORIES.items()
-        for t in types
-        if f"Аксесуари{SEP}{group}{SEP}{t}" != BACKPACKS
-    )
-)
-
+# 32 кольори Шафи. Тут — для схеми відповіді ШІ; тест звіряє зі знімком.
 COLORS = (
     "Білий", "Сріблястий", "Бежевий", "Сірий", "Жовтий", "Золотистий", "Помаранчевий", "Рожевий",
     "Червоний", "Бірюзовий", "Синій", "Хакі", "Зелений", "Фіолетовий", "Коричневий", "Чорний",
@@ -69,23 +29,25 @@ COLORS = (
     "Кораловий", "Гірчичний", "Фуксія", "М'ятний", "Малиновий", "Молочний", "Графітовий",
     "Оливковий", "Нюдовий", "Прозорий",
 )  # fmt: skip
-SHOE_MATERIALS = (
-    "Атлас", "Бавовна", "Велюр", "Гіпюр", "Гума", "Джинс", "Замша", "Каучук", "Крослайт",
-    "Лакована шкіра", "Лакована штучна шкіра", "Нейлон", "Нубук", "Оксамит", "Повсть", "Поліестер",
-    "Поліуретан", "Сатин", "Силікон", "Синтетика", "Сітка", "Текстиль", "Трикотаж", "Фетр",
-    "Хутро", "Шкіра", "Штучна замша", "Штучна шкіра", "Штучне хутро", "Штучний нубук",
-)  # fmt: skip
-BAG_MATERIALS = ("Бавовна", "Нейлон", "Поліестер", "Текстиль", "Шкіра", "Штучна шкіра")
-SEASONS = ("Весна", "Демісезон", "Зима", "Літо", "Осінь")
-GENDERS = ("Для жінок", "Для чоловіків", "Для дівчаток", "Для хлопчиків", "Для немовлят")
 
-# Розміри, Європейська система, крок 0,5. Чоловічий список у формі ще не перевірено.
-WOMEN_SIZES = (34.0, 46.0)
-KIDS_SIZES = (22.0, 41.0)
+# Наші поля → назви характеристик у формі Шафи (у різних типів назва різна).
+FIELD_TITLES = {
+    "material_upper": ("Матеріал верху", "Матеріал"),
+    "material_lining": ("Матеріал підкладки",),
+    "season": ("Сезон",),
+    "type": ("Тип",),
+    "style": ("Стиль", "Стиль взуття"),
+    "gender": ("Стать",),
+    "teen": ("Категорія",),
+    "membrane": ("Мембрана",),
+    "insole": ("Довжина устілки",),
+}
+TEEN = {True: "Для підлітків", False: "Для дітей"}
+SIZE_SYSTEMS = ("Європейський", "Український")  # перша наявна — наша (малюки — лише українська)
 
 
 class Kind(StrEnum):
-    """Група розділу для правил розміру й матеріалу."""
+    """Група розділу для правил розміру й ключових слів."""
 
     WOMEN = "women"
     MEN = "men"
@@ -94,11 +56,16 @@ class Kind(StrEnum):
     ACCESSORY = "accessory"
 
 
+@cache
+def snapshot() -> dict[str, Any]:
+    return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+
+
 def _key(value: str) -> str:
     return value.strip().casefold().replace("’", "'").replace("ʼ", "'")
 
 
-def canonical(value: str, options: tuple[str, ...]) -> str | None:
+def canonical(value: str, options: tuple[str, ...] | list[str]) -> str | None:
     """Значення з довідника у написанні Шафи (без урахування регістру й виду апострофа)."""
     wanted = _key(value)
     return next((o for o in options if _key(o) == wanted), None)
@@ -109,13 +76,18 @@ def normalize_section(path: str) -> str:
     return SEP.join(part.strip() for part in path.split("/") if part.strip())
 
 
-def find_section(path: str) -> tuple[str | None, bool]:
-    """Розділ у написанні Шафи і чи звірені його поля з формою. Немає в дереві — (None, False)."""
-    path = normalize_section(path)
-    verified = canonical(path, VERIFIED_SECTIONS)
-    if verified:
-        return verified, True
-    return canonical(path, UNVERIFIED_SECTIONS), False
+def sections() -> tuple[str, ...]:
+    return tuple(snapshot()["sections"])
+
+
+def find_section(path: str) -> str | None:
+    """Розділ у написанні Шафи або None, якщо його немає у знімку."""
+    return canonical(normalize_section(path), sections())
+
+
+def section(path: str | None) -> dict[str, Any] | None:
+    found = find_section(path) if path else None
+    return snapshot()["sections"][found] if found else None
 
 
 def section_kind(path: str) -> Kind | None:
@@ -127,41 +99,109 @@ def section_kind(path: str) -> Kind | None:
         (GIRLS, Kind.KIDS),
         (BOYS, Kind.KIDS),
         (BABIES, Kind.BABIES),
-        ("Аксесуари", Kind.ACCESSORY),
+        (ACCESSORIES, Kind.ACCESSORY),
     ):
         if key.startswith(_key(prefix) + " /"):
             return kind
     return None
 
 
-def size_in_range(size: float, kind: Kind) -> bool:
-    """Розмір є у списку форми: межі розділу й крок 0,5. Чоловічі межі невідомі — лише крок."""
-    if (size * 2) % 1:
-        return False
-    if kind is Kind.WOMEN:
-        low, high = WOMEN_SIZES
-    elif kind in (Kind.KIDS, Kind.BABIES):
-        low, high = KIDS_SIZES
-    else:
-        return True
-    return low <= size <= high
+def size_system(path: str) -> str | None:
+    """Система розмірів розділу («Європейський»; у малюків — «Український») або None."""
+    entry = section(path)
+    return next((s for s in SIZE_SYSTEMS if entry and s in entry["sizes"]), None)
+
+
+def shafa_size(size: str) -> str:
+    """Наше «38,5» → як на Шафі «38.5»."""
+    return size.replace(",", ".")
+
+
+def sizes(path: str) -> list[str]:
+    """Числові розміри розділу в нашому написанні («38,5»); без розміру — порожньо."""
+    system = size_system(path)
+    if system is None:
+        return []
+    names = section(path)["sizes"][system]
+    return [n.replace(".", ",") for n in names if n.replace(".", "").isdigit()]
+
+
+def characteristic(path: str | None, field: str) -> dict[str, Any] | None:
+    """Характеристика форми для нашого поля в цьому розділі або None — поля в розділі немає."""
+    entry = section(path)
+    if entry is None:
+        return None
+    titles = FIELD_TITLES[field]
+    return next((c for c in entry["characteristics"] if c["title"] in titles), None)
+
+
+def brands() -> list[str]:
+    """Бренди Шафи (об'єднання списків усіх розділів) — для написання назви бренду."""
+    return snapshot()["brands"]
+
+
+# --- Текст для інструкції ШІ ---
+
+PROMPT_FIELDS = ("material_upper", "material_lining", "season", "type", "style", "gender", "teen")
+
+
+def _parent(path: str) -> str:
+    return path.rsplit(SEP, 1)[0]
+
+
+def _signature(path: str) -> tuple:
+    parts = []
+    for field in PROMPT_FIELDS:
+        c = characteristic(path, field)
+        if c:
+            parts.append((field, c["title"], c["max"], c["required"], tuple(c["choices"])))
+    return tuple(parts)
+
+
+LONG_LIST = 8  # довші списки варіантів пишемо один раз під позначкою — коротша інструкція
+
+
+def _choices(choices: tuple[str, ...], long_lists: dict[tuple[str, ...], str]) -> str:
+    if len(choices) <= LONG_LIST:
+        return ", ".join(choices)
+    return "список " + long_lists.setdefault(choices, f"L{len(long_lists) + 1}")
 
 
 def render() -> str:
-    """Довідники текстом для інструкції ШІ."""
-    lines = ["Розділи (повний шлях, тип — з переліку):"]
-    lines += [
-        f"- {WOMEN} / … : " + ", ".join(WOMEN_SHOES),
-        f"- {MEN} / … : " + ", ".join(MEN_SHOES),
-        f"- {GIRLS} / … , {BOYS} / … , {BABIES} / … : " + ", ".join(GIRLS_SHOES),
-    ]
-    lines += [f"- Аксесуари / {group} / … : " + ", ".join(t) for group, t in ACCESSORIES.items()]
-    lines += [
-        "",
-        "Кольори: " + ", ".join(COLORS) + ".",
-        "Матеріали взуття: " + ", ".join(SHOE_MATERIALS) + ".",
-        "Матеріали сумок і рюкзаків: " + ", ".join(BAG_MATERIALS) + ".",
-        "Сезон: " + ", ".join(SEASONS) + ".",
-        "Стать (лише для аксесуарів): " + ", ".join(GENDERS) + ".",
-    ]
+    """Довідники текстом для інструкції ШІ: розділи, розміри, поля кожного типу (стисло)."""
+    lines = ["Розділи (повний шлях = група / тип):"]
+    groups: dict[str, list[str]] = {}
+    for path in sections():
+        groups.setdefault(_parent(path), []).append(path.rsplit(SEP, 1)[1])
+    lines += [f"- {group} / … : " + ", ".join(types) for group, types in groups.items()]
+
+    lines += ["", "Розміри (лише з цих списків):"]
+    for group in groups:
+        first = f"{group}{SEP}{groups[group][0]}"
+        if sizes(first):
+            lines.append(f"- {group}: система «{size_system(first)}»: " + ", ".join(sizes(first)))
+        else:
+            lines.append(f"- {group}: розміру немає (порожній список)")
+
+    lines += ["", "Поля типу (лише ці варіанти; «до N» — скільки можна вибрати; * — обов'язкове):"]
+    long_lists: dict[tuple[str, ...], str] = {}
+    by_signature: dict[tuple, list[str]] = {}
+    for path in sections():
+        by_signature.setdefault(_signature(path), []).append(path)
+    for signature, paths in by_signature.items():
+        names = "; ".join(  # група один раз, далі короткі назви типів
+            f"{group} / " + ", ".join(p.rsplit(SEP, 1)[1] for p in paths if _parent(p) == group)
+            for group in dict.fromkeys(_parent(p) for p in paths)
+        )
+        if not signature:
+            lines.append(f"- {names}: полів немає")
+            continue
+        fields = [
+            f"{field} («{title}»{' *' if req else ''}, до {mx}): " + _choices(choices, long_lists)
+            for field, title, mx, req, choices in signature
+        ]
+        lines.append(f"- {names}:\n    " + "\n    ".join(fields))
+    lines += ["", "Довгі списки варіантів (на них посилаються поля вище):"]
+    lines += [f"{mark}: " + ", ".join(choices) for choices, mark in long_lists.items()]
+    lines += ["", "Кольори: " + ", ".join(COLORS) + "."]
     return "\n".join(lines)
