@@ -148,12 +148,6 @@ def test_tabs_with_counts(conn, app, root, item_id):
     assert "1380 грн · Чоловічий одяг / Взуття / Кросівки" in page
 
 
-def test_waiting_for_ai_counter(conn, app, root, item_id):
-    with conn:
-        conn.execute("UPDATE items SET status = 'new'")
-    assert "Чекають ШІ: 1" in html(get(app, "/review"))
-
-
 def test_search(conn, app, root, item_id):
     assert f"/item/{item_id}" in html(get(app, "/review?q=ECCO"))
     assert "Нічого не знайдено" in html(get(app, "/review?q=Lowa"))

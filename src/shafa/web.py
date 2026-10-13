@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 import time
 import traceback
 from collections.abc import Callable
@@ -19,16 +20,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import jinja2
 from PIL import UnidentifiedImageError
 
-from shafa import catalog, db, photos, review
+from shafa import ai, batch, catalog, config, db, fill, photos, review
 from shafa.db import Status
 from shafa.folders import list_folders
 from shafa.robot import control, lock, publish
-from shafa.scan import STICKY, rescan_folder
+from shafa.scan import STICKY, rescan_folder, scan
+
+COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -89,6 +93,14 @@ MESSAGES = {
     "robot_login": "Відкриваю вікно входу на Шафу — увійдіть і закрийте вікно",
     "robot_busy": "Робот уже працює",
     "robot_fake_login": "У підставному режимі вхід на Шафу не потрібен",
+    "ai_started": "Оновлюю: шукаю нові папки й відправляю на ШІ — результат з'явиться на панелі",
+    "ai_busy": "ШІ вже працює — зачекайте хвилину",
+    "ai_retry_done": "ШІ заповнило бланк заново — ваші правки збережено",
+    "ai_retry_failed": "ШІ не вдалося — старий бланк лишився (подробиці на панелі)",
+    "ai_budget": "Ліміт витрат на ШІ за добу вичерпано — спробуйте завтра",
+    "ai_no_key": "Немає ключа ШІ (ANTHROPIC_API_KEY) — скажіть Власнику",
+    "ai_settings": "Неправильні налаштування ШІ — скажіть Власнику (подробиці на панелі)",
+    "ai_photo": "Фото Картки не відкривається — ШІ не запускалось",
 }
 PROBLEM_HINTS = {
     "bad_folder_name": "Перейменуйте папку на номер поста (наприклад, 1342).",
@@ -160,6 +172,26 @@ def redirect(location: str) -> Response:
     return Response(303, headers={"Location": location})
 
 
+@dataclass
+class AiState:
+    """Панель ШІ: черга й що зараз робиться."""
+
+    ready: int = 0  # готові до відправки
+    young: int = 0  # пост молодший за 7 днів
+    pending: int = 0  # чекають відповіді ШІ
+    wait_days: int = batch.WAIT_DAYS
+    busy: str | None = None
+    note: str | None = None
+
+
+def _thread(job: Callable[[], None]) -> None:
+    threading.Thread(target=job, daemon=True).start()
+
+
+def _real_client() -> Any:
+    return ai.make_client(config.api_key())
+
+
 class App:
     def __init__(
         self,
@@ -172,6 +204,10 @@ class App:
         fake_shafa: bool = False,
         spawner: Callable[[list[str]], object] | None = None,
         lock_file: Path | None = None,
+        ai_client: Callable[[], Any] = _real_client,
+        run: Callable[[Callable[[], None]], None] = _thread,
+        clock: Callable[[], float] = time.monotonic,
+        today: Callable[[], datetime] = lambda: datetime.now().astimezone(),
     ) -> None:
         self.db_path = db_path
         self.root = root
@@ -184,6 +220,12 @@ class App:
         self.lock_file = lock_file
         self.process = None  # останній запущений з екрана процес робота
         self.started_at = 0.0
+        # ШІ: одна робота за раз (Оновити, збір результатів, «спробуй ще раз») — без подвійних оплат.
+        self.ai_client, self.run, self.clock, self.today = ai_client, run, clock, today
+        self.ai_lock = threading.Lock()
+        self.ai_busy: str | None = None
+        self.ai_note: str | None = None
+        self.collected_at: float | None = None
         self.env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(PACKAGE / "templates"),
             autoescape=True,
@@ -242,6 +284,8 @@ class App:
             return self.panel(request)
         if path == "/robot" and request.method == "POST":
             return self.robot_post(request)
+        if path == "/ai" and request.method == "POST":
+            return self.ai_post(request)
         if path.strip("/") in CARD_TABS and get:
             return self.tab_page(Status(path.strip("/")), request)
         if match := _ITEM.fullmatch(path):
@@ -272,9 +316,114 @@ class App:
             "tabs": TAB_TITLES,
             "counts": counts,
             "robot": self.robot_state(conn),
+            "ai": self.ai_state(conn),
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
         }
+
+    # --- ШІ ---
+
+    def ai_state(self, conn) -> AiState:
+        """Стан для панелі; заодно — збір готових пакетів раз на кілька хвилин (у фоні)."""
+        self._maybe_collect(conn)
+        try:
+            wait_days = batch.limits().wait_days
+        except batch.SetupError as error:
+            return AiState(busy=self.ai_busy, note=str(error))
+        q = batch.queue(conn, self.today(), wait_days)
+        return AiState(len(q.ready), q.young, q.pending, wait_days, self.ai_busy, self.ai_note)
+
+    def _maybe_collect(self, conn) -> None:
+        if not batch.open_batches(conn):
+            return
+        if self.collected_at is not None and self.clock() - self.collected_at < COLLECT_EVERY:
+            return
+        self._start(self._collect, "забираю результати ШІ…")
+
+    def _start(self, job: Callable[[], str | None], busy: str) -> bool:
+        """Запустити роботу ШІ у фоні; зайнято — False. Результат — рядок на панель."""
+        if not self.ai_lock.acquire(blocking=False):
+            return False
+        self.ai_busy = busy
+
+        def work() -> None:
+            try:
+                note = job()
+                if note:
+                    self.ai_note = note
+            except config.ConfigError:
+                self.ai_note = MESSAGES["ai_no_key"]
+            except batch.SetupError as error:
+                self.ai_note = str(error)
+            except Exception:  # noqa: BLE001 — фонова робота не валить сервер
+                traceback.print_exc()
+                self.ai_note = "ШІ: щось пішло не так — скажіть Власнику"
+            finally:
+                self.ai_busy = None
+                self.ai_lock.release()
+
+        self.run(work)
+        return True
+
+    def _collect(self) -> str | None:
+        self.collected_at = self.clock()
+        conn = self.connect()
+        try:
+            return batch.collected_text(batch.collect(conn, self.ai_client(), self.today()))
+        finally:
+            conn.close()
+
+    def _update(self) -> str | None:
+        """«Оновити»: нові папки (тексти постів — з бази) → забрати готове → новий пакет."""
+        self.collected_at = self.clock()
+        lim = batch.limits()
+        conn = self.connect()
+        try:
+            scan(conn, {}, list_folders(self.root, self.channel_id))
+            client = self.ai_client()
+            collected = batch.collected_text(batch.collect(conn, client, self.today()))
+            sent = batch.send(conn, client, self.root, self.today(), lim)
+            return "; ".join(t for t in (collected, batch.sent_text(sent, lim)) if t)
+        finally:
+            conn.close()
+
+    def ai_post(self, request: Request) -> Response:
+        action = (request.form.get("action") or [""])[0]
+        back = safe_back((request.form.get("back") or [""])[0])
+        sep = "&" if "?" in back else "?"
+        if action != "update":
+            return text(400, "Невідома дія")
+        started = self._start(self._update, "оновлюю й відправляю на ШІ…")
+        return redirect(f"{back}{sep}msg={'ai_started' if started else 'ai_busy'}")
+
+    def ai_retry(self, conn, item_id: int) -> str:
+        """«ШІ, спробуй ще раз»: одразу, звичайним запитом без кешу (D2). Повертає код повідомлення."""
+        if not self.ai_lock.acquire(blocking=False):
+            return "ai_busy"
+        try:
+            row = fill.retry_row(conn, item_id)
+            if row is None:
+                return "stale"
+            planned = fill.plan(conn, self.root, row)
+            if isinstance(planned, fill.Skipped):
+                return "ai_photo"
+            try:
+                left = batch.budget_left(conn, self.today(), batch.limits())
+                client = self.ai_client()
+            except batch.SetupError as error:
+                self.ai_note = str(error)
+                return "ai_settings"
+            except config.ConfigError:
+                return "ai_no_key"
+            if planned.estimate.cost_micro_usd > left:
+                return "ai_budget"
+            result = fill.retry(conn, client, planned)
+            if result.error:
+                self.ai_note = f"«ШІ, спробуй ще раз» ({planned.folder_name}): {result.error}"
+                return "ai_retry_failed"
+            return "ai_retry_done"
+        finally:
+            self.ai_lock.release()
 
     # --- Робот ---
 
@@ -292,7 +441,7 @@ class App:
         conn = self.connect()
         try:
             html = self.env.get_template("panel.html").render(
-                token=self.token, robot=self.robot_state(conn),
+                token=self.token, robot=self.robot_state(conn), ai=self.ai_state(conn),
                 back=safe_back(request.arg("back")), fake=self.fake_shafa,
             )  # fmt: skip
         finally:
@@ -423,6 +572,9 @@ class App:
                 if message in ("stale", "bad_link"):
                     return redirect(f"{back}?msg={message}")
                 return redirect(f"/{Status.PROBLEM}?msg={message}")
+            if action == "ai_retry":
+                message = self.ai_retry(conn, item_id)
+                return redirect(f"{back}?msg={message}")
             if action == "recheck" and (card.problem_code or "").startswith("robot_"):
                 if review.robot_retry(conn, item_id):
                     return redirect(f"/{Status.PROBLEM}?msg=robot_retry")
