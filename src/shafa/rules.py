@@ -111,3 +111,16 @@ def insole_lengths(text: str) -> list[float]:
     if len(halves) == 1 and min(halves) % 2:
         halves.add(min(halves) - 1)  # одиночне X,5 → X і X,5
     return [h / 2 for h in range(min(halves), max(halves) + 1)]
+
+
+GORE_TEX = re.compile(r"gore[\s-]?tex|(?<!\w)gtx(?!\w)", re.IGNORECASE)
+MEMBRANE = re.compile(r"мембран", re.IGNORECASE)
+
+
+def membrane(text: str) -> str | None:
+    """Мембрана: «Gore-Tex», «Є» (будь-яка інша) або None — поле не заповнюється."""
+    if GORE_TEX.search(text):
+        return "Gore-Tex"
+    if MEMBRANE.search(text):
+        return "Є"
+    return None
