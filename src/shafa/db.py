@@ -1,11 +1,11 @@
-"""База SQLite: пости, Картки, фото Карток."""
+"""База SQLite: пости, Картки, фото Карток, бланки ШІ і вартість запитів."""
 
 import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class Status(StrEnum):
@@ -49,6 +49,32 @@ CREATE TABLE photos (
 );
 """
 
+# Версія 2 (CORE-003): поля бланка ШІ і кожен запит до ШІ з токенами й ціною.
+BLANKS = """
+CREATE TABLE blanks (
+    item_id INTEGER NOT NULL REFERENCES items (id) ON DELETE CASCADE,
+    field   TEXT NOT NULL,
+    value   TEXT,               -- JSON
+    yellow  INTEGER NOT NULL CHECK (yellow IN (0, 1)),
+    reason  TEXT,
+    PRIMARY KEY (item_id, field)
+);
+
+CREATE TABLE ai_requests (
+    id             INTEGER PRIMARY KEY,
+    item_id        INTEGER REFERENCES items (id) ON DELETE SET NULL,
+    model          TEXT NOT NULL,
+    input_tokens   INTEGER NOT NULL,
+    output_tokens  INTEGER NOT NULL,
+    cost_micro_usd INTEGER NOT NULL,  -- мільйонні частки долара
+    error          TEXT,
+    created_at     TEXT NOT NULL
+);
+"""
+
+# Що виконати, щоб перейти з версії N на N + 1.
+MIGRATIONS = {1: BLANKS}
+
 
 def now() -> str:
     """Поточний час UTC у форматі ISO, до секунд."""
@@ -61,11 +87,17 @@ def connect(path: Path) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version == 0:
-        with conn:
-            conn.executescript(SCHEMA)
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-    elif version != SCHEMA_VERSION:
+    if version > SCHEMA_VERSION:
         conn.close()
         raise RuntimeError(f"Невідома версія бази {version} (очікується {SCHEMA_VERSION})")
+    if version == 0:
+        with conn:
+            conn.executescript(SCHEMA + BLANKS)
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        return conn
+    while version < SCHEMA_VERSION:  # старіша база: таблиці додаються, дані лишаються
+        with conn:
+            conn.executescript(MIGRATIONS[version])
+            version += 1
+            conn.execute(f"PRAGMA user_version = {version}")
     return conn

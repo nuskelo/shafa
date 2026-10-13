@@ -6,9 +6,29 @@ from shafa import db
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 1
-    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-    assert tables == {"posts", "items", "photos"}
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 2
+    assert tables(conn) == {"posts", "items", "photos", "blanks", "ai_requests"}
+
+
+def tables(conn):
+    return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+
+
+def test_version_1_migrated_and_data_kept(tmp_path):
+    path = tmp_path / "база.sqlite"
+    raw = sqlite3.connect(path)
+    raw.executescript(db.SCHEMA)
+    raw.execute("INSERT INTO posts VALUES (1, '2025-01-01T00:00:00', 'текст', 'export', 'x')")
+    raw.execute("PRAGMA user_version = 1")
+    raw.commit()
+    raw.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert {"blanks", "ai_requests"} <= tables(conn)
+    assert conn.execute("SELECT text FROM posts").fetchone()[0] == "текст"
+    conn.close()
 
 
 def test_reopen_keeps_data(tmp_path):
