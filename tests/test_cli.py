@@ -1,7 +1,9 @@
+import webbrowser
+
 import pytest
 
 from conftest import CHANNEL_ID, make_folder
-from shafa import ai, config
+from shafa import ai, config, web
 from shafa.__main__ import format_rules, main
 from shafa.export import Post
 from test_ai import GOOD, FakeClient, message
@@ -190,3 +192,69 @@ def test_settings_from_env_file(tmp_path, root, export_path, capsys):
     main(["scan", "--export", str(export_path), "--db", str(tmp_path / "б.sqlite")])
 
     assert capsys.readouterr().out == "Папок: 1 · нових: 1 · у Проблемах: 0\n"
+
+
+class FakeServer:
+    def __init__(self, app, port):
+        self.app, self.port, self.closed = app, port, False
+        app.port = port
+
+    def serve_forever(self):
+        raise KeyboardInterrupt  # Ctrl+C
+
+    def server_close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def fake_server(monkeypatch):
+    servers, opened = [], []
+
+    def make_server(app, port):
+        servers.append(FakeServer(app, port))
+        return servers[-1]
+
+    monkeypatch.setattr(web, "make_server", make_server)
+    monkeypatch.setattr(webbrowser, "open", opened.append)
+    return servers, opened
+
+
+def test_ui_opens_browser_and_stops_on_ctrl_c(conn, db_path, root, fake_server, capsys):
+    servers, opened = fake_server
+
+    assert main(["ui", "--db", str(db_path), "--root", str(root)]) == 0
+
+    (server,) = servers
+    assert server.port == web.DEFAULT_PORT and server.closed
+    assert opened == [f"http://127.0.0.1:{web.DEFAULT_PORT}/"]
+    assert server.app.cache_dir == db_path.resolve().parent / "thumbs"
+    assert server.app.root == root
+    assert "http://127.0.0.1:8765/" in capsys.readouterr().out
+
+
+def test_ui_purges_old_archive_at_start(conn, db_path, root, fake_server):
+    item_id = add_item(conn, root)
+    with conn:
+        conn.execute(
+            "UPDATE items SET status = 'archived', archived_at = '2000-01-01T00:00:00+00:00'"
+        )
+    thumbs = db_path.parent / "thumbs" / str(item_id)
+    thumbs.mkdir(parents=True)
+
+    main(["ui", "--db", str(db_path), "--root", str(root), "--no-browser", "--port", "9000"])
+
+    assert conn.execute("SELECT purged_at FROM items").fetchone()[0]
+    assert not thumbs.exists()
+    servers, opened = fake_server
+    assert (servers[0].port, opened) == (9000, [])
+
+
+def test_ui_needs_existing_db_and_root(tmp_path, root, fake_server, capsys):
+    with pytest.raises(SystemExit):
+        main(["ui", "--db", str(tmp_path / "нема.sqlite"), "--root", str(root)])
+    assert "Базу не знайдено" in capsys.readouterr().err
+    assert not (tmp_path / "нема.sqlite").exists()
+    with pytest.raises(SystemExit):
+        main(["ui", "--db", str(tmp_path / "нема.sqlite")])
+    assert "Головна папка" in capsys.readouterr().err
+    assert fake_server == ([], [])
