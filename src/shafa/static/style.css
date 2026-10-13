@@ -166,3 +166,23 @@ dialog { border: none; padding: 0.5rem; background: #111; color: #ccc; max-width
 dialog::backdrop { background: rgb(0 0 0 / 0.8); }
 dialog img { display: block; max-width: 94vw; max-height: 88vh; margin: 0 auto; }
 dialog p { margin: 0.3rem 0 0; text-align: center; font-size: 0.9rem; }
+
+/* Панель робота (UI-002) */
+#robot { background: var(--card); border-bottom: 1px solid var(--line); }
+.robot { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; align-items: center; padding: 0.6rem 1.5rem; max-width: 1400px; margin: 0 auto; }
+.robot-state { display: flex; flex-direction: column; }
+.robot-counts, .robot-last { color: var(--muted); font-size: 0.9rem; }
+.robot-buttons { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.robot-buttons .why { color: var(--muted); font-size: 0.9rem; }
+.robot-help { flex-basis: 100%; margin: 0; }
+.robot-running strong, .robot-pausing strong, .robot-stopping strong { color: var(--green); }
+.robot-login_needed strong, .robot-crashed strong, .robot-failed strong { color: var(--red); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.decide { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 0.8rem; }
+.decide label { flex-basis: 100%; }
+.decide input { max-width: 36rem; }
+.row.published { align-items: center; }
+.open { margin-left: auto; white-space: nowrap; }
+.sessions { border-collapse: collapse; background: var(--card); }
+.sessions th, .sessions td { text-align: left; padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--line); }
+.fake { flex-basis: 100%; margin: 0; padding: 0.3rem 0.6rem; background: #6a1b9a; color: #fff; font-weight: 700; border-radius: 4px; }

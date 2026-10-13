@@ -1,0 +1,23 @@
+<section class="robot robot-{{ robot.code }}" aria-live="polite">
+  {% if fake %}<p class="fake">ПІДСТАВНА ШАФА — тест, нічого не публікується на справжній сайт</p>{% endif %}
+  <div class="robot-state">
+    <strong>{{ robot.text }}</strong>
+    <span class="robot-counts">Опубліковано сьогодні {{ robot.published_today }} з {{ robot.day_limit }} · Схвалених {{ robot.approved }}</span>
+    {% if robot.last and "start" in robot.buttons %}<span class="robot-last">Останній запуск: {{ robot.last }}</span>{% endif %}
+  </div>
+  <form method="post" action="/robot" class="robot-buttons">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    {% if "start" in robot.buttons %}
+    <button name="action" value="start" class="approve"{% if not robot.can_start %} disabled{% endif %}>Старт</button>
+    {% if robot.why_not %}<span class="why">{{ robot.why_not }}</span>{% endif %}
+    {% endif %}
+    {% if "pause" in robot.buttons %}<button name="action" value="pause">Пауза</button>{% endif %}
+    {% if "resume" in robot.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
+    {% if "stop" in robot.buttons %}<button name="action" value="stop" class="reject">Стоп</button>{% endif %}
+    {% if "login" in robot.buttons %}<button name="action" value="login">Увійти на Шафу</button>{% endif %}
+  </form>
+  {% if robot.code == "login_needed" %}
+  <p class="robot-help">Робот вийшов із Шафи. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».</p>
+  {% endif %}
+</section>

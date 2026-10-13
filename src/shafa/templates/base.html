@@ -19,6 +19,9 @@
   <p class="waiting">Чекають ШІ: {{ counts["new"] }}</p>
   {% endif %}
 </header>
+<div id="robot" data-panel="/robot/panel?back={{ back | urlencode }}">
+{% include "panel.html" %}
+</div>
 {% if message %}
 <p class="message">{{ message }}</p>
 {% endif %}

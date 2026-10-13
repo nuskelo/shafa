@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Опубліковані · Шафа-помічник{% endblock %}
+{% block main %}
+<form class="search" method="get" action="/published">
+  <input type="search" name="q" value="{{ query }}" placeholder="Назва, бренд, номер поста або слово з тексту" aria-label="Пошук">
+  <button type="submit">Шукати</button>
+  {% if query %}<a href="/published">Скинути</a>{% endif %}
+</form>
+{% if not cards %}<p class="empty">{% if query %}Нічого не знайдено.{% else %}Тут поки порожньо.{% endif %}</p>{% endif %}
+<ul class="rows">
+{% for card in cards %}
+  {% set url, when = extra[card.id] %}
+  <li class="row published">
+    <span class="info">
+      <a class="name" href="/item/{{ card.id }}">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</a>
+      <span class="details">{{ [(card.fields["price"].value ~ " грн") if card.fields["price"].value, ("опубліковано " ~ local(when)) if when] | select | join(" · ") }}</span>
+      <span class="meta">{{ ("Пост " ~ card.post_id) if card.post_id }}</span>
+    </span>
+    {% if url %}<a class="open" href="{{ url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a>{% endif %}
+  </li>
+{% endfor %}
+</ul>
+{% endblock %}

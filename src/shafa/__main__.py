@@ -127,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_root(cmd)
     cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
     cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
+    cmd.add_argument("--fake-shafa", action="store_true", help=argparse.SUPPRESS)  # «мавпа»
     cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
     mode.add_argument("--login", action="store_true", help="відкрити профіль робота для входу")
@@ -285,7 +286,10 @@ def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             photos.drop_thumbnails(cache_dir, item_id)
     finally:
         conn.close()
-    app = web.App(args.db, root, cache_dir, channel_id=config.setting("TELEGRAM_CHANNEL_ID"))
+    app = web.App(
+        args.db, root, cache_dir, channel_id=config.setting("TELEGRAM_CHANNEL_ID"),
+        fake_shafa=args.fake_shafa,
+    )  # fmt: skip
     server = web.make_server(app, args.port)
     url = f"http://{web.HOST}:{app.port}/"
     print(f"Екран перевірки: {url}\nЗупинити — Ctrl+C")
