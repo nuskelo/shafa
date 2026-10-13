@@ -140,6 +140,8 @@ def build_parser() -> argparse.ArgumentParser:
     _add_root(cmd)
     cmd.add_argument("--post", type=int, action="append", help="номер поста (до 3 разів)")
     cmd.add_argument("--limit", type=int, help="скільки опублікувати (не більше ліміту доби)")
+    # Підставна Шафа (UI-002, D5): лише тести й «мавпа»; у довідці не показується.
+    cmd.add_argument("--fake-shafa", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -182,6 +184,8 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         limit = day_limit if args.limit is None else args.limit
         if not 1 <= limit <= day_limit:
             parser.error(f"--limit від 1 до {day_limit} (ліміт доби)")
+    if args.fake_shafa and not args.publish:
+        parser.error("--fake-shafa лише разом із --publish")
     if args.dry_fill and (not args.post or len(args.post) > form.MAX_CARDS):
         parser.error(f"--post від 1 до {form.MAX_CARDS} разів")
 
@@ -206,6 +210,8 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
         print(line, flush=True)
 
     with sync_playwright() as p:
+        if args.fake_shafa:
+            return _fake_publish(p, args, held, root, limit, day_limit, log)
         if args.login:
             print("Увійдіть на Шафу у відкритому вікні й закрийте його.")
             browser.wait_for_manual_login(p)
@@ -235,6 +241,31 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
                 conn.close()
         finally:
             session.close()
+    return 0
+
+
+def _fake_publish(p, args, held, root, limit: int, day_limit: int, log) -> int:
+    """Публікація на підставну Шафу: справжній двигун, браузер лише на 127.0.0.1 (D5)."""
+    import tempfile
+
+    from shafa.robot import fake, publish
+
+    server = fake.Server()
+    session = fake.FakeSession(p, server.base)
+    conn = db.connect(args.db)
+    try:
+        with tempfile.TemporaryDirectory(prefix="fake-screens-") as screens:
+            publish.Run(
+                conn, root, session, fake.FakeDriver, lambda s: [], Path(screens), held,
+                log=log, rand=fake.pause_seconds,
+            ).start(limit, day_limit)  # fmt: skip
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        conn.close()
+        log(f"Підставна Шафа: заблоковано запитів назовні — {len(session.outside())}")
+        session.close()
+        server.close()
     return 0
 
 
