@@ -1,5 +1,5 @@
 # CORE-003 — готово, чекає перегляду таблиці Власником і мержу
-**Гілка:** `feature/CORE-003-shi-blank` · **PR:** див. нижче · **Перевірки:** `make ci` зелений (292 тести); CI — у PR
+**Гілка:** `feature/CORE-003-shi-blank` · **PR:** #5 · **Перевірки:** `make ci` зелений (292 тести), `quality` і `windows-tests` зелені
 1. Фаза 0 закрита рішеннями D1–D5 (`claude-sonnet-5-5`, мислення вимкнене, фото 1092 px, JSON за схемою).
 2. Файли: нові `config.py`, `catalog.py`, `photos.py`, `ai.py`, `fill.py`, `prompts/blank.md` + тести; змінені `db.py` (схема 2), `__main__.py` (`fill`), `pyproject.toml`, `Makefile`, `quality.yml` (2 рядки встановлення), `.claude/settings.json`, `.gitignore`, `CLAUDE.md`, `docs/TECH_DEBT.md`.
 3. Відхилення: оркестрація — окремий `fill.py`; `scan` теж читає `.env`; `--limit` > 10 — помилка; биті фото → пропуск; пункти 3–4 — один коміт.
