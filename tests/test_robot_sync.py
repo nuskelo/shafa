@@ -100,8 +100,8 @@ def test_build_snapshot():
         "title": "Стать", "max": 1, "required": True, "choices": ["Унісекс"]
     }  # fmt: skip
     belts_entry = snapshot["sections"]["Аксесуари / Ремені та пояси / Ремені"]
-    assert entry["brands"] == belts_entry["brands"] == "b1"  # однаковий список — один раз
-    assert snapshot["brand_lists"] == {"b1": ["Ecco", "Nike", "Топ"], "b2": ["Vans", "Топ"]}
+    assert "brands" not in entry
+    assert snapshot["brands"] == ["Ecco", "Nike", "Vans", "Топ"]  # спільний, без повторів
     assert belts_entry["sizes"] == {} and belts_entry["slug"] == "remeni-poyasy/remeni"
 
 

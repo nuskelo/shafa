@@ -28,6 +28,6 @@ def test_real_snapshot_is_complete():
         "Аксесуари / Ремені та пояси",
     }
     assert "Дитячий одяг / Для хлопчиків / Взуття / Бутси" in sections
+    assert len(real["brands"]) > 5000 and "Skechers" in real["brands"]
     for entry in sections.values():
-        assert entry["brands"] in real["brand_lists"]
         assert all(c["choices"] for c in entry["characteristics"])

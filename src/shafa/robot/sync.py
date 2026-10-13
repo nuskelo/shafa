@@ -96,15 +96,13 @@ def build_snapshot(
     catalogs: dict[tuple[str, ...], tuple[dict, str]],
     checked: str,
 ) -> dict:
-    """Знімок: розділи за повним шляхом; однакові списки брендів зберігаються один раз."""
+    """Знімок: розділи за повним шляхом і спільний список брендів."""
     _, version = parse_tree(tree_response)
-    sections, brand_lists, keys = {}, {}, {}
+    sections, brands = {}, set()
     for path, (response, slug) in catalogs.items():
-        entry, brands = section_entry(response, slug)
-        brands = sorted(set(brands), key=str.casefold)  # порядок нам не важливий
-        key = keys.setdefault(tuple(brands), f"b{len(keys) + 1}")
-        brand_lists[key] = brands
-        sections[SEP.join(path)] = {**entry, "brands": key}
+        entry, names = section_entry(response, slug)
+        sections[SEP.join(path)] = entry
+        brands.update(names)
     return {
         "checked": checked,
         "source": "форма https://shafa.ua/uk/new, відповіді WEB_ProductFormCatalog (лише читання)",
@@ -112,7 +110,9 @@ def build_snapshot(
         "colors": [c["name"] for c in colors_response["data"]["filterColors"]],
         "conditions": [c["name"] for c in conditions_response["data"]["filterCondition"]],
         "sections": sections,
-        "brand_lists": brand_lists,
+        # Один спільний список: у кожного розділу Шафа дає лише ~500 брендів, разом — повніше.
+        # Потрібен лише для написання; у формі бренд шукається наживо.
+        "brands": sorted(brands, key=str.casefold),
     }
 
 

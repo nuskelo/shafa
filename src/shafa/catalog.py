@@ -135,9 +135,9 @@ def characteristic(path: str | None, field: str) -> dict[str, Any] | None:
     return next((c for c in entry["characteristics"] if c["title"] in titles), None)
 
 
-def brands(path: str) -> list[str]:
-    entry = section(path)
-    return snapshot()["brand_lists"][entry["brands"]] if entry else []
+def brands() -> list[str]:
+    """Бренди Шафи (об'єднання списків усіх розділів) — для написання назви бренду."""
+    return snapshot()["brands"]
 
 
 # --- Текст для інструкції ШІ ---

@@ -78,9 +78,8 @@ def test_characteristics_depend_on_type():
     assert catalog.characteristic("Свій / Шлях", "season") is None
 
 
-def test_brands_per_section():
-    assert "Skechers" in catalog.brands(WOMEN_SNEAKERS)
-    assert catalog.brands("Свій / Шлях") == []
+def test_brands_shared_list():
+    assert "Skechers" in catalog.brands() and "Lowa" in catalog.brands()
 
 
 def test_canonical():

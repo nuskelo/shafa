@@ -66,8 +66,8 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
         Step("category", "Розділ", path.split(catalog.SEP), catalog.section(path)["slug"]),
         Step("condition", "Стан", f["condition"]),
     ]
-    if f["brand"]:  # список Шафи у знімку обрізаний (~500) — шукаємо наживо, тут лише написання
-        brand = catalog.canonical(f["brand"], catalog.brands(path)) or f["brand"]
+    if f["brand"]:  # список у знімку неповний — шукаємо наживо, тут лише написання
+        brand = catalog.canonical(f["brand"], catalog.brands()) or f["brand"]
         steps.append(Step("brand", "Бренд", brand))
     if f["description"]:
         steps.append(Step("text", "Опис", f["description"], "descriptionUk"))
