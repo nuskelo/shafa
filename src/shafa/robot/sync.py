@@ -43,14 +43,21 @@ def parse_tree(tree_response: dict) -> tuple[dict, int]:
 
 def leaves(root: dict, groups: tuple[tuple[str, ...], ...] = GROUPS) -> list[tuple[str, ...]]:
     """Шляхи до типів у потрібних гілках, у порядку дерева."""
-    result = []
+    return list(leaf_slugs(root, groups))
+
+
+def leaf_slugs(
+    root: dict, groups: tuple[tuple[str, ...], ...] = GROUPS
+) -> dict[tuple[str, ...], str]:
+    """Шлях типу → його `slug` у дереві Шафи (ним звіряємо, що відкрився саме цей розділ)."""
+    result = {}
     for group in groups:
         node = root
         for name in group:
             node = next((c for c in node["subCatalogs"] if c["name"] == name), None)
             if node is None:
                 raise ValueError(f"У дереві Шафи немає гілки {SEP.join(group)}")
-        result += [(*group, c["name"]) for c in node["subCatalogs"]]
+        result |= {(*group, c["name"]): c["slug"] for c in node["subCatalogs"]}
     return result
 
 
@@ -156,11 +163,11 @@ def crawl(session: browser.Session, cache: Path, log=print) -> dict:
     tree = _from_batch(tree_info.value, TREE_OP)
     conditions = _from_batch(cond_info.value, CONDITIONS_OP)
     root, _ = parse_tree(tree)
-    paths = leaves(root)
-    log(f"Типів для обходу: {len(paths)}")
+    slugs = leaf_slugs(root)
+    log(f"Типів для обходу: {len(slugs)}")
     catalogs: dict[tuple[str, ...], tuple[dict, str]] = {}
     colors = None
-    for n, path in enumerate(paths, start=1):
+    for n, (path, slug) in enumerate(slugs.items(), start=1):
         saved = cache / (SEP.join(path).replace("/", "|") + ".json")
         if saved.is_file():
             stored = json.loads(saved.read_text(encoding="utf-8"))
@@ -168,36 +175,24 @@ def crawl(session: browser.Session, cache: Path, log=print) -> dict:
             colors = colors or stored.get("colors")
             continue
         session.open_form()
-        for name in path[:-1]:
-            session.click(_button(page, name), f"розділ {name}")
-        last = _button(page, path[-1])
-        with page.expect_response(_batch_op(page, CATALOG_OP), timeout=30000) as cat_info:
-            if colors is None:
-                with page.expect_response(_batch_op(page, COLORS_OP), timeout=30000) as col_info:
-                    session.click(last, f"розділ {path[-1]}")
-                colors = _from_batch(col_info.value, COLORS_OP)
-            else:
-                session.click(last, f"розділ {path[-1]}")
-        request = cat_info.value.request
-        slug = json.loads(request.post_data)
-        slug = (slug[0] if isinstance(slug, list) else slug)["variables"]["catalogSlug"]
-        catalogs[path] = (_from_batch(cat_info.value, CATALOG_OP), slug)
+        if colors is None:
+            with page.expect_response(_batch_op(page, COLORS_OP), timeout=30000) as col_info:
+                response = session.choose_category(path, slug)
+            colors = _from_batch(col_info.value, COLORS_OP)
+        else:
+            response = session.choose_category(path, slug)
+        catalogs[path] = (response, slug)
         saved.write_text(
-            json.dumps({"response": catalogs[path][0], "slug": slug, "colors": colors},
-                       ensure_ascii=False),
+            json.dumps({"response": response, "slug": slug, "colors": colors}, ensure_ascii=False),
             encoding="utf-8",
-        )  # fmt: skip
-        log(f"{n}/{len(paths)} {SEP.join(path)}")
+        )
+        log(f"{n}/{len(slugs)} {SEP.join(path)}")
         browser.pause(4.0, 8.0)
     if session.publish_attempts():
         raise RuntimeError(f"Заблоковано спроби змін: {session.publish_attempts()}")
     return build_snapshot(
         tree, colors, conditions, catalogs, datetime.now().astimezone().date().isoformat()
     )
-
-
-def _button(page: Any, name: str) -> Any:
-    return page.get_by_role("button", name=name, exact=True).locator("visible=true").first
 
 
 def main() -> int:  # pragma: no cover — живий обхід

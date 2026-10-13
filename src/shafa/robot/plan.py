@@ -26,7 +26,7 @@ class Step:
     #           sizes, colors, choice
     label: str  # як поле називається на Шафі — для звіту й помилок
     value: Any = None
-    target: str | None = None  # name поля для kind="text"
+    target: str | None = None  # name поля (kind="text") або slug розділу (kind="category")
 
 
 def _number(text: str) -> float | None:
@@ -63,7 +63,7 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
         Step("photos", "Фото", [str(p) for p in photos[:10]]),
         Step("own_photos", "Фото зроблені самостійно"),
         Step("text", "Назва", f["title"], "titleUk"),
-        Step("category", "Розділ", path.split(catalog.SEP)),
+        Step("category", "Розділ", path.split(catalog.SEP), catalog.section(path)["slug"]),
         Step("condition", "Стан", f["condition"]),
     ]
     if f["brand"]:

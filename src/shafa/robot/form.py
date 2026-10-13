@@ -29,7 +29,7 @@ class Driver(Protocol):
     def set_photos(self, paths: list[str]) -> None: ...
     def check_own_photos(self) -> None: ...
     def fill(self, name: str, value: str, label: str) -> None: ...
-    def choose_category(self, parts: list[str]) -> None: ...
+    def choose_category(self, parts: list[str], slug: str) -> None: ...
     def pick(self, label: str, values: list[str]) -> None: ...
     def keywords(self, words: list[str]) -> None: ...
 
@@ -44,7 +44,7 @@ def execute(steps: list[Step], driver: Driver) -> None:
         elif step.kind == "text":
             driver.fill(step.target, step.value, step.label)
         elif step.kind == "category":
-            driver.choose_category(step.value)
+            driver.choose_category(step.value, step.target)
         elif step.kind == "keywords":
             driver.keywords(step.value)
         elif step.kind in ("condition", "brand", "size_system"):
@@ -130,12 +130,11 @@ class PageDriver:
         field.first.fill(value)
         browser.pause()
 
-    def choose_category(self, parts: list[str]) -> None:
-        for name in parts:
-            button = self.page.get_by_role("button", name=name, exact=True).locator("visible=true")
-            if not button.count():
-                raise FieldMissing(f"Розділ: {name}")
-            self.session.click(button.first, f"розділ {name}")
+    def choose_category(self, parts: list[str], slug: str) -> None:
+        try:
+            self.session.choose_category(parts, slug)
+        except LookupError as error:
+            raise FieldMissing(f"Розділ: {error}") from error
         self.page.wait_for_load_state("networkidle")
 
     def pick(self, label: str, values: list[str]) -> None:

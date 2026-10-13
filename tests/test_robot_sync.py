@@ -110,3 +110,10 @@ def test_save_is_utf8_json(tmp_path):
     sync.save({"checked": "2026-10-13", "colors": ["Білий"]}, path)
     assert "Білий" in path.read_text(encoding="utf-8")
     assert json.loads(path.read_text(encoding="utf-8"))["colors"] == ["Білий"]
+
+
+def test_leaf_slugs_for_category_check():
+    root, _ = sync.parse_tree(TREE_RESPONSE)
+    assert sync.leaf_slugs(root, (("Аксесуари", "Ремені та пояси"),)) == {
+        ("Аксесуари", "Ремені та пояси", "Ремені"): "Ремені"
+    }

@@ -45,6 +45,7 @@ def test_full_plan_for_boots(conn, root):
     got = by_label(steps)
     assert got[("text", "Назва")] == "Шкіряні черевики ecco 38 розміру"
     assert got[("category", "Розділ")] == ["Жіночий одяг", "Взуття", "Черевики"]
+    assert next(s for s in steps if s.kind == "category").target == "zhenskaya-obuv/botinki"
     assert got[("condition", "Стан")] == "Ідеальний"
     assert got[("brand", "Бренд")] == "Ecco"  # написання Шафи
     assert got[("size_system", "Розмір")] == "Європейський"

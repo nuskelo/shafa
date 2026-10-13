@@ -38,6 +38,21 @@ def operation(request: Any) -> str | None:
     return item.get("operationName") if isinstance(item, dict) else None
 
 
+MARK_SEEN = "() => document.querySelectorAll('button').forEach(b => b.dataset.robotSeen = '1')"
+
+
+def catalog_slug(request: Any) -> str | None:
+    """`catalogSlug` запиту `WEB_ProductFormCatalog` (форма питає поля обраного розділу)."""
+    try:
+        data = json.loads(request.post_data or "")
+    except (ValueError, TypeError):
+        return None
+    for item in data if isinstance(data, list) else [data]:
+        if isinstance(item, dict) and item.get("operationName") == "WEB_ProductFormCatalog":
+            return (item.get("variables") or {}).get("catalogSlug")
+    return None
+
+
 def launch(playwright: Any) -> Any:
     profile = profile_dir()
     profile.mkdir(parents=True, exist_ok=True)
@@ -99,6 +114,37 @@ class Session:
         if not guard.key_allowed(key, in_keywords):
             raise guard.Forbidden(f"Клавіша {key} поза полем ключових слів")
         self.page.keyboard.press(key)
+
+    def choose_category(self, parts: list[str] | tuple[str, ...], slug: str) -> dict:
+        """Клікнути шлях розділу; повернути відповідь форми про розділ (звірену за `slug`).
+
+        Тип може зватися як верхня гілка («Чоловічий одяг / Взуття / Аксесуари»): перед кожним
+        кліком наявні кнопки позначаються, і наступний рівень береться лише з нових кнопок.
+        """
+        for i, name in enumerate(parts):
+            button = self.page.get_by_role("button", name=name, exact=True).locator("visible=true")
+            if i:
+                button = button.and_(self.page.locator("button:not([data-robot-seen])"))
+            if not button.count():
+                raise LookupError(name)
+            self.page.evaluate(MARK_SEEN)
+            if i < len(parts) - 1:
+                self.click(button.first, f"розділ {name}")
+                continue
+            with self.page.expect_response(
+                lambda r: catalog_slug(r.request) is not None, timeout=30000
+            ) as info:
+                self.click(button.first, f"розділ {name}")
+            got = catalog_slug(info.value.request)
+            if got != slug:
+                raise LookupError(f"{name}: Шафа відкрила розділ {got}, а не {slug}")
+            body = info.value.json()
+            if not isinstance(body, list):
+                return body
+            items = json.loads(info.value.request.post_data)
+            ops = [i.get("operationName") for i in items]
+            return body[ops.index("WEB_ProductFormCatalog")]
+        raise LookupError("порожній шлях")
 
     def open_form(self) -> bool:
         """Відкрити форму «Додати товар». False — входу немає (Шафа веде на сторінку входу)."""

@@ -27,8 +27,8 @@ class FakeDriver:
     def fill(self, name, value, label):
         self._call("fill", name, label)
 
-    def choose_category(self, parts):
-        self._call("category", *parts)
+    def choose_category(self, parts, slug):
+        self._call("category", slug, *parts)
 
     def pick(self, label, values):
         self._call("pick", label, *values)
@@ -79,7 +79,7 @@ def test_execute_maps_steps_to_driver():
             Step("photos", "Фото", ["a", "b"]),
             Step("own_photos", "Фото зроблені самостійно"),
             Step("text", "Назва", "Кеди", "titleUk"),
-            Step("category", "Розділ", ["Жіночий одяг", "Взуття"]),
+            Step("category", "Розділ", ["Жіночий одяг", "Взуття"], "zhenskaya-obuv"),
             Step("condition", "Стан", "Новий"),
             Step("sizes", "Розмір", ["38", "38.5"]),
             Step("keywords", "Ключові слова", ["кеди"]),
@@ -90,7 +90,7 @@ def test_execute_maps_steps_to_driver():
         ("photos", 2),
         ("own_photos",),
         ("fill", "titleUk", "Назва"),
-        ("category", "Жіночий одяг", "Взуття"),
+        ("category", "zhenskaya-obuv", "Жіночий одяг", "Взуття"),
         ("pick", "Стан", "Новий"),
         ("pick", "Розмір", "38", "38.5"),
         ("keywords", "кеди"),
@@ -260,3 +260,15 @@ def test_keyword_suggestions_are_not_publish_attempts():
     )  # fmt: skip
     session._route(FakeRoute(), request)
     assert session.blocked and session.publish_attempts() == []
+
+
+def test_catalog_slug_of_form_request():
+    request = FakeRequest(
+        "POST", "https://shafa.ua/api/v3/graphiql-batch",
+        b'[{"operationName": "WEB_ProductScore", "variables": {"slug": "x"}},'
+        b' {"operationName": "WEB_ProductFormCatalog", "variables": {"catalogSlug": "obuv/aksessuary"}}]',
+    )  # fmt: skip
+    request.post_data = request.post_data_buffer.decode()
+    assert browser.catalog_slug(request) == "obuv/aksessuary"
+    request.post_data = '{"operationName": "WEB_HeaderUser"}'
+    assert browser.catalog_slug(request) is None
