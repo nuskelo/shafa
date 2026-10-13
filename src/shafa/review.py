@@ -190,13 +190,13 @@ class Card:
     def approve_block(self) -> str | None:
         """Чому не можна схвалити (код повідомлення) або None."""
         section = self.fields["section"]
-        if section.yellow:
-            return "section_yellow"
         if not section.value:
             return "no_section"
         path = self.path
-        if path is None:
+        if path is None:  # свій шлях: Шафа такого розділу не має (D8) — «Так, вірно» не допоможе
             return "section_unknown"
+        if section.yellow:
+            return "section_yellow"
         if catalog.sizes(path) and not self.fields["sizes"].value:
             return "no_sizes"
         if catalog.section(path)["color_required"] and not self.fields["colors"].value:

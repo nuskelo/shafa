@@ -44,7 +44,7 @@ def catalog(id_, sizes, characteristics, brands):
                 ],
             },
             "filterTopBrands": {
-                "topBrands": [{"name": b} for b in brands[:1]],
+                "topBrands": [{"name": "Топ"}],  # лише в «топі», не в загальному списку
                 "brands": [{"name": b} for b in brands],
             },
         }
@@ -101,7 +101,7 @@ def test_build_snapshot():
     }  # fmt: skip
     belts_entry = snapshot["sections"]["Аксесуари / Ремені та пояси / Ремені"]
     assert entry["brands"] == belts_entry["brands"] == "b1"  # однаковий список — один раз
-    assert snapshot["brand_lists"] == {"b1": ["Ecco", "Nike"], "b2": ["Vans"]}
+    assert snapshot["brand_lists"] == {"b1": ["Ecco", "Nike", "Топ"], "b2": ["Vans", "Топ"]}
     assert belts_entry["sizes"] == {} and belts_entry["slug"] == "remeni-poyasy/remeni"
 
 

@@ -355,6 +355,12 @@ def test_title(title, reason):
     assert field.yellow and field.reason == reason
 
 
+def test_title_up_to_150_is_fine():
+    title = "Шкіряні черевики pavers " + "дуже гарні " * 8 + "38 розміру"
+    assert 100 < len(title) <= ai.TITLE_MAX == 150
+    assert not check(title=title)["title"].yellow
+
+
 def test_season_outside_list():
     field = check(season=["Міжсезоння"])["season"]
     assert (field.value, field.yellow) == (["Міжсезоння"], True)

@@ -479,7 +479,7 @@ def test_manual_keywords_not_touched(conn, root):
 @pytest.mark.parametrize(
     ("blank", "block"),
     [
-        ([ai.Field("section", "Жіночий одяг / Взуття / Ласти"), *READY[1:]], "section_yellow"),
+        ([ai.Field("section", "Жіночий одяг / Взуття / Ласти"), *READY[1:]], "section_unknown"),
         ([READY[0], READY[2]], "no_sizes"),
         (READY[:2], "no_colors"),
         (
@@ -505,9 +505,9 @@ def test_own_section_path_cannot_be_approved(conn, root):
         True,
         "розділу немає в довіднику Шафи",
     )
-    assert c.approve_block() == "section_yellow"
+    assert c.approve_block() == "section_unknown"
     review.save(conn, c, form_of(c), confirm="section")  # «Так, вірно» не допомагає
-    assert review.act(conn, item_id, "approve") == "section_yellow"
+    assert review.act(conn, item_id, "approve") == "section_unknown"
 
 
 def test_values_outside_shafa_list_stay_yellow_after_edit(conn, root):
