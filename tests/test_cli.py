@@ -271,6 +271,11 @@ def test_ui_needs_existing_db_and_root(tmp_path, root, fake_server, capsys):
         (["--dry-fill", "--db", "{db}"] + ["--post", "1"] * 4, "--post від 1 до 3"),
         (["--login", "--sync-catalog"], "not allowed with argument"),
         ([], "one of the arguments"),
+        (["--publish"], "Базу не знайдено"),
+        (["--publish", "--db", "{db}", "--limit", "31"], "--limit від 1 до 30"),
+        (["--publish", "--db", "{db}", "--limit", "0"], "--limit від 1 до 30"),
+        (["--publish", "--dry-fill", "--db", "{db}"], "not allowed with argument"),
+        (["--stop"], "Базу не знайдено"),
     ],
 )
 def test_robot_arguments_checked_before_browser(db_path, root, args, message, capsys):
@@ -278,3 +283,21 @@ def test_robot_arguments_checked_before_browser(db_path, root, args, message, ca
     with pytest.raises(SystemExit):
         main(["robot", "--root", str(root), *args])
     assert message in capsys.readouterr().err
+
+
+def test_publish_limit_from_settings(db_path, root, monkeypatch, capsys):
+    monkeypatch.setenv("SHAFA_DAILY_LIMIT", "5")
+    with pytest.raises(SystemExit):
+        main(["robot", "--root", str(root), "--publish", "--db", str(db_path), "--limit", "6"])
+    assert "--limit від 1 до 5" in capsys.readouterr().err
+
+
+def test_pause_resume_stop_reach_running_session(conn, db_path, capsys):
+    assert main(["robot", "--stop", "--db", str(db_path)]) == 1
+    assert "не публікує" in capsys.readouterr().out
+    with conn:
+        conn.execute("INSERT INTO sessions (started_at) VALUES ('x')")
+
+    for flag, stored in (("--pause", "pause"), ("--resume", None), ("--stop", "stop")):
+        assert main(["robot", flag, "--db", str(db_path)]) == 0
+        assert conn.execute("SELECT command FROM sessions").fetchone()[0] == stored

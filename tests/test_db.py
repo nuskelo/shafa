@@ -6,9 +6,12 @@ from shafa import db
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 3
-    assert tables(conn) == {"posts", "items", "photos", "blanks", "ai_requests", "edits"}
-    assert {"archived_at", "purged_at"} <= columns(conn, "items")
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 4
+    assert tables(conn) == {
+        "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions"
+    }  # fmt: skip
+    assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
+            "published_at", "session_id"} <= columns(conn, "items")  # fmt: skip
 
 
 def tables(conn):
@@ -51,7 +54,7 @@ def test_version_2_migrated_and_blank_kept(tmp_path):
 
     conn = db.connect(path)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert "edits" in tables(conn)
     row = conn.execute("SELECT status, archived_at, purged_at FROM items").fetchone()
     assert tuple(row) == ("review", None, None)
@@ -92,7 +95,46 @@ def test_statuses():
         "new",
         "review",
         "approved",
+        "publishing",
         "published",
         "problem",
         "archived",
     ]
+
+
+def test_version_3_migrated_keeps_photos_blanks_and_edits(tmp_path):
+    """Перебудова `items` (новий CHECK) не видаляє каскадом фото, бланки й правки."""
+    path = tmp_path / "база.sqlite"
+    raw = sqlite3.connect(path)
+    raw.execute("PRAGMA foreign_keys = ON")
+    old_statuses = "'new', 'review', 'approved', 'published', 'problem', 'archived'"
+    raw.executescript(db.SCHEMA.replace(db._STATUSES, old_statuses) + db.BLANKS + db.EDITS)
+    raw.execute(
+        "INSERT INTO items (folder_name, post_id, status, created_at, updated_at, archived_at) "
+        "VALUES ('1342', 1342, 'approved', 'x', 'x', NULL)"
+    )
+    raw.execute("INSERT INTO photos VALUES (1, 1, 'IMG_1.JPG')")
+    raw.execute("INSERT INTO blanks VALUES (1, 'title', '\"Кеди\"', 0, NULL)")
+    raw.execute("INSERT INTO edits VALUES (1, 'title', '\"Кеди Ecco\"', 'x')")
+    raw.execute("PRAGMA user_version = 3")
+    raw.commit()
+    with pytest.raises(sqlite3.IntegrityError):  # старий CHECK не знав нового статусу
+        raw.execute("UPDATE items SET status = 'publishing'")
+    raw.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    assert conn.execute("SELECT count(*) FROM photos").fetchone()[0] == 1
+    assert conn.execute("SELECT count(*) FROM blanks").fetchone()[0] == 1
+    assert conn.execute("SELECT count(*) FROM edits").fetchone()[0] == 1
+    assert tuple(conn.execute("SELECT folder_name, post_id, status FROM items").fetchone()) == (
+        "1342", 1342, "approved"
+    )  # fmt: skip
+    with conn:
+        conn.execute("UPDATE items SET status = 'publishing'")
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    with conn:  # зв'язки працюють і після перебудови: видалення Картки прибирає її фото
+        conn.execute("DELETE FROM items")
+    assert conn.execute("SELECT count(*) FROM photos").fetchone()[0] == 0
+    conn.close()

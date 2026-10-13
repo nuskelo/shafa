@@ -4,6 +4,9 @@
 2. Мережа: на Шафу йдуть лише GraphQL-запити на читання; з мутацій — тільки завантаження фото
    (`UploadPhoto` на `/api/v3/graphiql`, рішення D3) і лише коли воно дозволене. Усе інше — блок.
 3. Клавіатура: Enter — лише в полі ключових слів (Enter у полі назви відправив би форму).
+
+Єдиний виняток (ROBOT-002): у режимі `--publish` одна кнопка «Додати річ» і один запит
+`WEB_CreateProduct` на Картку в стані `publishing`. Квитки на виняток видає `browser.Session`.
 """
 
 import json
@@ -30,6 +33,14 @@ UPLOAD_OPERATION = "UploadPhoto"
 UPLOAD_FIELD = "uploadPhoto"
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 
+# Публікація: сторінка додає до назв операцій префікс `WEB_` і шле мутацію окремим JSON на
+# `/api/v3/graphiql` (бандл форми 13.10.2026, Фаза 0 ROBOT-002).
+PUBLISH_BUTTON = "Додати річ"
+CREATE_URL = "https://shafa.ua/api/v3/graphiql"
+CREATE_OPERATION = "WEB_CreateProduct"
+CREATE_FIELD = "createProduct"
+PUBLISHED = "публікація"
+
 _OPERATION = re.compile(r"(?<![\w$])(query|mutation|subscription)\b")
 _NAME = re.compile(r"[_A-Za-z]\w*")
 
@@ -43,6 +54,13 @@ def click_allowed(text: str, type_attr: str | None = None) -> bool:
     if (type_attr or "").lower() == "submit":
         return False
     return not FORBIDDEN_CLICK.search(text or "")
+
+
+def publish_click_allowed(text: str, type_attr: str | None) -> bool:
+    """Кнопка публікації: лише submit з текстом рівно «Додати річ» (не «Зберегти зміни» тощо)."""
+    return (type_attr or "").lower() == "submit" and " ".join((text or "").split()) == (
+        PUBLISH_BUTTON
+    )
 
 
 def key_allowed(key: str, in_keywords: bool) -> bool:
@@ -101,10 +119,31 @@ def _multipart_fields(content_type: str, body: bytes) -> dict[str, str]:
     return fields
 
 
+def is_create(url: str, data: object) -> bool:
+    """Чи це рівно один запит створення товару (і нічого більше в тому самому документі)."""
+    if url.split("?")[0] != CREATE_URL or not isinstance(data, dict):
+        return False
+    query = data.get("query")
+    return (
+        data.get("operationName") == CREATE_OPERATION
+        and isinstance(query, str)
+        and [m.group(1) for m in _OPERATION.finditer(query)] == ["mutation"]
+        and root_fields(query) == [CREATE_FIELD]
+    )
+
+
 def request_verdict(
-    method: str, url: str, content_type: str, body: bytes | None, allow_upload: bool
+    method: str,
+    url: str,
+    content_type: str,
+    body: bytes | None,
+    allow_upload: bool,
+    allow_create: bool = False,
 ) -> tuple[bool, str]:
-    """Чи пропустити запит браузера (дозволено, причина)."""
+    """Чи пропустити запит браузера (дозволено, причина).
+
+    `allow_create` — квиток на один запит публікації (лише режим `--publish`, Картка `publishing`).
+    """
     if method.upper() in READ_METHODS:
         return True, "читання"
     parts = urlsplit(url)
@@ -132,6 +171,8 @@ def request_verdict(
         data = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return False, "не JSON"
+    if allow_create and is_create(url, data):
+        return True, PUBLISHED
     items = data if isinstance(data, list) else [data]
     if not items or not all(isinstance(i, dict) for i in items):
         return False, "не GraphQL"

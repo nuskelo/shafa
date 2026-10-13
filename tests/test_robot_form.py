@@ -205,9 +205,9 @@ class FakeRoute:
         self.result = "abort"
 
 
-def bare_session(allow_upload=False):
+def bare_session(allow_upload=False, publish=False):
     session = browser.Session.__new__(browser.Session)
-    session.allow_upload, session.blocked, session.uploads = allow_upload, [], 0
+    session._setup(allow_upload or publish, publish)
     session.page = type("P", (), {"keyboard": FakeKeyboard()})()
     return session
 

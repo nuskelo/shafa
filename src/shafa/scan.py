@@ -14,6 +14,24 @@ MAX_PHOTOS = 10
 # Статуси, які сканування може міняти. Картки в роботі (review і далі) не чіпає.
 SCANNABLE = (Status.NEW, Status.PROBLEM)
 
+# «Липкі» проблеми публікації (D2): товар міг уже з'явитися на Шафі. Сканування їх не чіпає —
+# повертає лише людина, перевіривши Шафу. Інакше Картка пішла б у new → ШІ → друга публікація.
+STICKY = ("publish_uncertain", "possible_duplicate", "publish_error")
+
+
+def robot_problem(problem_code: str | None) -> bool:
+    """Проблема публікації чи робота: бланк і правки лишаються, повертає лише людина."""
+    return problem_code in STICKY or (problem_code or "").startswith("robot_")
+
+
+def touchable(status: str, problem_code: str | None) -> bool:
+    """Чи може сканування змінити Картку з таким статусом і кодом проблеми.
+
+    Проблеми робота (`robot_…`) теж не чіпає: інакше Картка пішла б у new і ШІ заповнило б бланк
+    знову (TD-015). «Перевірити ще раз» повертає їх у Схвалені (`review.robot_retry`).
+    """
+    return status in SCANNABLE and not robot_problem(problem_code)
+
 
 @dataclass(frozen=True)
 class Problem:
@@ -91,7 +109,7 @@ def _save_item(conn: sqlite3.Connection, folder: Folder, problem: tuple[str, str
             (folder.name, folder.post_id, status, code, text, stamp, stamp),
         ).lastrowid
     else:
-        if row["status"] not in SCANNABLE:
+        if not touchable(row["status"], row["problem_code"]):
             return
         item_id = row["id"]
         photos = tuple(
@@ -139,6 +157,8 @@ def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
     for row in rows:
         if row["folder_name"] in present or row["problem_code"] == "folder_missing":
             continue
+        if robot_problem(row["problem_code"]):
+            continue
         conn.execute(
             """
             UPDATE items SET status = ?, problem_code = 'folder_missing',
@@ -183,9 +203,9 @@ def rescan_folder(conn: sqlite3.Connection, folder_name: str, folders: list[Fold
     """
     with conn:
         row = conn.execute(
-            "SELECT id, status FROM items WHERE folder_name = ?", (folder_name,)
+            "SELECT id, status, problem_code FROM items WHERE folder_name = ?", (folder_name,)
         ).fetchone()
-        if row is None or row["status"] not in SCANNABLE:
+        if row is None or not touchable(row["status"], row["problem_code"]):
             return None
         folder = next((f for f in folders if f.name == folder_name), None)
         if folder is None:

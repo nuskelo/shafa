@@ -24,7 +24,7 @@ from PIL import UnidentifiedImageError
 from shafa import catalog, db, photos, review
 from shafa.db import Status
 from shafa.folders import list_folders
-from shafa.scan import rescan_folder
+from shafa.scan import STICKY, rescan_folder
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -60,6 +60,7 @@ MESSAGES = {
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
     "recheck_new": "Папку перевірено: усе добре, Картка чекає на ШІ",
     "recheck_problem": "Папку перевірено: проблема лишилась",
+    "sticky": "Спершу перевірте Шафу. Повернути цю Картку зможе лише людина (кнопки — згодом)",
 }
 PROBLEM_HINTS = {
     "bad_folder_name": "Перейменуйте папку на номер поста (наприклад, 1342).",
@@ -73,6 +74,15 @@ PROBLEM_HINTS = {
     "folder_missing": "Папку перейменовано або видалено.",
     "robot_field_missing": "Шафа, мабуть, змінила форму. Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
     "ai_error": "ШІ не заповнило бланк. «Перевірити ще раз» поверне Картку в чергу на ШІ.",
+    "publish_uncertain": "Робот натиснув «Додати річ», але не дочекався відповіді. Перевірте на Шафі, чи товар з'явився. Робот сам не повторює.",
+    "possible_duplicate": "Схожий товар уже є на Шафі або цей пост уже опубліковано. Повторне оголошення заборонене правилами Шафи.",
+    "publish_error": "Шафа не прийняла товар (текст помилки вище). Перевірте Шафу й скажіть Власнику.",
+    "robot_logged_out": "Робот не увійшов на Шафу. Власник: python -m shafa robot --login. «Перевірити ще раз» поверне Картку в Схвалені.",
+    "robot_brand_missing": "Бренду немає в списку Шафи (OQ-004). Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
+    "robot_photos": "Не всі фото завантажились на Шафу. «Перевірити ще раз» поверне Картку в Схвалені.",
+    "robot_not_ready": "Картку не можна передати роботу (текст вище). «Перевірити ще раз» поверне Картку в Схвалені.",
+    "robot_not_sent": "Форма на Шафі не надіслалась (товар не створено). Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
+    "robot_publish_blocked": "Захист робота не пропустив запит публікації — товар не створено. Скажіть Власнику.",
 }
 
 SECURITY_HEADERS = {
@@ -283,6 +293,8 @@ class App:
                 if review.robot_retry(conn, item_id):
                     return redirect(f"/{Status.PROBLEM}?msg=robot_retry")
                 return redirect(f"{back}?msg=stale")
+            if action == "recheck" and card.problem_code in STICKY:
+                return redirect(f"{back}?msg=sticky")
             if action == "recheck":
                 folders = list_folders(self.root, self.channel_id)
                 status = rescan_folder(conn, card.folder_name, folders)
