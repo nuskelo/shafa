@@ -241,15 +241,22 @@ def call(client: Any, request: dict[str, Any]) -> tuple[dict[str, Any], Usage]:
     """Надіслати запит. Відповідь — словник JSON і використані токени, або AiError."""
     try:
         message = client.messages.create(**request)
-    except anthropic.AuthenticationError as error:
-        raise AiError("Ключ Claude API не прийнято (401)") from error
-    except anthropic.RateLimitError as error:
-        raise AiError("Забагато запитів до Claude API (429), спробуйте пізніше") from error
-    except anthropic.APIStatusError as error:
-        raise AiError(f"Помилка Claude API ({error.status_code})") from error
-    except anthropic.APIConnectionError as error:
-        raise AiError("Немає з'єднання з Claude API") from error
+    except (anthropic.APIStatusError, anthropic.APIConnectionError) as error:
+        raise AiError(error_text(error)) from error
     return parse(message)
+
+
+def error_text(error: anthropic.AnthropicError) -> str:
+    """Помилка API простими словами, без тексту відповіді (там може бути що завгодно)."""
+    if isinstance(error, anthropic.AuthenticationError):
+        return "Ключ Claude API не прийнято (401)"
+    if isinstance(error, anthropic.RateLimitError):
+        return "Забагато запитів до Claude API (429), спробуйте пізніше"
+    if isinstance(error, anthropic.APIStatusError):
+        return f"Помилка Claude API ({error.status_code})"
+    if isinstance(error, anthropic.APIConnectionError):
+        return "Немає з'єднання з Claude API"
+    return "Помилка Claude API"
 
 
 def parse(message: Any, batch: bool = False) -> tuple[dict[str, Any], Usage]:

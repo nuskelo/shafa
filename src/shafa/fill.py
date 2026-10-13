@@ -135,7 +135,7 @@ def log_request(
     )
 
 
-def _set_status(conn: sqlite3.Connection, item_id: int, error: str | None) -> bool:
+def set_status(conn: sqlite3.Connection, item_id: int, error: str | None) -> bool:
     """Новий статус лише для Картки, що досі `new`. Повертає, чи змінено."""
     status, code = (Status.PROBLEM, "ai_error") if error else (Status.REVIEW, None)
     cursor = conn.execute(
@@ -155,12 +155,12 @@ def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
     except ai.AiError as error:
         with conn:
             log_request(conn, planned.item_id, error.usage, str(error))
-            _set_status(conn, planned.item_id, str(error))
+            set_status(conn, planned.item_id, str(error))
         return Filled(planned.folder_name, error.usage, error=str(error))
     fields = ai.check_answer(answer, [p.file_name for p in planned.photos], planned.post_text)
     with conn:
         log_request(conn, planned.item_id, usage, None)
-        if _set_status(conn, planned.item_id, None):  # Картку вже взяли в роботу — бланк не чіпаємо
+        if set_status(conn, planned.item_id, None):  # Картку вже взяли в роботу — бланк не чіпаємо
             save_blank(conn, planned.item_id, fields)
     return Filled(planned.folder_name, usage, yellow=sum(f.yellow for f in fields))
 
