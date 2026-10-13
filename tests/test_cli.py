@@ -1,8 +1,11 @@
 import pytest
 
 from conftest import CHANNEL_ID, make_folder
+from shafa import ai, config
 from shafa.__main__ import format_rules, main
 from shafa.export import Post
+from test_ai import GOOD, FakeClient, message
+from test_fill import add_item
 
 
 @pytest.fixture(autouse=True)
@@ -79,3 +82,111 @@ def test_format_rules_insole_and_membrane():
         "Устілка: 24,5 · 25 · 25,5",
         "Мембрана: Gore-Tex",
     ]
+
+
+# --- fill ---
+
+
+@pytest.fixture
+def db_path(conn, tmp_path):
+    return tmp_path / "база.sqlite"
+
+
+@pytest.fixture
+def no_client(monkeypatch):
+    def forbidden(key):
+        raise AssertionError("клієнт API не має створюватись")
+
+    monkeypatch.setattr(ai, "make_client", forbidden)
+
+
+def fill_args(db_path, root, *extra):
+    return ["fill", "--db", str(db_path), "--root", str(root), *extra]
+
+
+def test_fill_dry_run_sends_nothing(conn, db_path, root, no_client, capsys):
+    add_item(conn, root)
+    add_item(conn, root, folder="1349", post_id=1349, photos=("a.jpg",))
+
+    code = main(fill_args(db_path, root, "--dry-run"))
+
+    out = capsys.readouterr().out.splitlines()
+    assert code == 0
+    assert out[0].startswith("1342 (пост 1342): фото 2, ≈ ")
+    assert out[1].startswith("1349 (пост 1349): фото 1, ≈ ")
+    assert out[2].startswith("Карток: 2 · орієнтовно ")
+    assert out[2].endswith("· нічого не надіслано")
+    assert conn.execute("SELECT count(*) FROM ai_requests").fetchone()[0] == 0
+    assert [r[0] for r in conn.execute("SELECT DISTINCT status FROM items")] == ["new"]
+
+
+def test_fill_without_key_explains_and_sends_nothing(conn, db_path, root, no_client, capsys):
+    add_item(conn, root)
+    config.ENV_FILE.write_text("OTHER=test-secret-value\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        main(fill_args(db_path, root))
+
+    captured = capsys.readouterr()
+    assert "Немає ANTHROPIC_API_KEY у .env" in captured.err
+    assert "test-secret-value" not in captured.err + captured.out
+
+
+def test_fill_uses_key_from_env_file(conn, db_path, root, monkeypatch, capsys):
+    add_item(conn, root)
+    config.ENV_FILE.write_text("ANTHROPIC_API_KEY=test-key-z-faylu\n", encoding="utf-8")
+    keys = []
+    client = FakeClient(message({**GOOD, "photo_order": ["IMG_1.JPG", "IMG_2.JPG"]}))
+    monkeypatch.setattr(ai, "make_client", lambda key: keys.append(key) or client)
+
+    code = main(fill_args(db_path, root))
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert keys == ["test-key-z-faylu"]
+    assert "test-key-z-faylu" not in out
+    assert out == (
+        "1342: бланк готовий, жовтих полів 0 (3,60 ¢)\nБланків: 1 з 1 · вартість 3,60 ¢\n"
+    )
+
+
+def test_fill_reports_api_error(conn, db_path, root, monkeypatch, capsys):
+    add_item(conn, root)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    client = FakeClient(message("не json"))
+    monkeypatch.setattr(ai, "make_client", lambda key: client)
+
+    main(fill_args(db_path, root))
+
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "1342: помилка — Відповідь ШІ не читається (3,60 ¢)"
+    )
+
+
+@pytest.mark.parametrize("limit", ["0", "11"])
+def test_fill_limit_capped(db_path, root, no_client, limit, capsys):
+    with pytest.raises(SystemExit):
+        main(fill_args(db_path, root, "--limit", limit, "--dry-run"))
+    assert "--limit від 1 до 10" in capsys.readouterr().err
+
+
+def test_fill_nothing_to_do(db_path, root, no_client, capsys):
+    main(fill_args(db_path, root, "--post", "5", "--dry-run"))
+    assert capsys.readouterr().out == "Немає Картки поста 5 у статусі new\n"
+
+
+def test_fill_missing_db_not_created(tmp_path, root, no_client, capsys):
+    path = tmp_path / "немає.sqlite"
+    with pytest.raises(SystemExit):
+        main(fill_args(path, root, "--dry-run"))
+    assert not path.exists()
+    assert "Базу не знайдено" in capsys.readouterr().err
+
+
+def test_settings_from_env_file(tmp_path, root, export_path, capsys):
+    make_folder(root, CHANNEL_ID + "10", ["1.jpg"])
+    config.ENV_FILE.write_text(f"SHAFA_ROOT_DIR={root}\n", encoding="utf-8")
+
+    main(["scan", "--export", str(export_path), "--db", str(tmp_path / "б.sqlite")])
+
+    assert capsys.readouterr().out == "Папок: 1 · нових: 1 · у Проблемах: 0\n"
