@@ -1,5 +1,6 @@
 """Замок «один робот» (UI-002, D1): файловий замок ОС, без перевірок PID. Працює й на Windows."""
 
+import os
 import subprocess
 import sys
 import time
@@ -17,6 +18,19 @@ HOLDER = (
 )
 
 
+def start_holder(path):
+    """Інший живий процес робота, що тримає замок (Windows: вивід у UTF-8, не cp1252)."""
+    process = subprocess.Popen(
+        [sys.executable, "-c", HOLDER, str(path)],
+        stdout=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    assert process.stdout.readline().strip() == "тримаю"
+    return process
+
+
 @pytest.fixture
 def path(tmp_path):
     return tmp_path / "robot.lock"
@@ -24,14 +38,7 @@ def path(tmp_path):
 
 @pytest.fixture
 def other_process(path):
-    """Інший живий процес робота, що тримає замок."""
-    process = subprocess.Popen(
-        [sys.executable, "-c", HOLDER, str(path)],
-        stdout=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-    )
-    assert process.stdout.readline().strip() == "тримаю"
+    process = start_holder(path)
     yield process
     process.kill()
     process.wait()
@@ -108,12 +115,8 @@ def test_second_run_refused_and_touches_nothing(conn, root, tmp_path, data_dir, 
     db_path = tmp_path / "база.sqlite"
     item = live_robot_state(conn, root)
     args = [a.replace("{db}", str(db_path)).replace("{root}", str(root)) for a in args]
-    holder = subprocess.Popen(
-        [sys.executable, "-c", HOLDER, str(data_dir / "robot.lock")],
-        stdout=subprocess.PIPE, text=True, encoding="utf-8",
-    )  # fmt: skip
+    holder = start_holder(data_dir / "robot.lock")
     try:
-        assert holder.stdout.readline().strip() == "тримаю"
         assert main(["robot", *args]) == 2
     finally:
         holder.kill()
