@@ -126,10 +126,16 @@ class PageDriver:
             if time.monotonic() > deadline:
                 raise FieldMissing("Фото (не завантажились)")
             self.page.wait_for_timeout(500)
-        browser.pause(3.0, 4.0)
         counter = self.page.get_by_text(re.compile(r"\(\d+ з \d+ завантажено\)")).first
-        match = re.search(r"\((\d+) з", counter.inner_text()) if counter.count() else None
-        return int(match.group(1)) if match else len(paths)
+        shown = 0
+        for _ in range(40):  # останнє фото форма показує не одразу — до 20 с
+            match = re.search(r"\((\d+) з", counter.inner_text()) if counter.count() else None
+            shown = int(match.group(1)) if match else len(paths)
+            if shown >= len(paths):
+                break
+            self.page.wait_for_timeout(500)
+        browser.pause(2.0, 3.0)
+        return shown
 
     def check_own_photos(self) -> bool:
         """Галочка «фото зроблені самостійно» (D3). У формі 13.10.2026 її немає — тоді False."""
