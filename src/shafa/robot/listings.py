@@ -23,7 +23,7 @@ TABS = {
 }
 SIMILAR = 0.6  # схожість назв (0…1) за однакових розділу, розміру й бренду
 SITE = "https://shafa.ua"
-STALL_ROUNDS = 12  # прокруток поспіль без нових товарів — список не довантажується
+STALL_ROUNDS = 20  # прокруток поспіль без нових товарів — список не довантажується
 
 
 class ListingsError(Exception):
@@ -127,6 +127,9 @@ def load(session: browser.Session, log: Callable[[str], None] = print) -> list[L
             while not pages or pages[-1][1]:
                 if stall >= STALL_ROUNDS:
                     break
+                if stall:  # унизу сторінки довантаження інколи «засинає» — трохи вгору й знову вниз
+                    page.mouse.wheel(0, -2500)
+                    browser.pause(0.5, 1.0)
                 page.mouse.wheel(0, 20000)
                 browser.pause(1.5, 3.0)
                 count = sum(len(p[0]) for p in pages)

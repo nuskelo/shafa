@@ -122,6 +122,18 @@ def already_published(conn: sqlite3.Connection, item_id: int, post_id: int | Non
     return row[0] if row else None
 
 
+def card_duplicate(
+    card: review.Card, listings: list[listings_mod.Listing]
+) -> listings_mod.Listing | None:
+    """Її товар на Шафі, схожий на схвалену Картку (D4), або None."""
+    f = {name: view.value for name, view in card.fields.items()}
+    brand = catalog.canonical(f["brand"], catalog.brands()) if f["brand"] else None
+    return listings_mod.find_duplicate(
+        f["title"], catalog.section(card.path)["slug"],
+        [catalog.shafa_size(s) for s in f["sizes"] or []], brand or f["brand"], listings,
+    )  # fmt: skip
+
+
 def _problem(conn: sqlite3.Connection, item_id: int, source: str, code: str, text: str) -> bool:
     with conn:
         cursor = conn.execute(
@@ -337,13 +349,7 @@ class Run:
         except PlanError as error:
             self._problem(report, card, ok, "robot_not_ready", str(error))
             return None
-        f = {name: view.value for name, view in card.fields.items()}
-        brand = catalog.canonical(f["brand"], catalog.brands()) if f["brand"] else None
-        duplicate = listings_mod.find_duplicate(
-            f["title"], catalog.section(card.path)["slug"],
-            [catalog.shafa_size(s) for s in f["sizes"] or []], brand or f["brand"], listings,
-        )  # fmt: skip
-        if duplicate:
+        if duplicate := card_duplicate(card, listings):
             self._problem(report, card, ok, "possible_duplicate",
                           f"На Шафі вже є схожий товар: «{duplicate.name}» {duplicate.url}")  # fmt: skip
             return None
