@@ -249,3 +249,35 @@ def test_rescan_leaves_cards_in_work_alone(conn, posts, root, status):
     assert rescan(conn, root, "10") is None
     assert rescan(conn, root, "нема") is None
     assert items(conn)["10"] == (status, None, None)
+
+
+def test_published_folder_is_not_a_product_folder(conn, posts, root):
+    make_folder(root, "10", ["1.jpg"])
+    make_folder(root, "Опубліковано/11", ["1.jpg"])
+
+    result = run(conn, posts, root)
+
+    assert items(conn) == {"10": ("new", None, None)}
+    assert (result.folders, result.problems) == (1, [])
+
+
+@pytest.mark.parametrize("code", ["publish_uncertain", "possible_duplicate", "publish_error"])
+def test_scan_never_resets_publication_problem(conn, posts, root, code):
+    """Інакше Картка пішла б у new → ШІ → перевірка → друга публікація (D2)."""
+    folder = make_folder(root, "10", ["1.jpg"])
+    run(conn, posts, root)
+    with conn:
+        conn.execute(
+            "UPDATE items SET status = 'problem', problem_code = ?, problem_text = 'т'", (code,)
+        )
+
+    run(conn, posts, root)
+    assert items(conn)["10"] == ("problem", code, "т")
+    assert rescan(conn, root, "10") is None
+    for file in folder.iterdir():
+        file.unlink()
+    folder.rmdir()
+    run(conn, posts, root)
+    assert rescan(conn, root, "10") is None
+
+    assert items(conn)["10"] == ("problem", code, "т")

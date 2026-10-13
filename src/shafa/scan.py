@@ -14,6 +14,15 @@ MAX_PHOTOS = 10
 # Статуси, які сканування може міняти. Картки в роботі (review і далі) не чіпає.
 SCANNABLE = (Status.NEW, Status.PROBLEM)
 
+# «Липкі» проблеми публікації (D2): товар міг уже з'явитися на Шафі. Сканування їх не чіпає —
+# повертає лише людина, перевіривши Шафу. Інакше Картка пішла б у new → ШІ → друга публікація.
+STICKY = ("publish_uncertain", "possible_duplicate", "publish_error")
+
+
+def touchable(status: str, problem_code: str | None) -> bool:
+    """Чи може сканування змінити Картку з таким статусом і кодом проблеми."""
+    return status in SCANNABLE and problem_code not in STICKY
+
 
 @dataclass(frozen=True)
 class Problem:
@@ -91,7 +100,7 @@ def _save_item(conn: sqlite3.Connection, folder: Folder, problem: tuple[str, str
             (folder.name, folder.post_id, status, code, text, stamp, stamp),
         ).lastrowid
     else:
-        if row["status"] not in SCANNABLE:
+        if not touchable(row["status"], row["problem_code"]):
             return
         item_id = row["id"]
         photos = tuple(
@@ -137,7 +146,7 @@ def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
     ).fetchall()
     stamp = now()
     for row in rows:
-        if row["folder_name"] in present or row["problem_code"] == "folder_missing":
+        if row["folder_name"] in present or row["problem_code"] in ("folder_missing", *STICKY):
             continue
         conn.execute(
             """
@@ -183,9 +192,9 @@ def rescan_folder(conn: sqlite3.Connection, folder_name: str, folders: list[Fold
     """
     with conn:
         row = conn.execute(
-            "SELECT id, status FROM items WHERE folder_name = ?", (folder_name,)
+            "SELECT id, status, problem_code FROM items WHERE folder_name = ?", (folder_name,)
         ).fetchone()
-        if row is None or row["status"] not in SCANNABLE:
+        if row is None or not touchable(row["status"], row["problem_code"]):
             return None
         folder = next((f for f in folders if f.name == folder_name), None)
         if folder is None:

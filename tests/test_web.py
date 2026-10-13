@@ -263,6 +263,20 @@ def test_recheck_problem_still_there(conn, app, root):
     assert location(response) == f"/item/{item_id}?msg=recheck_problem"
 
 
+def test_recheck_never_returns_publication_problem(conn, app, root, item_id):
+    with conn:
+        conn.execute(
+            "UPDATE items SET status = 'problem', problem_code = 'publish_uncertain', "
+            "problem_text = 'Перевір на Шафі'"
+        )
+    assert "Робот сам не повторює" in html(get(app, f"/item/{item_id}"))
+
+    response = post(app, f"/item/{item_id}", action="recheck")
+
+    assert location(response) == f"/item/{item_id}?msg=sticky"
+    assert status(conn, item_id) == Status.PROBLEM
+
+
 def test_archive_purged_on_list(conn, app, item_id, tmp_path):
     get(app, f"/thumb/{item_id}/1")
     assert (tmp_path / "thumbs" / str(item_id)).is_dir()

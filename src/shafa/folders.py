@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 PHOTO_SUFFIXES = {".jpg", ".jpeg"}
+PUBLISHED_DIR = "Опубліковано"  # зарезервована назва: сюди робот переносить опубліковане (D1)
 _POST_NUMBER = re.compile(r"\d{1,7}")
 _DIGITS = re.compile(r"(\d+)")
 
@@ -49,10 +50,10 @@ def list_photos(folder: Path) -> tuple[str, ...]:
 
 
 def list_folders(root: Path, channel_id: str | None) -> list[Folder]:
-    """Папки товарів першого рівня, у порядку «як у провіднику»."""
+    """Папки товарів першого рівня, у порядку «як у провіднику». Теку «Опубліковано» пропускає."""
     folders = [
         Folder(p.name, post_id_from_name(p.name, channel_id), list_photos(p))
         for p in root.iterdir()
-        if p.is_dir() and not _is_hidden(p)
+        if p.is_dir() and not _is_hidden(p) and p.name != PUBLISHED_DIR
     ]
     return sorted(folders, key=lambda f: natural_key(f.name))
