@@ -45,7 +45,7 @@ def test_both_folder_name_formats_become_new(conn, posts, root):
     assert photos(conn, "10") == ["IMG_9.JPG", "IMG_10.JPG"]
     row = conn.execute("SELECT post_id FROM items WHERE folder_name = ?", (CHANNEL_ID + "11",))
     assert row.fetchone()[0] == 11
-    assert conn.execute("SELECT count(*) FROM posts WHERE source = 'export'").fetchone()[0] == 5
+    assert conn.execute("SELECT count(*) FROM posts WHERE source = 'export'").fetchone()[0] == 8
 
 
 @pytest.mark.parametrize(
@@ -55,6 +55,9 @@ def test_both_folder_name_formats_become_new(conn, posts, root):
         ("999", ["1.jpg"], "post_not_found", "Поста з номером 999 немає в експорті"),
         ("12", ["1.jpg"], "no_text", "У поста 12 немає тексту"),
         ("20", ["1.jpg"], "no_text", "У поста 20 немає тексту"),
+        ("21", ["1.jpg"], "no_price", "У поста 21 немає ціни"),
+        ("21", [], "no_price", "У поста 21 немає ціни"),
+        ("22", ["1.jpg"], "many_items", "У пості кілька товарів з різними цінами"),
         ("13", ["знімок.png", "Thumbs.db"], "no_photos", "У папці немає фото .jpg"),
         ("13", [f"{i}.jpg" for i in range(11)], "too_many_photos", "Більше 10 фото"),
     ],
@@ -67,6 +70,11 @@ def test_problem_reasons(conn, posts, root, name, files, code, text):
     assert result.new == 0
     assert [(p.folder_name, p.code, p.text) for p in result.problems] == [(name, code, text)]
     assert items(conn)[name] == ("problem", code, text)
+
+
+def test_bought_for_and_strikethrough_price_is_one_item(conn, posts, root):
+    make_folder(root, "23", ["1.jpg"])
+    assert run(conn, posts, root).new == 1
 
 
 def test_ten_photos_is_fine(conn, posts, root):
@@ -94,7 +102,7 @@ def test_rerun_does_not_duplicate(conn, posts, root):
 
     assert [tuple(r) for r in conn.execute("SELECT * FROM items")] == [tuple(r) for r in before]
     assert conn.execute("SELECT count(*) FROM photos").fetchone()[0] == 2
-    assert conn.execute("SELECT count(*) FROM posts").fetchone()[0] == 5
+    assert conn.execute("SELECT count(*) FROM posts").fetchone()[0] == 8
     assert (result.folders, result.new, len(result.problems)) == (2, 1, 1)
 
 

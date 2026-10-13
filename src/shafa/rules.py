@@ -124,3 +124,11 @@ def membrane(text: str) -> str | None:
     if MEMBRANE.search(text):
         return "Є"
     return None
+
+
+def many_items(text: str) -> bool:
+    """Кілька товарів в одному пості: 2+ рядки, кожен зі своєю ціною.
+
+    Закреслена стара ціна стоїть у тому самому рядку, що й нова, тож окремим товаром не рахується.
+    """
+    return sum(1 for line in text.splitlines() if PRICE.search(line)) >= 2

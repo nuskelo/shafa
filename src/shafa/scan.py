@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from shafa.db import Status, now
 from shafa.export import Post
 from shafa.folders import Folder, natural_key
+from shafa.rules import many_items, price_from_text
 
 MAX_PHOTOS = 10
 
@@ -61,6 +62,10 @@ def find_problem(
         return "post_not_found", f"Поста з номером {post_id} немає в експорті"
     if not texts[post_id].strip():
         return "no_text", f"У поста {post_id} немає тексту"
+    if price_from_text(texts[post_id]) is None:
+        return "no_price", f"У поста {post_id} немає ціни"
+    if many_items(texts[post_id]):
+        return "many_items", "У пості кілька товарів з різними цінами"
     if not folder.photos:
         return "no_photos", "У папці немає фото .jpg"
     if len(folder.photos) > MAX_PHOTOS:
