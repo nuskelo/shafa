@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from shafa.config import API_KEY, ConfigError, api_key, read_env_file, setting
+from shafa.config import API_KEY, ConfigError, api_key, data_dir, read_env_file, setting
 
 FAKE_KEY = "test-key-vyhadanyi-123"
 
@@ -59,3 +61,15 @@ def test_no_key_error_has_no_values(tmp_path):
         api_key(path)
     assert str(error.value) == "Немає ANTHROPIC_API_KEY у .env"
     assert FAKE_KEY not in repr(error.value)
+
+
+def test_data_dir_from_setting(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHAFA_DATA_DIR", str(tmp_path / "дані"))
+    assert data_dir() == tmp_path / "дані"
+
+
+def test_data_dir_default_outside_repo(monkeypatch):
+    monkeypatch.delenv("SHAFA_DATA_DIR", raising=False)
+    path = data_dir()
+    assert path.name == "shafa"
+    assert not path.resolve().is_relative_to(Path(__file__).resolve().parents[1])

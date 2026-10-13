@@ -20,7 +20,7 @@ def make_folder(root: Path, name: str, photos: list[str]) -> Path:
 def no_real_settings(tmp_path_factory, monkeypatch):
     """Тести не бачать справжнього `.env` і ключів середовища — лише те, що задали самі."""
     monkeypatch.setattr(config, "ENV_FILE", tmp_path_factory.mktemp("env") / ".env")
-    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "SHAFA_ROOT_DIR"):
+    for name in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "SHAFA_ROOT_DIR", "SHAFA_DATA_DIR"):
         monkeypatch.delenv(name, raising=False)
 
 

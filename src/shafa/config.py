@@ -4,6 +4,7 @@
 """
 
 import os
+import sys
 from pathlib import Path
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -39,3 +40,22 @@ def api_key(env_file: Path | None = None) -> str:
     if key is None:
         raise ConfigError(f"Немає {API_KEY} у .env")
     return key
+
+
+DATA_DIR = "SHAFA_DATA_DIR"
+
+
+def data_dir() -> Path:
+    """Тека даних програми поза репозиторієм: профіль робота, скріншоти.
+
+    `SHAFA_DATA_DIR`, інакше Windows `%LOCALAPPDATA%\\shafa`, Mac `~/Library/Application Support/
+    shafa`, інші `~/.local/share/shafa`.
+    """
+    custom = setting(DATA_DIR)
+    if custom:
+        return Path(custom)
+    if os.name == "nt":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "shafa"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "shafa"
+    return Path.home() / ".local" / "share" / "shafa"
