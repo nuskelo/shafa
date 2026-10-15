@@ -7,7 +7,10 @@
 - D3: фото «як фото» і файлами; у папку — що прийшло (файл — оригінал), у канал — перше фото,
   завантажене як фото.
 - D4: файлом лише JPG і PNG (PNG → JPG), інше — «Надішли як звичайне фото або JPG».
-- D5: усе з одного чату протягом 2 хв від останнього повідомлення — одна чернетка.
+- D5 (уточнено Власником): кожен підписаний пост — фото з підписом або альбом, де є підпис, —
+  окрема чернетка й окреме прев'ю (вона може переслати кілька готових постів поспіль). Частини
+  одного альбому — завжди разом (`media_group_id`). Правило «2 хв» лише для неповного: фото без
+  підпису чіпляються до тексту, надісланого окремо, і навпаки.
 - D6: підпис — як у її постах: порожній рядок, «Пишіть сюди 👉 @…», без форматування.
 - D7: дата поста — дата повідомлення в каналі, місцевий час без поясу (як в Експорті).
 - D8: папка з номером уже є — фото в «<номер>-бот» і повідомлення Власнику.
@@ -108,6 +111,7 @@ class Settings:
 
 
 NO_TAG = re.compile(r"^\s*без\s+хеш\s*тег\w*\s*[.!]?\s*$", re.IGNORECASE)
+COMMENTS = re.compile(r"^\s*всі\s+фото\s+в\s+коментар\w*\W*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -125,7 +129,9 @@ def compose(texts: list[str], photos: int = 1) -> Composed:
     рядок «без хештега» від неї — явна згода без хештега (у пост він не йде)."""
     lines = "\n".join(t.strip() for t in texts if t and t.strip()).split("\n")
     no_tag = any(NO_TAG.match(line) for line in lines)
-    body = "\n".join(line for line in lines if not NO_TAG.match(line)).strip()
+    # «Всі фото в коментарях» з пересланого поста — прибираємо: додамо самі, якщо фото ≥ 2
+    lines = [line for line in lines if not NO_TAG.match(line) and not COMMENTS.match(line)]
+    body = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if not body:
         return Composed(None, ask="text")
     decision = decide(body)
@@ -278,9 +284,10 @@ class Bot:
             self.say(chat_id, TEXTS[refusal or "not_photo"])
             return
         stamp = self._stamp()
+        group = message.get("media_group_id")
         with self.conn:
             self.conn.execute("INSERT INTO bot_updates VALUES (?, ?)", (update_id, now()))
-            draft = self._open_draft(chat_id)
+            draft = self._target_draft(chat_id, part is not None, bool(text), group)
             if draft is None:
                 draft_id = self.conn.execute(
                     "INSERT INTO bot_drafts (chat_id, state, created_at, last_message_at, "
@@ -296,8 +303,8 @@ class Bot:
                 )
             file_id, kind = part or (None, None)
             self.conn.execute(
-                "INSERT OR IGNORE INTO bot_draft_parts VALUES (?, ?, ?, ?, ?)",
-                (draft_id, message.get("message_id"), text, file_id, kind),
+                "INSERT OR IGNORE INTO bot_draft_parts VALUES (?, ?, ?, ?, ?, ?)",
+                (draft_id, message.get("message_id"), text, file_id, kind, group),
             )
 
     def _part(self, message: dict) -> tuple[tuple[str, str] | None, str | None]:
@@ -321,17 +328,44 @@ class Bot:
             return None, "not_photo"
         return None, None
 
-    def _open_draft(self, chat_id: int) -> sqlite3.Row | None:
-        """Чернетка, до якої додається повідомлення: остання в цьому чаті не пізніше 2 хв тому;
-        якщо бот у ній щось спитав (фото, текст, розмір) — не пізніше 10 хв."""
+    def _target_draft(
+        self, chat_id: int, has_photo: bool, has_text: bool, group: str | None
+    ) -> sqlite3.Row | None:
+        """Чернетка, до якої додати повідомлення, або None — нова чернетка.
+
+        - Частина альбому — до чернетки з цим альбомом.
+        - Фото з підписом — новий пост, окрема чернетка.
+        - Фото без підпису чи окремий текст — до останньої чернетки цього чату (не пізніше 2 хв; бот
+          щось спитав — 10 хв), якщо їй бракує фото чи тексту або бот у ній щось спитав.
+        """
+        if group:
+            row = self.conn.execute(
+                "SELECT d.* FROM bot_drafts d JOIN bot_draft_parts p ON p.draft_id = d.id "
+                "WHERE d.chat_id = ? AND p.media_group = ? AND d.state IN ('collecting', 'preview') "
+                "ORDER BY d.id DESC LIMIT 1",
+                (chat_id, group),
+            ).fetchone()
+            if row is not None:
+                return row
+        if has_photo and has_text:
+            return None
         since = (self.clock() - WINDOW).isoformat(timespec="seconds")
         asked_since = (self.clock() - ASK_WINDOW).isoformat(timespec="seconds")
-        return self.conn.execute(
+        latest = self.conn.execute(
             "SELECT * FROM bot_drafts WHERE chat_id = ? AND state IN ('collecting', 'preview') "
             "AND (last_message_at >= ? OR (state = 'collecting' AND asked = 1 "
             "AND last_message_at >= ?)) ORDER BY id DESC LIMIT 1",
             (chat_id, since, asked_since),
         ).fetchone()
+        if latest is None:
+            return None
+        photos, texts = self.conn.execute(
+            "SELECT count(file_id), count(text) FROM bot_draft_parts WHERE draft_id = ?",
+            (latest["id"],),
+        ).fetchone()
+        if not photos or not texts or latest["asked"]:
+            return latest
+        return None
 
     # --- Прев'ю ---
 

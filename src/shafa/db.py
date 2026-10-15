@@ -225,6 +225,7 @@ CREATE TABLE bot_draft_parts (
     text       TEXT,
     file_id    TEXT,
     kind       TEXT CHECK (kind IN ('photo', 'jpeg', 'png')),
+    media_group TEXT,  -- альбом Telegram: частини одного альбому — завжди одна чернетка
     PRIMARY KEY (draft_id, message_id)
 );
 

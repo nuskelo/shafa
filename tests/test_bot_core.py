@@ -313,14 +313,14 @@ def test_preview_waits_for_silence(conn, bot, tg, upd, clock):
     assert state(conn) == "collecting" and tg.calls == []
 
 
-def test_more_after_preview_makes_new_preview(conn, bot, tg, upd, clock):
-    send_post(bot, tg, upd, clock, files=1)
+def test_late_album_part_makes_new_preview(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=2)  # альбом «g», підпис на першій частині
     first_preview = last_preview_id(tg)
     tg.files["f9"] = jpeg()
-    bot.handle(upd(message=photo(20, "f9")))
+    bot.handle(upd(message=photo(20, "f9", group="g")))  # запізніла частина того ж альбому
     assert state(conn) == "collecting"
 
-    press(upd, bot, tg, preview=first_preview)  # стара кнопка, поки дописує
+    press(upd, bot, tg, preview=first_preview)  # стара кнопка, поки альбом ще приходить
     assert tg.answers()[-1] == "Ти ще дописуєш — за мить покажу нове прев'ю."
     clock.pass_(seconds=4)
     bot.tick()
@@ -331,7 +331,21 @@ def test_more_after_preview_makes_new_preview(conn, bot, tg, upd, clock):
 
     press(upd, bot, tg)
     assert len(tg.channel_posts) == 1
-    assert "Збережено фото для Шафи: 2." in tg.texts(SELLER)[-1]
+    assert "Збережено фото для Шафи: 3." in tg.texts(SELLER)[-1]
+
+
+def test_photo_without_caption_after_ready_post_is_separate(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1)
+    first_preview = last_preview_id(tg)
+    tg.files["f9"] = jpeg()
+    bot.handle(upd(message=photo(20, "f9")))
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    assert [state(conn, 1), state(conn, 2)] == ["preview", "collecting"]
+    assert tg.texts(SELLER)[-1] == "Надішли текст поста до цих фото."
+    press(upd, bot, tg, preview=first_preview)
+    assert len(tg.channel_posts) == 1 and "Збережено фото для Шафи: 1." in tg.texts(SELLER)[-1]
 
 
 # --- Один пост ---
@@ -848,3 +862,129 @@ def test_only_no_hashtag_phrase_is_not_a_text(conn, bot, tg, upd, clock):
     bot.tick()
     assert tg.texts(SELLER)[-1] == "Надішли текст поста до цих фото."
     assert tg.last_preview is None
+
+
+# --- Кілька готових постів поспіль (переслані зі «Збережених») ---
+
+
+def forwarded_post(upd, bot, tg, first_msg, group, caption, files, caption_at=0):
+    """Пересланий альбом: частини з одним `media_group_id`, підпис на одній із частин."""
+    origin = {"type": "user", "sender_user": {"id": SELLER}, "date": 1_791_000_000}
+    for i in range(files):
+        file_id = f"{group}-{i + 1}"
+        tg.files[file_id] = jpeg(color=("red", "green", "blue")[i % 3])
+        body = photo(first_msg + i, file_id, caption=caption if i == caption_at else None,
+                     group=group if files > 1 else None)  # fmt: skip
+        bot.handle(upd(message={**body, "forward_origin": origin}))
+
+
+def previews(tg):
+    return [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]]
+
+
+def test_three_forwarded_albums_three_previews_in_order(conn, bot, tg, upd, clock):
+    texts = [
+        "Кросівки Lowa 37 розміру. 1200грн",
+        "Черевики Ecco 38 розмір. 1500грн",
+        "Шкіряна сумка Furla. 1800грн",
+    ]
+    for n, text in enumerate(texts):
+        forwarded_post(upd, bot, tg, 10 + n * 10, f"g{n}", text, files=3, caption_at=n % 3)
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    shown = previews(tg)
+    assert [p["caption"].split("\n")[0] for p in shown] == texts
+    assert [p["markup"]["inline_keyboard"][0][0]["callback_data"] for p in shown] == [
+        "pub:1", "pub:2", "pub:3"
+    ]  # fmt: skip
+    assert [p["photo"] for p in shown] == ["g0-1", "g1-1", "g2-1"]  # перше фото свого альбому
+    assert conn.execute("SELECT count(*) FROM bot_draft_parts").fetchone()[0] == 9
+
+    # друга кнопка публікує лише другий пост
+    query = {"id": "cb", "from": {"id": SELLER}, "data": "pub:2",
+             "message": {"message_id": 0, "chat": chat()}}  # fmt: skip
+    preview_ids = [
+        r[0] for r in conn.execute("SELECT preview_message_id FROM bot_drafts ORDER BY id")
+    ]
+    query["message"]["message_id"] = preview_ids[1]
+    bot.handle(upd(callback_query=query))
+
+    assert len(tg.channel_posts) == 1
+    assert tg.channel_posts[0][1].startswith(texts[1])
+    assert [state(conn, i) for i in (1, 2, 3)] == ["preview", "published", "preview"]
+
+
+def test_forwarded_single_photos_each_its_own_preview(conn, bot, tg, upd, clock):
+    forwarded_post(upd, bot, tg, 10, "a", "Кеди 38 розмір. 800грн", files=1)
+    forwarded_post(upd, bot, tg, 11, "b", "Кеди 39 розмір. 900грн", files=1)
+    clock.pass_(seconds=4)
+    bot.tick()
+    assert [p["caption"].split("\n")[1] for p in previews(tg)] == [
+        "#VS_38_розмір", "#VS_39_розмір"
+    ]  # fmt: skip
+
+
+@pytest.mark.parametrize("text_first", [False, True])
+def test_album_without_caption_plus_separate_text_one_preview(
+    conn, bot, tg, upd, clock, text_first
+):
+    if text_first:
+        bot.handle(upd(message=message(9, text="Черевики Ecco 38 розмір. 1500грн")))
+    forwarded_post(upd, bot, tg, 10, "g", None, files=3)
+    if not text_first:
+        clock.pass_(seconds=30)
+        bot.handle(upd(message=message(20, text="Черевики Ecco 38 розмір. 1500грн")))
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    (shown,) = previews(tg)
+    assert shown["caption"].startswith("Черевики Ecco 38 розмір. 1500грн\n#VS_38_розмір")
+    assert conn.execute("SELECT count(*) FROM bot_drafts").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("files", [1, 3])
+def test_forwarded_ready_post_no_duplicates(conn, bot, tg, upd, clock, files):
+    ready = f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+    forwarded_post(upd, bot, tg, 10, "g", ready, files=files)
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    (shown,) = previews(tg)
+    caption = shown["caption"]
+    assert caption.count("#VS_") == 1 and caption.count("Пишіть сюди") == 1
+    assert caption.count("Всі фото в коментарях") == (1 if files >= 2 else 0)
+    assert caption.startswith(f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}")
+    assert "\n\n\n" not in caption
+
+
+def test_ready_post_after_photos_without_caption_is_separate(conn, bot, tg, upd, clock):
+    tg.files["f1"] = jpeg()
+    bot.handle(upd(message=photo(9, "f1")))  # фото без підпису — чекає текст
+    forwarded_post(upd, bot, tg, 10, "a", "Кеди 38 розмір. 800грн", files=1)
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    assert conn.execute("SELECT count(*) FROM bot_drafts").fetchone()[0] == 2
+    assert [state(conn, 1), state(conn, 2)] == ["collecting", "preview"]
+    assert "Надішли текст поста до цих фото." in tg.texts(SELLER)
+
+
+def test_comments_line_in_the_middle_leaves_no_gap(conn, bot, tg, upd, clock):
+    text = f"Кеди 38 розмір. 800грн\n\nВсі фото в коментарях ⬇️\n\n{SIGN}"
+    forwarded_post(upd, bot, tg, 10, "g", text, files=2)
+    clock.pass_(seconds=4)
+    bot.tick()
+    (shown,) = previews(tg)
+    assert shown["caption"] == (
+        f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+    )
+
+
+def test_comments_line_between_paragraphs_leaves_no_gap(conn, bot, tg, upd, clock):
+    text = "Кеди 38 розмір. 800грн\n\nВсі фото в коментарях ⬇️\n\nВідправка Новою поштою"
+    forwarded_post(upd, bot, tg, 10, "g", text, files=2)
+    clock.pass_(seconds=4)
+    bot.tick()
+    (shown,) = previews(tg)
+    assert shown["caption"].startswith("Кеди 38 розмір. 800грн\n\nВідправка Новою поштою\n#VS_")
