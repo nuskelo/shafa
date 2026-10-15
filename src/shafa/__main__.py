@@ -135,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
     cmd.add_argument("--check", action="store_true", help="лише перевірити токен і права в каналі")
+    cmd = commands.add_parser("app", help="програма з ярлика: екран, бот, один екземпляр")
+    cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
+    cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
+    commands.add_parser("quit", help="закрити програму: екран і бота (для оновлення)")
+    commands.add_parser("setup", help="майстер налаштування на її ноутбуці (секрети приховано)")
     cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
@@ -475,6 +480,9 @@ def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    note = config.migrate_env()
+    if note:
+        print(note)
     if args.command == "rules":
         return run_rules(parser, args)
     if args.command == "fill":
@@ -485,6 +493,20 @@ def main(argv: list[str] | None = None) -> int:
         return run_robot(parser, args)
     if args.command == "bot":
         return run_bot(parser, args)
+    if args.command == "app":
+        from shafa import app
+
+        opener = (lambda url: None) if args.no_browser else webbrowser.open
+        return app.start(opener, args.port)
+    if args.command == "setup":
+        from shafa import wizard
+
+        return wizard.run()
+    if args.command == "quit":
+        from shafa import app
+
+        print("Програму закрито" if app.quit_app() else "Програма не працювала")
+        return 0
     root = _root(parser, args)
     if not args.export.is_file():
         parser.error(f"Файл Експорту не знайдено: {args.export}")
@@ -500,7 +522,28 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+LOG_NAME = "app.log"
+
+
+def prepare_output() -> None:
+    """Вивід програми.
+
+    Ярлик запускає `pythonw.exe` — без вікна, і тоді `sys.stdout`/`sys.stderr` — None: друк і
+    помилки йдуть у журнал `app.log` у теці даних. У консолі Windows може не бути кирилиці чи «·» —
+    там краще знак питання, ніж падіння.
+    """
+    if sys.stdout is None or sys.stderr is None:
+        path = config.data_dir() / LOG_NAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stream = open(path, "a", encoding="utf-8", errors="replace", buffering=1)  # noqa: SIM115
+        sys.stdout = sys.stdout or stream
+        sys.stderr = sys.stderr or stream
+        return
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
 if __name__ == "__main__":
-    # Консоль Windows може не мати кирилиці чи «·» — краще знак питання, ніж падіння.
-    sys.stdout.reconfigure(errors="replace")
+    prepare_output()
     sys.exit(main())

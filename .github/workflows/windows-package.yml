@@ -1,0 +1,54 @@
+name: windows-package
+
+# WIN-001 D3: окрема задача — зібрати пакет для Windows і зробити димову перевірку на чистому
+# windows-latest. Без секретів, без мережевих публікацій; quality і windows-tests не чіпає.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-package:
+    name: windows-package
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install pip==26.2.1
+      - run: python -m pip install -e .
+      - name: Збірка (вбудований Python 3.12.10 + залежності з контрольними сумами)
+        run: python ops/build_windows.py build
+      - name: Димова перевірка — встановлення, запуск без вікна, екран, «Вийти»
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $data = Join-Path $env:RUNNER_TEMP "дані Шафа"
+          $env:SHAFA_DATA_DIR = $data
+          & dist\shafa-windows\app\python\python.exe -m shafa.install dist\shafa-windows\app --no-setup
+          if ($LASTEXITCODE -ne 0) { throw "встановлення не вдалося" }
+          $py = Join-Path $data "app\python"
+          $log = Join-Path $data "app.log"
+          Start-Process -FilePath (Join-Path $py "pythonw.exe") -ArgumentList "-m", "shafa", "app", "--no-browser"
+          $urlFile = Join-Path $data "ui.url"
+          for ($i = 0; $i -lt 60 -and -not (Test-Path $urlFile); $i++) { Start-Sleep -Seconds 1 }
+          if (-not (Test-Path $urlFile)) { if (Test-Path $log) { Get-Content $log }; throw "екран не стартував" }
+          $url = (Get-Content $urlFile -Raw).Trim()
+          if ($url -notmatch '^http://127\.0\.0\.1:\d+/$') { throw "адреса не 127.0.0.1: $url" }
+          $page = Invoke-WebRequest -Uri ($url + "review") -UseBasicParsing
+          if ($page.StatusCode -ne 200) { throw "екран не відповів" }
+          if ($page.Content -notmatch "Бот: не налаштований") { throw "бот без налаштувань має бути вимкнений" }
+          if (Test-Path (Join-Path $data "bot.json")) { throw "бот запустився без налаштувань" }
+          if (Test-Path (Join-Path $data "robot.json")) { throw "робот запустився" }
+          & (Join-Path $py "python.exe") -m shafa quit
+          for ($i = 0; $i -lt 30 -and (Test-Path $urlFile); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path $urlFile) { throw "«Вийти» не закрило програму" }
+          if ((Test-Path $log) -and (Select-String -Path $log -Pattern "Traceback" -Quiet)) { Get-Content $log; throw "помилка в журналі" }
+          Write-Output "Пакет працює: $(Get-Content (Join-Path $data 'app\VERSION'))"

@@ -7,6 +7,7 @@
 що вказує на 127.0.0.1, не прочитає сторінок); зміни — лише POST з токеном цього запуску.
 """
 
+import email.policy
 import hmac
 import os
 import re
@@ -18,6 +19,7 @@ import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -26,8 +28,9 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import jinja2
 from PIL import UnidentifiedImageError
 
-from shafa import ai, batch, catalog, config, db, fill, photos, review
+from shafa import ai, batch, catalog, config, db, fill, options, photos, review
 from shafa.db import Status
+from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, list_folders
 from shafa.robot import control, lock, publish
 from shafa.scan import STICKY, rescan_folder, scan
@@ -37,6 +40,8 @@ COLLECT_EVERY = 180  # секунд між перевірками готових
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 MAX_BODY = 1_000_000
+MAX_UPLOAD = 50_000_000  # Експорт каналу (`result.json` її каналу — ≈ 4 МБ)
+UPLOAD_PATHS = {"/export"}
 
 PACKAGE = Path(__file__).resolve().parent
 STATIC = {
@@ -154,6 +159,7 @@ class Request:
     query: dict[str, list[str]] = field(default_factory=dict)
     form: dict[str, list[str]] = field(default_factory=dict)
     headers: dict[str, str] = field(default_factory=dict)  # назви малими літерами
+    files: dict[str, bytes] = field(default_factory=dict)  # файли з multipart-форми
 
     def arg(self, name: str) -> str:
         return (self.query.get(name) or [""])[0]
@@ -226,6 +232,7 @@ class App:
         today: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         bot_spawner: Callable[[list[str]], object] = _spawn_bot,
         bot_lock: Path | None = None,
+        on_quit: Callable[[], list[str]] | None = None,
     ) -> None:
         self.db_path = db_path
         self.root = root
@@ -246,6 +253,7 @@ class App:
         self.collected_at: float | None = None
         self.bot_spawner = bot_spawner
         self.bot_lock = bot_lock
+        self.on_quit = on_quit  # «Вийти» — лише коли програму запущено з ярлика
         self.env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(PACKAGE / "templates"),
             autoescape=True,
@@ -308,6 +316,15 @@ class App:
             return self.ai_post(request)
         if path == "/bot" and request.method == "POST":
             return self.bot_post(request)
+        if path == "/settings" and get:
+            return self.settings_page(request)
+        if path == "/settings" and request.method == "POST":
+            return self.settings_post(request)
+        if path == "/export" and request.method == "POST":
+            return self.export_post(request)
+        if path == "/quit" and request.method == "POST" and self.on_quit is not None:
+            done = self.on_quit()
+            return self.page("quit.html", done=done)
         if path.strip("/") in CARD_TABS and get:
             return self.tab_page(Status(path.strip("/")), request)
         if match := _ITEM.fullmatch(path):
@@ -340,9 +357,68 @@ class App:
             "robot": self.robot_state(conn),
             "ai": self.ai_state(conn),
             "bot": self.bot_state(conn),
+            "can_quit": self.on_quit is not None,
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
         }
+
+    # --- Налаштування (без секретів) ---
+
+    def settings_page(
+        self,
+        request: Request,
+        values: dict[str, str] | None = None,
+        errors: dict[str, str] | None = None,
+        warnings: list[str] | None = None,
+        message: str | None = None,
+    ) -> Response:
+        conn = self.connect()
+        try:
+            return self.page(
+                "settings.html",
+                **self._chrome(conn, request),
+                current="settings",
+                options=options.OPTIONS,
+                values=values or options.current(),
+                errors=errors or {},
+                warnings=warnings or [],
+                message=message or MESSAGES.get(request.arg("msg")),
+            )
+        finally:
+            conn.close()
+
+    def settings_post(self, request: Request) -> Response:
+        form = {name: (values or [""])[0] for name, values in request.form.items()}
+        errors, warnings = options.save(form)
+        if errors:
+            return self.settings_page(
+                request, form, errors, warnings, "Не збережено: виправте поля, позначені червоним"
+            )
+        self.root = Path(form[options.ROOT_SETTING].strip().strip('"'))  # екран — одразу
+        message = "Збережено. Робот і бот візьмуть нові значення з наступного запуску."
+        return self.settings_page(request, warnings=warnings, message=message)
+
+    def export_post(self, request: Request) -> Response:
+        """«Завантажити експорт каналу» (TD-021): `result.json` → пости в базу і зіставлення папок."""
+        data = request.files.get("export") or b""
+        try:
+            posts = parse_export(data)
+        except ValueError:
+            return self.settings_page(
+                request, message="Це не експорт каналу Telegram (потрібен файл result.json)"
+            )
+        conn = self.connect()
+        try:
+            known = {r[0] for r in conn.execute("SELECT post_id FROM posts")}
+            result = scan(conn, posts, list_folders(self.root, self.channel_id))
+        finally:
+            conn.close()
+        added = len(set(posts) - known)
+        message = (
+            f"Експорт завантажено: постів {len(posts)}, нових {added}. "
+            f"Папок {result.folders}, у «Проблемах» {len(result.problems)}."
+        )
+        return self.settings_page(request, message=message)
 
     # --- Бот ---
 
@@ -753,6 +829,29 @@ class App:
         return Response(200, body, "image/jpeg")
 
 
+def parse_multipart(
+    content_type: str, body: bytes
+) -> tuple[dict[str, list[str]], dict[str, bytes]]:
+    """multipart/form-data → (поля, файли). Без `cgi` (його в новіших Python немає)."""
+    message = BytesParser(policy=email.policy.HTTP).parsebytes(
+        b"Content-Type: " + content_type.encode("latin-1") + b"\r\n\r\n" + body
+    )
+    form: dict[str, list[str]] = {}
+    files: dict[str, bytes] = {}
+    if not message.is_multipart():
+        return form, files
+    for part in message.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        data = part.get_payload(decode=True) or b""
+        if part.get_filename() is not None:
+            files[name] = data
+        else:
+            form.setdefault(name, []).append(data.decode("utf-8", errors="replace"))
+    return form, files
+
+
 def safe_back(path: str) -> str:
     """Куди повернутись після кнопки панелі: лише свій шлях (не `//чужий.сайт`)."""
     if not path.startswith("/") or path.startswith("//") or "\\" in path:
@@ -797,19 +896,26 @@ class Handler(BaseHTTPRequestHandler):
     def _run(self, method: str) -> None:
         url = urlsplit(self.path)
         form: dict[str, list[str]] = {}
+        files: dict[str, bytes] = {}
         if method == "POST":
+            upload = url.path in UPLOAD_PATHS
             length = int(self.headers.get("Content-Length") or 0)
-            if not 0 <= length <= MAX_BODY:
+            if not 0 <= length <= (MAX_UPLOAD if upload else MAX_BODY):
                 self._send(text(413, "Завеликий запит"))
                 return
-            body = self.rfile.read(length).decode("utf-8", errors="replace")
-            form = parse_qs(body, keep_blank_values=True)
+            raw = self.rfile.read(length)
+            kind = self.headers.get("Content-Type") or ""
+            if upload and kind.startswith("multipart/form-data"):
+                form, files = parse_multipart(kind, raw)
+            else:
+                form = parse_qs(raw.decode("utf-8", errors="replace"), keep_blank_values=True)
         request = Request(
             method,
             url.path,
             parse_qs(url.query),
             form,
             {k.lower(): v for k, v in self.headers.items()},
+            files,
         )
         self._send(self.app.handle(request))
 

@@ -1,7 +1,10 @@
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from shafa import config
 from shafa.config import API_KEY, ConfigError, api_key, data_dir, read_env_file, setting
 
 FAKE_KEY = "test-key-vyhadanyi-123"
@@ -73,3 +76,81 @@ def test_data_dir_default_outside_repo(monkeypatch):
     path = data_dir()
     assert path.name == "shafa"
     assert not path.resolve().is_relative_to(Path(__file__).resolve().parents[1])
+
+
+# --- `.env` у теці даних (WIN-001 D5) ---
+
+SECRET = "sk-тестовий-секрет-123"
+
+
+@pytest.fixture
+def real_paths(monkeypatch, tmp_path):
+    """`.env` — як у встановленій програмі: тека даних і стара тека програми."""
+    data, program = tmp_path / "дані", tmp_path / "Програма"
+    program.mkdir()
+    monkeypatch.setenv("SHAFA_DATA_DIR", str(data))
+    monkeypatch.setattr(config, "ENV_FILE", None)
+    monkeypatch.setattr(config, "LEGACY_ENV_FILE", program / ".env")
+    return data / ".env", program / ".env"
+
+
+def private(path: Path) -> bool:
+    if os.name == "nt":
+        acl = subprocess.run(["icacls", str(path)], capture_output=True, text=True, check=True)
+        return "BUILTIN\\Users" not in acl.stdout and "Everyone" not in acl.stdout
+    return path.stat().st_mode & 0o777 == 0o600
+
+
+def test_env_file_is_in_data_dir(real_paths):
+    target, _ = real_paths
+    assert config.env_file() == target
+
+
+def test_old_env_moves_once_and_is_private(real_paths):
+    target, legacy = real_paths
+    legacy.write_text(f"ANTHROPIC_API_KEY={SECRET}\nSHAFA_DAILY_LIMIT=20\n", encoding="utf-8")
+
+    note = config.migrate_env()
+
+    assert note.startswith("Налаштування (.env) перенесено в теку даних")
+    assert SECRET not in note
+    assert not legacy.exists()
+    assert config.setting("ANTHROPIC_API_KEY") == SECRET
+    assert config.setting("SHAFA_DAILY_LIMIT") == "20"
+    assert private(target)
+    assert config.migrate_env() is None  # удруге — нічого
+
+
+def test_both_env_files_data_dir_wins_old_kept(real_paths):
+    target, legacy = real_paths
+    target.parent.mkdir(parents=True)
+    target.write_text("SHAFA_DAILY_LIMIT=10\n", encoding="utf-8")
+    legacy.write_text("SHAFA_DAILY_LIMIT=20\n", encoding="utf-8")
+
+    note = config.migrate_env()
+
+    assert "Є два файли .env" in note
+    assert legacy.exists() and config.setting("SHAFA_DAILY_LIMIT") == "10"
+
+
+def test_update_of_program_folder_keeps_settings(real_paths):
+    """Оновлення замінює теку програми — `.env` у теці даних лишається."""
+    _, legacy = real_paths
+    config.save_settings({"ANTHROPIC_API_KEY": SECRET})
+    for child in legacy.parent.iterdir():
+        child.unlink()
+    legacy.parent.rmdir()
+    assert config.setting("ANTHROPIC_API_KEY") == SECRET
+
+
+def test_save_settings_merges_and_keeps_comments(real_paths):
+    target, _ = real_paths
+    target.parent.mkdir(parents=True)
+    target.write_text("# мої налаштування\nSHAFA_DAILY_LIMIT=30\nOTHER=x\n", encoding="utf-8")
+
+    config.save_settings({"SHAFA_DAILY_LIMIT": "25", "SHAFA_AI_DAILY_USD": "2"})
+
+    assert target.read_text(encoding="utf-8") == (
+        "# мої налаштування\nSHAFA_DAILY_LIMIT=25\nOTHER=x\nSHAFA_AI_DAILY_USD=2\n"
+    )
+    assert private(target)

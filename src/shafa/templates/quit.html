@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Шафа-помічник закрито</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="closed">
+<h1>Програму закрито</h1>
+{% for line in done %}<p>{{ line[:1] | upper }}{{ line[1:] }}.</p>{% endfor %}
+<p>Цю вкладку можна закрити. Щоб відкрити знову — ярлик «Шафа-помічник» на робочому столі.</p>
+</main>
+</body>
+</html>
