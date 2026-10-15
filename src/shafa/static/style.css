@@ -192,3 +192,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .sessions { border-collapse: collapse; background: var(--card); }
 .sessions th, .sessions td { text-align: left; padding: 0.4rem 0.8rem; border-bottom: 1px solid var(--line); }
 .fake { flex-basis: 100%; margin: 0; padding: 0.3rem 0.6rem; background: #6a1b9a; color: #fff; font-weight: 700; border-radius: 4px; }
+
+.quit { margin: 0 1.5rem 0 auto; align-self: center; }
+.closed { max-width: 40rem; margin: 4rem auto; padding: 0 1.5rem; }

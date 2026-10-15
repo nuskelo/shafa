@@ -135,6 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
     cmd.add_argument("--check", action="store_true", help="лише перевірити токен і права в каналі")
+    cmd = commands.add_parser("app", help="програма з ярлика: екран, бот, один екземпляр")
+    cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
+    cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
+    commands.add_parser("quit", help="закрити програму: екран і бота (для оновлення)")
     cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
@@ -488,6 +492,18 @@ def main(argv: list[str] | None = None) -> int:
         return run_robot(parser, args)
     if args.command == "bot":
         return run_bot(parser, args)
+    if args.command == "app":
+        from shafa import app
+
+        opener = (lambda url: None) if args.no_browser else webbrowser.open
+        return app.start(opener, args.port)
+    if args.command == "quit":
+        from shafa import app
+
+        stopped = app.stop_process(app.LOCK_NAME)
+        done = app.quit_all()
+        print("Програму закрито" if stopped or done else "Програма не працювала")
+        return 0
     root = _root(parser, args)
     if not args.export.is_file():
         parser.error(f"Файл Експорту не знайдено: {args.export}")

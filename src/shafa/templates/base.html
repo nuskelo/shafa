@@ -15,6 +15,12 @@
     <a href="/{{ status }}" class="tab{% if status == current %} current{% endif %}">{{ title }} <span class="count">{{ counts[status] }}</span></a>
     {% endfor %}
   </nav>
+  {% if can_quit %}
+  <form method="post" action="/quit" class="quit">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button title="Закрити програму: екран і бота">Вийти</button>
+  </form>
+  {% endif %}
 </header>
 <div id="robot" data-panel="/robot/panel?back={{ back | urlencode }}">
 {% include "panel.html" %}

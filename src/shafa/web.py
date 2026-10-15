@@ -226,6 +226,7 @@ class App:
         today: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         bot_spawner: Callable[[list[str]], object] = _spawn_bot,
         bot_lock: Path | None = None,
+        on_quit: Callable[[], list[str]] | None = None,
     ) -> None:
         self.db_path = db_path
         self.root = root
@@ -246,6 +247,7 @@ class App:
         self.collected_at: float | None = None
         self.bot_spawner = bot_spawner
         self.bot_lock = bot_lock
+        self.on_quit = on_quit  # «Вийти» — лише коли програму запущено з ярлика
         self.env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(PACKAGE / "templates"),
             autoescape=True,
@@ -308,6 +310,9 @@ class App:
             return self.ai_post(request)
         if path == "/bot" and request.method == "POST":
             return self.bot_post(request)
+        if path == "/quit" and request.method == "POST" and self.on_quit is not None:
+            done = self.on_quit()
+            return self.page("quit.html", done=done)
         if path.strip("/") in CARD_TABS and get:
             return self.tab_page(Status(path.strip("/")), request)
         if match := _ITEM.fullmatch(path):
@@ -340,6 +345,7 @@ class App:
             "robot": self.robot_state(conn),
             "ai": self.ai_state(conn),
             "bot": self.bot_state(conn),
+            "can_quit": self.on_quit is not None,
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
         }
