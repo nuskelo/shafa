@@ -21,5 +21,12 @@
   {% endfor %}
   <div class="actions"><button class="approve">Зберегти</button></div>
 </form>
+<h2>Експорт каналу</h2>
+<form method="post" action="/export" enctype="multipart/form-data" class="export">
+  <input type="hidden" name="token" value="{{ token }}">
+  <p>Telegram Desktop → канал → «Експорт історії чату» (лише текст, формат JSON) → файл <b>result.json</b>.</p>
+  <input type="file" name="export" accept=".json,application/json" required>
+  <button>Завантажити експорт каналу</button>
+</form>
 <p class="meta">Ключ ШІ, токен бота й чати — лише в майстрі налаштування (секрети на екрані не показуються).</p>
 {% endblock %}

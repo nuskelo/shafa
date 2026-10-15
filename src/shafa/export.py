@@ -21,7 +21,21 @@ def plain_text(text: str | list) -> str:
 
 def read_export(path: Path) -> dict[int, Post]:
     """Пости каналу: номер → Пост. Службові повідомлення пропускаються."""
-    data = json.loads(path.read_text(encoding="utf-8"))
+    return parse_export(path.read_bytes())
+
+
+class ExportError(ValueError):
+    """Файл — не експорт каналу Telegram."""
+
+
+def parse_export(raw: bytes) -> dict[int, Post]:
+    """Вміст `result.json` → пости. Не експорт каналу — ExportError."""
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ExportError("не JSON") from error
+    if not isinstance(data, dict) or not isinstance(data.get("messages"), list):
+        raise ExportError("не експорт каналу")
     posts: dict[int, Post] = {}
     for message in data["messages"]:
         if message.get("type") != "message":
