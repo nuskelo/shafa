@@ -18,6 +18,7 @@
 """
 
 import argparse
+import dataclasses
 import sys
 import webbrowser
 from datetime import datetime
@@ -448,8 +449,9 @@ def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     tg = Telegram(token)
     conn = db.connect(args.db)
     try:
-        name = run.check_rights(tg, settings.channel_id)
-        print(f"Бот @{name}: права в каналі є")
+        name, group = run.check_rights(tg, settings.channel_id)
+        settings = dataclasses.replace(settings, discussion_id=group)
+        print(f"Бот @{name}: права в каналі є, коментарі — лише вона й бот")
         if args.check:
             return 0
         run.set_status(conn, started=True)

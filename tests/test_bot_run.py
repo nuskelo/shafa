@@ -43,18 +43,31 @@ def test_bot_channel_is_separate_from_folder_channel(monkeypatch, root):
         run.settings(root)
 
 
+GROUP = -1009990001112
+ADMIN = {"status": "administrator", "can_post_messages": True}
+CLOSED = {"can_send_messages": False}
+
+
 class RightsTelegram:
-    def __init__(self, member=None, error=None):
+    """Канал, група обговорення й права бота — як задав тест."""
+
+    def __init__(self, member=ADMIN, error=None, group=GROUP, group_member=ADMIN, perms=CLOSED):
         self.member, self.error = member, error
+        self.group, self.group_member, self.perms = group, group_member, perms
 
     def get_me(self):
         return {"id": 42, "username": "shafa_test_bot"}
 
     def get_chat_member(self, chat_id, user_id):
-        assert (chat_id, user_id) == (CHANNEL, 42)
+        assert user_id == 42
         if self.error:
             raise self.error
-        return self.member
+        return self.member if chat_id == CHANNEL else self.group_member
+
+    def get_chat(self, chat_id):
+        if chat_id == CHANNEL:
+            return {"id": CHANNEL, "type": "channel", "linked_chat_id": self.group}
+        return {"id": GROUP, "type": "supergroup", "permissions": self.perms}
 
 
 @pytest.mark.parametrize(
@@ -62,7 +75,7 @@ class RightsTelegram:
     [{"status": "creator"}, {"status": "administrator", "can_post_messages": True}],
 )
 def test_rights_ok(member):
-    assert run.check_rights(RightsTelegram(member), CHANNEL) == "shafa_test_bot"
+    assert run.check_rights(RightsTelegram(member), CHANNEL) == ("shafa_test_bot", GROUP)
 
 
 @pytest.mark.parametrize(
@@ -83,6 +96,20 @@ def test_rights_ok(member):
 def test_no_rights(member, error, text):
     with pytest.raises(run.SetupError, match=text):
         run.check_rights(RightsTelegram(member, error), CHANNEL)
+
+
+@pytest.mark.parametrize(
+    ("changes", "text"),
+    [
+        ({"group": None}, "немає групи для коментарів"),
+        ({"group_member": {"status": "member"}}, "не адміністратор групи коментарів"),
+        ({"perms": {"can_send_messages": True}}, "учасники можуть писати"),
+        ({"perms": {}}, "учасники можуть писати"),
+    ],
+)
+def test_comments_group_must_be_closed_to_members(changes, text):
+    with pytest.raises(run.SetupError, match=text):
+        run.check_rights(RightsTelegram(**changes), CHANNEL)
 
 
 class PollingTelegram(FakeTelegram):
@@ -182,7 +209,7 @@ def no_network(monkeypatch):
 def test_bot_check_prints_no_token(db_path, root, env, no_network, capsys):
     assert main(bot_args(db_path, root, "--check")) == 0
     out = capsys.readouterr()
-    assert out.out == "Бот @shafa_test_bot: права в каналі є\n"
+    assert out.out == "Бот @shafa_test_bot: права в каналі є, коментарі — лише вона й бот\n"
     assert TOKEN not in out.out + out.err
     assert no_network == [TOKEN]
 
