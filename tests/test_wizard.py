@@ -130,6 +130,19 @@ def test_real_shortcut_with_cyrillic(tmp_path):
     link = tmp_path / "Шафа — фото товарів.lnk"
     wizard.shortcut(link, target)
     assert link.is_file() and link.stat().st_size > 0
+    assert wizard.shortcut_target(link) == target  # кирилиця в назві й у цілі — без «????»
+
+
+@pytest.mark.skipif(os.name != "nt", reason="ярлик .lnk — лише Windows")
+def test_real_app_shortcut_with_arguments_and_icon(tmp_path):
+    python = tmp_path / "Програма" / "pythonw.exe"
+    python.parent.mkdir()
+    python.write_bytes(b"MZ")
+    icon = tmp_path / "Програма" / "shafa.ico"
+    icon.write_bytes(b"\x00\x00\x01\x00")
+    link = tmp_path / "Шафа-помічник.lnk"
+    wizard.shortcut(link, python, "-m shafa app", icon)
+    assert wizard.shortcut_target(link) == python
 
 
 def test_check_ai_error_has_no_key(monkeypatch):

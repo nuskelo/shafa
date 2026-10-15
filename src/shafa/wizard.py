@@ -60,25 +60,90 @@ def check_bot(token: str, channel: str | None) -> str:
     return f"Бот @{name}: права в каналі є, коментарі — лише вона й бот"
 
 
-def shortcut(link: Path, target: Path, arguments: str = "", icon: Path | None = None) -> None:
-    """Ярлик Windows (.lnk) через WScript.Shell. Шляхи — у змінних середовища (кирилиця, лапки)."""
-    script = (
-        "$s=(New-Object -ComObject WScript.Shell).CreateShortcut($env:SHAFA_LNK);"
-        "$s.TargetPath=$env:SHAFA_TARGET;$s.Arguments=$env:SHAFA_ARGS;"
-        "$s.WorkingDirectory=$env:SHAFA_WD;"
-        "if($env:SHAFA_ICON){$s.IconLocation=$env:SHAFA_ICON};$s.Save()"
-    )
-    env = {
-        **os.environ, "SHAFA_LNK": str(link), "SHAFA_TARGET": str(target),
-        "SHAFA_ARGS": arguments, "SHAFA_WD": str(target.parent), "SHAFA_ICON": str(icon or ""),
-    }  # fmt: skip
-    result = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-        env=env, check=False, capture_output=True,
+# Ярлик через системний IShellLinkW (Unicode). WScript.Shell з PowerShell зберігає назву ярлика
+# в ANSI — «Шафа — фото товарів.lnk» стає «????» (знайдено в windows-tests, WIN-001).
+_CLSID_SHELL_LINK = "{00021401-0000-0000-C000-000000000046}"
+_IID_SHELL_LINK_W = "{000214F9-0000-0000-C000-000000000046}"
+_IID_PERSIST_FILE = "{0000010B-0000-0000-C000-000000000046}"
+# Номери методів у таблиці COM (порядок оголошення в shobjidl.h / objidl.h; 0–2 — IUnknown).
+_RELEASE, _GET_PATH, _SET_WORKING_DIR, _SET_ARGUMENTS, _SET_ICON, _SET_PATH = 2, 3, 9, 11, 17, 20
+_QUERY_INTERFACE, _LOAD, _SAVE = 0, 5, 6
+
+
+def _com():  # pragma: no cover — лише Windows (windows-tests)
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", wintypes.DWORD),
+            ("Data2", wintypes.WORD),
+            ("Data3", wintypes.WORD),
+            ("Data4", wintypes.BYTE * 8),
+        ]
+
+    def guid(text: str) -> GUID:
+        value = GUID()
+        ctypes.oledll.ole32.CLSIDFromString(text, ctypes.byref(value))
+        return value
+
+    def method(obj: ctypes.c_void_p, index: int, *types):
+        table = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(ctypes.HRESULT, ctypes.c_void_p, *types)(table[index])
+
+    return ctypes, wintypes, guid, method
+
+
+def _open_link():  # pragma: no cover — лише Windows
+    ctypes, _, guid, method = _com()
+    ctypes.oledll.ole32.CoInitialize(None)
+    link = ctypes.c_void_p()
+    ctypes.oledll.ole32.CoCreateInstance(
+        ctypes.byref(guid(_CLSID_SHELL_LINK)), None, 1,  # CLSCTX_INPROC_SERVER
+        ctypes.byref(guid(_IID_SHELL_LINK_W)), ctypes.byref(link),
     )  # fmt: skip
-    if result.returncode != 0:
-        why = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
-        raise OSError(f"Ярлик «{link.name}» не створено: {why[-500:]}")
+    persist = ctypes.c_void_p()
+    method(link, _QUERY_INTERFACE, ctypes.c_void_p, ctypes.c_void_p)(
+        link, ctypes.byref(guid(_IID_PERSIST_FILE)), ctypes.byref(persist)
+    )
+    return link, persist
+
+
+def _release(*objects) -> None:  # pragma: no cover — лише Windows
+    _, _, _, method = _com()
+    for obj in objects:
+        method(obj, _RELEASE)(obj)
+
+
+def shortcut(link: Path, target: Path, arguments: str = "", icon: Path | None = None) -> None:
+    """Ярлик Windows (.lnk) з кирилицею в назві й шляхах."""
+    ctypes, wintypes, _, method = _com()
+    com, persist = _open_link()
+    try:
+        method(com, _SET_PATH, wintypes.LPCWSTR)(com, str(target))
+        method(com, _SET_ARGUMENTS, wintypes.LPCWSTR)(com, arguments)
+        method(com, _SET_WORKING_DIR, wintypes.LPCWSTR)(com, str(target.parent))
+        if icon is not None:
+            method(com, _SET_ICON, wintypes.LPCWSTR, ctypes.c_int)(com, str(icon), 0)
+        method(persist, _SAVE, wintypes.LPCWSTR, wintypes.BOOL)(persist, str(link), True)
+    except OSError as error:
+        raise OSError(f"Ярлик «{link.name}» не створено: {error}") from error
+    finally:
+        _release(persist, com)
+
+
+def shortcut_target(link: Path) -> Path:  # pragma: no cover — лише Windows (перевірка ярлика)
+    ctypes, wintypes, _, method = _com()
+    com, persist = _open_link()
+    try:
+        method(persist, _LOAD, wintypes.LPCWSTR, wintypes.DWORD)(persist, str(link), 0)
+        buffer = ctypes.create_unicode_buffer(32768)
+        method(com, _GET_PATH, wintypes.LPWSTR, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)(
+            com, buffer, len(buffer), None, 0
+        )
+        return Path(buffer.value)
+    finally:
+        _release(persist, com)
 
 
 def shafa_login() -> None:
