@@ -551,16 +551,21 @@ def test_ten_photos_fine(conn, bot, tg, upd, clock):
     assert state(conn) == "preview"
 
 
+def long_post(length):
+    """Пост про кросівки, підпис якого (з хештегом і «Пишіть сюди») — рівно `length` символів."""
+    start = "Кросівки 38 розмір. "
+    extra = len("\n#VS_38_розмір\n\n" + core.SIGNATURE) + 1  # 👉 — 2 символи для Telegram
+    return start + "я" * (length - extra - len(start))
+
+
 def test_too_long_text(conn, bot, tg, upd, clock):
-    signature = len("\n\n" + core.SIGNATURE) + 1  # 👉 — 2 символи для Telegram
-    send_post(bot, tg, upd, clock, files=1, text="я" * (1024 - signature + 1))
+    send_post(bot, tg, upd, clock, files=1, text=long_post(1025))
     assert state(conn) == "failed"
     assert tg.texts(SELLER)[-1].startswith("Текст задовгий: 1025 символів")
 
 
 def test_longest_text_fits(conn, bot, tg, upd, clock):
-    signature = len("\n\n" + core.SIGNATURE) + 1
-    send_post(bot, tg, upd, clock, files=1, text="я" * (1024 - signature))
+    send_post(bot, tg, upd, clock, files=1, text=long_post(1024))
     assert state(conn) == "preview"
 
 
@@ -791,3 +796,55 @@ def test_png_preview_is_jpeg_picture(conn, bot, tg, upd, clock):
     assert isinstance(preview["photo"], Upload)
     with Image.open(io.BytesIO(preview["photo"].data)) as image:
         assert image.format == "JPEG"
+
+
+# --- Хештег ніколи не зникає мовчки ---
+
+BAG_TEXT = "Тест 5: сумка шкіряна Furla. Розмір 30см*20см. 1800грн"
+
+
+def preview_header(tg):
+    return [t for t in tg.texts(SELLER) if t.startswith("Так буде в каналі")][-1]
+
+
+def test_live_bag_text_gets_bag_hashtag_in_preview_and_post(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=3, text=BAG_TEXT)
+
+    preview = [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]][-1]
+    assert preview["caption"] == (f"{BAG_TEXT}\n#VS_сумки\n\n{SIGN}\n\nВсі фото в коментарях ⬇️")
+    assert "Хештег: #VS_сумки." in preview_header(tg)
+    press(upd, bot, tg)
+    assert tg.channel_posts[0][1] == preview["caption"]
+
+
+def test_unknown_thing_asks_then_her_no_hashtag_is_explicit(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1, text="Тест 6: щось гарне. 500грн")
+    assert tg.texts(SELLER)[-1].startswith("Не можу визначити хештег — що це за річ?")
+    assert tg.last_preview is None
+
+    bot.handle(upd(message=message(30, text="Без хештега")))
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    preview = [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]][-1]
+    assert preview["caption"] == f"Тест 6: щось гарне. 500грн\n\n{SIGN}"  # фраза не в пості
+    assert "Без хештега — як ти написала." in preview_header(tg)
+
+
+def test_other_thing_preview_says_without_hashtag(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1, text="Рукавиці шкіряні. 300грн")
+    assert "Без хештега (рукавиці, шарфи тощо — за правилом без нього)." in preview_header(tg)
+
+
+def test_her_hashtag_shown_in_preview(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1)
+    assert "Хештег твій: #VS_37_розмір." in preview_header(tg)
+
+
+def test_only_no_hashtag_phrase_is_not_a_text(conn, bot, tg, upd, clock):
+    tg.files["f1"] = jpeg()
+    bot.handle(upd(message=photo(11, "f1", caption="без хештега")))
+    clock.pass_(seconds=4)
+    bot.tick()
+    assert tg.texts(SELLER)[-1] == "Надішли текст поста до цих фото."
+    assert tg.last_preview is None

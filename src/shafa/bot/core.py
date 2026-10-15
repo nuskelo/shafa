@@ -22,6 +22,7 @@
 """
 
 import io
+import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ from typing import Any
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import rules
-from shafa.bot.hashtag import UNCLEAR, hashtag
+from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
 
@@ -63,11 +64,14 @@ TEXTS = {
     "need_text": "Надішли текст поста до цих фото.",
     "need_size": "Не можу зрозуміти розмір. Допиши розмір (наприклад «38 розмір» або «ідуть на "
     "37») — і я покажу прев'ю.",
+    "need_kind": "Не можу визначити хештег — що це за річ? Взуття — допиши розмір (наприклад «38 "
+    "розмір»); сумка, гаманець, рюкзак чи ремінь — допиши це слово; хештег не потрібен — напиши "
+    "«без хештега».",
     "too_many": "Забагато фото: {n}. Максимум 10 — надішли пост заново.",
     "too_long": "Текст задовгий: {n} символів разом із підписом, максимум 1024. Скороти й надішли "
     "пост заново.",
-    "preview": "Так буде в каналі (фото: {n}; у канал — перше{comments}, у папку для Шафи — усі). "
-    "Опублікувати?",
+    "preview": "Так буде в каналі (фото: {n}; у канал — перше{comments}, у папку для Шафи — усі).\n"
+    "{tag}.\nОпублікувати?",
     "publishing": "Публікую…",
     "already": "Цей пост уже опубліковано: {link}",
     "busy": "Уже публікую — зачекай",
@@ -103,13 +107,34 @@ class Settings:
         return {c for c in (self.seller_chat, self.owner_chat) if c is not None}
 
 
-def caption_of(texts: list[str], photos: int = 1) -> str | None:
-    """Підпис поста, як у її постах: текст → хештег → «Пишіть сюди…» → «Всі фото в коментарях»
-    (фото ≥ 2). Хештег чи підпис уже є — не дублюємо. None — розмір незрозумілий (спитати її)."""
-    body = "\n".join(t.strip() for t in texts if t and t.strip())
-    tag = hashtag(body)
-    if tag == UNCLEAR:
-        return None
+NO_TAG = re.compile(r"^\s*без\s+хеш\s*тег\w*\s*[.!]?\s*$", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class Composed:
+    """Підпис поста (`caption`), рядок про хештег для прев'ю (`tag_note`) або питання (`ask`)."""
+
+    caption: str | None
+    tag_note: str = ""
+    ask: str | None = None
+
+
+def compose(texts: list[str], photos: int = 1) -> Composed:
+    """Підпис, як у її постах: текст → хештег → «Пишіть сюди…» → «Всі фото в коментарях»
+    (фото ≥ 2). Хештег чи підпис уже є — не дублюємо. Хештег не визначено — питання, не мовчання;
+    рядок «без хештега» від неї — явна згода без хештега (у пост він не йде)."""
+    lines = "\n".join(t.strip() for t in texts if t and t.strip()).split("\n")
+    no_tag = any(NO_TAG.match(line) for line in lines)
+    body = "\n".join(line for line in lines if not NO_TAG.match(line)).strip()
+    if not body:
+        return Composed(None, ask="text")
+    decision = decide(body)
+    if decision.ask and not no_tag:
+        return Composed(None, ask=decision.ask)
+    tag = None if no_tag else decision.tag
+    note = decision.note
+    if no_tag and not note.startswith("хештег твій"):
+        note = "без хештега — як ти написала"
     signed = rules.SIGNATURE.search(body)
     if tag and signed:  # хештег — перед її власним «Пишіть сюди…»
         body = f"{body[: signed.start()].rstrip()}\n{tag}\n\n{body[signed.start() :]}"
@@ -119,7 +144,12 @@ def caption_of(texts: list[str], photos: int = 1) -> str | None:
         body = f"{body}\n\n{SIGNATURE}"
     if photos >= 2:
         body = f"{body}\n\n{COMMENTS_LINE}"
-    return body
+    return Composed(body, note)
+
+
+def caption_of(texts: list[str], photos: int = 1) -> str | None:
+    """Лише підпис (None — треба спитати її)."""
+    return compose(texts, photos).caption
 
 
 def caption_length(text: str) -> int:
@@ -360,10 +390,12 @@ class Bot:
             self._set(draft_id, state="failed", note="забагато фото")
             self.say(chat_id, TEXTS["too_many"].format(n=len(photos)))
             return
-        caption = caption_of(texts, len(photos))
-        if caption is None:
+        composed = compose(texts, len(photos))
+        caption = composed.caption
+        if caption is None:  # хештег не визначено — питаємо, не публікуємо мовчки
             self._set(draft_id, asked=1)
-            self.say(chat_id, TEXTS["need_size"])
+            question = {"text": "need_text", ASK_KIND: "need_kind"}.get(composed.ask, "need_size")
+            self.say(chat_id, TEXTS[question])
             return
         if caption_length(caption) > CAPTION_MAX:
             self._set(draft_id, state="failed", note="задовгий текст")
@@ -380,7 +412,8 @@ class Bot:
             ]
         }
         comments = ", у коментарі — усі" if len(photos) >= 2 else ""
-        self.say(chat_id, TEXTS["preview"].format(n=len(photos), comments=comments))
+        tag_note = composed.tag_note[:1].upper() + composed.tag_note[1:]
+        self.say(chat_id, TEXTS["preview"].format(n=len(photos), comments=comments, tag=tag_note))
         first = photos[0]
         try:  # прев'ю — як у каналі: фото-картинкою (файл — завантажуємо як фото)
             if first["kind"] == "photo":

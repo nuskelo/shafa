@@ -1,6 +1,6 @@
 import pytest
 
-from shafa.bot.hashtag import BAG_TAG, UNCLEAR, hashtag
+from shafa.bot.hashtag import ASK_KIND, ASK_SIZE, BAG_TAG, decide
 
 
 @pytest.mark.parametrize(
@@ -17,22 +17,63 @@ from shafa.bot.hashtag import BAG_TAG, UNCLEAR, hashtag
         ("Кросівки New Balance у відмінному стані. Розмір 41. 1100грн", "#VS_41_розмір"),
         ("Кросівки в ідеальному стані.42 розмір. 1100грн", "#VS_42_розмір"),
         ("Дитячі черевики 22 розміру. 400грн", "#VS_22_розмір"),
-        ("Шкіряна сумка Furla в ідеальному стані. Розмір 30см*20см. 1500грн", BAG_TAG),
-        ("Гаманець шкіряний. 400грн", BAG_TAG),
-        ("Новий рюкзак Kanken. 1200грн", BAG_TAG),
-        ("Ремінь шкіряний. 300грн", BAG_TAG),
-        ("Рукавиці шкіряні. 300грн", None),
-        ("Шарф кашеміровий. 500грн", None),
-        ("Кросівки Nike в ідеальному стані. 1200грн", UNCLEAR),  # взуття без розміру
-        ("Кросівки Nike. 88 розмір. 1200грн", UNCLEAR),  # поза 15–50
-        ("Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір", None),  # уже є — не дублюємо
-        ("Сумка. 900грн #VS_сумки", None),
+        ("Босоніжки з ремінцем. 37 розмір. 500грн", "#VS_37_розмір"),
     ],
 )
-def test_hashtag_like_hers(text, tag):
-    assert hashtag(text) == tag
+def test_size_hashtag_like_hers(text, tag):
+    assert decide(text).tag == tag
+    assert decide(text).ask is None
 
 
-def test_sandals_with_strap_are_shoes_not_belt():
-    assert hashtag("Босоніжки з ремінцем. 37 розмір. 500грн") == "#VS_37_розмір"
-    assert hashtag("Босоніжки з ремінцем. 500грн") == UNCLEAR
+@pytest.mark.parametrize(
+    "text",
+    [
+        # вада живого прогону: перше слово «Тест», а габарити «Розмір 30см*20см» — не розмір
+        "Тест 5: сумка шкіряна Furla. Розмір 30см*20см. 1800грн",
+        "Шкіряна сумка Furla в ідеальному стані. Розмір 30см*20см. 1500грн",
+        "Сумка шкіряна. Розмір 30х20 см. 900грн",
+        "Сумочка через плече. Розмір 25*15см. 700грн",
+        "Гаманець шкіряний. 400грн",
+        "Новий рюкзак Kanken. 1200грн",
+        "Ремінь шкіряний. 300грн",
+        "Оригінал Michael Kors, шкіряна сумка-шопер. 2500грн",
+        "Furla. Шкіряна сумка в ідеальному стані. 1500грн",  # слово-річ не в першому реченні
+    ],
+)
+def test_bags(text):
+    decision = decide(text)
+    assert (decision.tag, decision.ask) == (BAG_TAG, None)
+    assert decision.note == "хештег: #VS_сумки"
+
+
+@pytest.mark.parametrize(
+    ("text", "ask"),
+    [
+        ("Кросівки Nike в ідеальному стані. 1200грн", ASK_SIZE),  # взуття без розміру
+        ("Кросівки Nike. 88 розмір. 1200грн", ASK_SIZE),  # поза 15–50
+        ("Босоніжки з ремінцем. 500грн", ASK_SIZE),
+        ("Тест 6: щось гарне. 500грн", ASK_KIND),  # річ не впізнано
+        ("Furla, ідеальний стан. 1500грн", ASK_KIND),
+    ],
+)
+def test_never_silently_without_hashtag(text, ask):
+    decision = decide(text)
+    assert (decision.tag, decision.ask) == (None, ask)
+
+
+@pytest.mark.parametrize("text", ["Рукавиці шкіряні. 300грн", "Шарф кашеміровий. 500грн"])
+def test_other_things_explicitly_without_hashtag(text):
+    decision = decide(text)
+    assert (decision.tag, decision.ask) == (None, None)
+    assert decision.note.startswith("без хештега")
+
+
+@pytest.mark.parametrize(
+    ("text", "note"),
+    [
+        ("Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір", "хештег твій: #VS_37_розмір"),
+        ("Сумка. 900грн #VS_сумки", "хештег твій: #VS_сумки"),
+    ],
+)
+def test_her_own_hashtag_not_duplicated(text, note):
+    assert decide(text) == decide(text).__class__(None, note, None)
