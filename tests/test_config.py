@@ -71,9 +71,8 @@ def test_data_dir_from_setting(monkeypatch, tmp_path):
     assert data_dir() == tmp_path / "дані"
 
 
-def test_data_dir_default_outside_repo(monkeypatch):
-    monkeypatch.delenv("SHAFA_DATA_DIR", raising=False)
-    path = data_dir()
+def test_data_dir_default_outside_repo():
+    path = config.default_data_dir()  # лише шлях, без звернення
     assert path.name == "shafa"
     assert not path.resolve().is_relative_to(Path(__file__).resolve().parents[1])
 
@@ -90,7 +89,7 @@ def real_paths(monkeypatch, tmp_path):
     program.mkdir()
     monkeypatch.setenv("SHAFA_DATA_DIR", str(data))
     monkeypatch.setattr(config, "ENV_FILE", None)
-    monkeypatch.setattr(config, "LEGACY_ENV_FILE", program / ".env")
+    monkeypatch.setenv("SHAFA_LEGACY_ENV", str(program / ".env"))
     return data / ".env", program / ".env"
 
 
@@ -110,7 +109,7 @@ def test_old_env_moves_once_and_is_private(real_paths):
     target, legacy = real_paths
     legacy.write_text(f"ANTHROPIC_API_KEY={SECRET}\nSHAFA_DAILY_LIMIT=20\n", encoding="utf-8")
 
-    note = config.migrate_env()
+    note = config.migrate_env(allow_temp=True)
 
     assert note.startswith("Налаштування (.env) перенесено в теку даних")
     assert SECRET not in note
@@ -118,7 +117,7 @@ def test_old_env_moves_once_and_is_private(real_paths):
     assert config.setting("ANTHROPIC_API_KEY") == SECRET
     assert config.setting("SHAFA_DAILY_LIMIT") == "20"
     assert private(target)
-    assert config.migrate_env() is None  # удруге — нічого
+    assert config.migrate_env(allow_temp=True) is None  # удруге — нічого
 
 
 def test_both_env_files_data_dir_wins_old_kept(real_paths):
@@ -127,7 +126,7 @@ def test_both_env_files_data_dir_wins_old_kept(real_paths):
     target.write_text("SHAFA_DAILY_LIMIT=10\n", encoding="utf-8")
     legacy.write_text("SHAFA_DAILY_LIMIT=20\n", encoding="utf-8")
 
-    note = config.migrate_env()
+    note = config.migrate_env(allow_temp=True)
 
     assert "Є два файли .env" in note
     assert legacy.exists() and config.setting("SHAFA_DAILY_LIMIT") == "10"

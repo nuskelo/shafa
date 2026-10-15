@@ -4,16 +4,46 @@
 програми: оновлення програми його не чіпає (WIN-001 D5). Старий `.env` з кореня проєкту / теки
 програми переїжджає туди один раз сам (`migrate_env`). Права на файл — лише її користувач.
 
+Тести (FIX-001, інцидент 15.10.2026: процеси, запущені тестами, перенесли справжній `.env` у
+тимчасові теки pytest): `SHAFA_TESTING=1` — тоді тека даних і «старий» `.env` беруться ЛИШЕ зі
+змінних `SHAFA_DATA_DIR` / `SHAFA_LEGACY_ENV`, а звернення до справжніх місць — помилка.
+Змінні успадковують і процеси, які запускає тест.
+
 Значення секретів ніде не друкуються — ні у виводі, ні в помилках.
 """
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 
-LEGACY_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"  # корінь проєкту / тека програми
 ENV_FILE: Path | None = None  # інший файл (тести); None — `.env` у теці даних
+TESTING = "SHAFA_TESTING"
+LEGACY_ENV = "SHAFA_LEGACY_ENV"
+_REAL_LEGACY_ENV = Path(__file__).resolve().parents[2] / ".env"  # корінь проєкту / тека програми
+
+
+class RealPathInTests(RuntimeError):
+    """Тест (чи процес, який він запустив) звернувся до справжньої теки даних або `.env`."""
+
+
+def testing() -> bool:
+    return os.environ.get(TESTING) == "1"
+
+
+def legacy_env_file() -> Path:
+    """Старе місце `.env` — корінь проєкту / тека програми (у тестах — лише зі змінної)."""
+    custom = os.environ.get(LEGACY_ENV)
+    if custom:
+        return Path(custom)
+    if testing():
+        raise RealPathInTests(f"Тест звернувся до справжнього .env: задайте {LEGACY_ENV}")
+    return _REAL_LEGACY_ENV
+
+
 API_KEY = "ANTHROPIC_API_KEY"
 
 
@@ -64,6 +94,13 @@ def data_dir() -> Path:
     custom = os.environ.get(DATA_DIR)
     if custom:
         return Path(custom)
+    if testing():
+        raise RealPathInTests(f"Тест звернувся до справжньої теки даних: задайте {DATA_DIR}")
+    return default_data_dir()
+
+
+def default_data_dir() -> Path:
+    """Справжня тека даних (без `SHAFA_DATA_DIR`)."""
     if os.name == "nt":
         return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / "shafa"
     if sys.platform == "darwin":
@@ -117,16 +154,38 @@ def save_settings(values: dict[str, str], path: Path | None = None) -> None:
     write_private(path, "\n".join(result) + "\n")
 
 
-def migrate_env() -> str | None:
-    """Старий `.env` (корінь проєкту / тека програми) → тека даних, один раз. Повертає пояснення."""
-    target, legacy = env_file(), LEGACY_ENV_FILE
+def _inside_temp(path: Path) -> bool:
+    temp = Path(tempfile.gettempdir()).resolve()
+    return path.resolve().is_relative_to(temp)
+
+
+def migrate_env(allow_temp: bool = False) -> str | None:
+    """Старий `.env` (корінь проєкту / тека програми) → тека даних, один раз. Повертає пояснення.
+
+    Обережно (FIX-001): з тимчасових тек не переносить (`allow_temp` — лише для тестів самого
+    переносу); спершу резервна копія поруч (`.env.backup-<час>`), потім запис і звірка вмісту, і
+    лише тоді старий файл видаляється. Будь-що не вдалось — старий лишається.
+    """
+    target, legacy = env_file(), legacy_env_file()
     if not legacy.is_file() or legacy.resolve() == target.resolve():
+        return None
+    if not allow_temp and (_inside_temp(legacy) or _inside_temp(target)):
         return None
     if target.exists():
         return (
             f"Є два файли .env: у {legacy.parent} і в теці даних. Програма читає теку даних; "
             "старий видаліть."
         )
-    write_private(target, legacy.read_text(encoding="utf-8-sig"))
+    text = legacy.read_text(encoding="utf-8-sig")
+    backup = legacy.with_name(f".env.backup-{datetime.now().astimezone():%Y%m%d-%H%M%S}")
+    try:
+        shutil.copy2(legacy, backup)
+        restrict(backup)
+        write_private(target, text)
+        if target.read_text(encoding="utf-8") != text:
+            raise OSError("вміст у теці даних не збігається")
+    except OSError as error:
+        target.unlink(missing_ok=True)  # недописаний новий файл не лишаємо — читався б він
+        return f"Налаштування (.env) НЕ перенесено ({error}) — лишились на старому місці"
     legacy.unlink()
-    return f"Налаштування (.env) перенесено в теку даних: {target.parent}"
+    return f"Налаштування (.env) перенесено в теку даних: {target.parent}. Резервна копія: {backup}"

@@ -19,3 +19,4 @@ result.json
 .DS_Store
 dist/
 build/
+.env.backup-*
