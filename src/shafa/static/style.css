@@ -177,6 +177,8 @@ dialog p { margin: 0.3rem 0 0; text-align: center; font-size: 0.9rem; }
 .ai { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; align-items: center; padding: 0.4rem 1.5rem 0.6rem; max-width: 1400px; margin: 0 auto; border-top: 1px solid var(--line); }
 .ai-busy strong { color: var(--green); }
 .ai-note { font-size: 0.9rem; }
+.bot-running strong { color: var(--green); }
+.bot-failed strong { color: var(--red); }
 .ai-retry { margin-top: 1rem; display: flex; gap: 0.8rem; align-items: center; }
 .ai-retry small { color: var(--muted); }
 .robot-running strong, .robot-pausing strong, .robot-stopping strong { color: var(--green); }

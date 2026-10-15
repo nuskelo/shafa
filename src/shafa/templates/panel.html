@@ -34,3 +34,15 @@
     <span class="why">нові папки → ШІ пакетом; результати зазвичай до години</span>
   </form>
 </section>
+<section class="ai bot-{{ bot.code }}" aria-live="polite">
+  <div class="robot-state">
+    <strong>Бот: {{ bot.text }}</strong>
+  </div>
+  {% if bot.can_start %}
+  <form method="post" action="/bot" class="robot-buttons">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <button name="action" value="start">Запустити бота</button>
+  </form>
+  {% endif %}
+</section>

@@ -11,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "anthropic==1.9.0",
     "greenlet==3.5.6",  # підзалежність playwright, закріплена (D1)
+    "httpx2==2.13.1",  # підзалежність anthropic; бот звертається до Telegram через неї (BOT-001 D1)
     "Jinja2==3.1.6",
     "MarkupSafe==3.0.3",
     "Pillow==12.3.0",

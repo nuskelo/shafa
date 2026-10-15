@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class Status(StrEnum):
@@ -186,8 +186,69 @@ ALTER TABLE ai_requests ADD COLUMN cache_read_tokens INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE ai_requests ADD COLUMN batch_id INTEGER REFERENCES ai_batches (id);
 """
 
+# Версія 7 (BOT-001): бот. `bot_updates` — оброблені оновлення Telegram (повторна доставка нічого
+# не робить). `bot_drafts` — чернетка поста з одного чату: `collecting` (збираємо, 2 хв) →
+# `preview` (прев'ю з кнопками, дійсне 24 год) → `publishing` (запис ДО відправки в канал) →
+# `published`; `uncertain` — відповіді каналу не було (не повторюємо), `failed` — не вийшло, нічого
+# не опубліковано, `canceled`, `expired`. `bot_draft_parts` — повідомлення чернетки: текст і фото
+# (`photo` — «як фото», `jpeg`/`png` — файлом). `bot_status` — стан процесу бота для екрана.
+# `comments` — альбом усіх фото в коментарях під постом (≥ 2 фото): `waiting` — чекаємо пересланий
+# пост у групі обговорення, `late` — не прийшов за 2 хв (їй і Власнику сказано), `sending` — запис
+# ДО відправки альбому, `done`, `failed`. `editing` — вона виправляє текст («Редагувати»): наступний
+# її текст замінює текст чернетки. `bot_summaries` — повідомлення «Чернеток: N» з кнопками
+# «Опублікувати всі / Скасувати всі» в її чаті.
+BOT = """
+CREATE TABLE bot_updates (
+    update_id  INTEGER PRIMARY KEY,
+    handled_at TEXT NOT NULL
+);
+
+CREATE TABLE bot_drafts (
+    id                 INTEGER PRIMARY KEY,
+    chat_id            INTEGER NOT NULL,
+    state              TEXT NOT NULL CHECK (state IN ('collecting', 'preview', 'editing',
+                       'publishing', 'published', 'uncertain', 'failed', 'canceled', 'expired')),
+    asked              INTEGER NOT NULL DEFAULT 0,
+    preview_message_id INTEGER,
+    preview_at         TEXT,
+    edit_message_id    INTEGER,  -- «Надішли виправлений текст» з кнопкою «Скасувати редагування»
+    post_id            INTEGER,
+    folder_name        TEXT,
+    note               TEXT,
+    published_at       TEXT,
+    comments           TEXT CHECK (comments IN ('waiting', 'late', 'sending', 'done', 'failed')),
+    created_at         TEXT NOT NULL,
+    last_message_at    TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+
+CREATE TABLE bot_draft_parts (
+    draft_id   INTEGER NOT NULL REFERENCES bot_drafts (id),
+    message_id INTEGER NOT NULL,
+    text       TEXT,
+    file_id    TEXT,
+    kind       TEXT CHECK (kind IN ('photo', 'jpeg', 'png')),
+    media_group TEXT,  -- альбом Telegram: частини одного альбому — завжди одна чернетка
+    PRIMARY KEY (draft_id, message_id)
+);
+
+CREATE TABLE bot_summaries (
+    chat_id    INTEGER PRIMARY KEY,
+    message_id INTEGER,
+    shown      INTEGER NOT NULL,           -- скільки чернеток написано в повідомленні
+    running    INTEGER NOT NULL DEFAULT 0  -- «Опублікувати всі» триває: вдруге не запуститься
+);
+
+CREATE TABLE bot_status (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    started_at   TEXT,
+    heartbeat_at TEXT,
+    error        TEXT
+);
+"""
+
 # Що виконати, щоб перейти з версії N на N + 1 (текст SQL або функція, що сама ставить версію).
-MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES}
+MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT}
 
 
 def now() -> str:

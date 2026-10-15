@@ -134,7 +134,7 @@ def test_spawned_robot_survives_ctrl_c_of_screen(monkeypatch, tmp_path):
     import sys
 
     probe = "import os; print(os.getsid(0) if hasattr(os, 'getsid') else 0)"
-    monkeypatch.setattr(control, "command", lambda args: [sys.executable, "-c", probe])
+    monkeypatch.setattr(control, "command", lambda args, program: [sys.executable, "-c", probe])
     seen = {}
     real = subprocess.Popen
 
@@ -151,3 +151,7 @@ def test_spawned_robot_survives_ctrl_c_of_screen(monkeypatch, tmp_path):
     else:
         assert seen.get("start_new_session") is True
         assert int(log.read_text(encoding="utf-8").strip()) != os.getsid(0)
+
+
+def test_command_for_bot():
+    assert control.command(["--db", "x"], "bot")[3:] == ["bot", "--db", "x"]
