@@ -94,6 +94,9 @@ class FakeTelegram:
                      markup=markup)  # fmt: skip
         return {"message_id": message_id}
 
+    def delete_message(self, chat_id, message_id):
+        self._record("deleteMessage", chat_id=chat_id, message_id=message_id)
+
     def drop_buttons(self, chat_id, message_id):
         self._record("editMessageReplyMarkup", chat_id=chat_id, message_id=message_id)
 
@@ -117,7 +120,7 @@ def tg():
 @pytest.fixture
 def bot(conn, tg, root, clock):
     settings = Settings(CHANNEL, SELLER, OWNER, root, GROUP)
-    return Bot(conn, tg, settings, clock=clock, log=lambda text: None)
+    return Bot(conn, tg, settings, clock=clock, log=lambda text: None, sleep=lambda s: None)
 
 
 class Updates:
@@ -1095,7 +1098,9 @@ def three_previews(upd, bot, tg, clock, texts=None):
     for n, text in enumerate(texts):
         forwarded_post(upd, bot, tg, 10 + n * 10, f"g{n}", text, files=2)
     clock.pass_(seconds=4)
-    bot.tick()
+    bot.tick()  # прев'ю
+    clock.pass_(seconds=3)
+    bot.tick()  # «Чернеток: N» — після них
     return texts
 
 
@@ -1256,3 +1261,110 @@ def test_edit_on_old_preview_refused(conn, bot, tg, upd, clock):
     edit_query(upd, bot, tg, conn, message_id=12345)
     assert state(conn) == "preview"
     assert tg.answers()[-1] == "Це старе прев'ю — натисни кнопку під останнім."
+
+
+# --- «Чернеток: N» — завжди внизу ---
+
+
+def summary_id(conn):
+    return conn.execute("SELECT message_id FROM bot_summaries").fetchone()[0]
+
+
+def last_preview_message(conn):
+    return conn.execute("SELECT max(preview_message_id) FROM bot_drafts").fetchone()[0]
+
+
+def test_summary_waits_until_previews_settle(conn, bot, tg, upd, clock):
+    for n in range(2):
+        forwarded_post(upd, bot, tg, 10 + n * 10, f"g{n}", f"Кеди {38 + n} розмір. 800грн", 2)
+    clock.pass_(seconds=4)
+    bot.tick()
+    assert len(previews(tg)) == 2 and summary(tg) == []  # щойно прев'ю — ще не
+    clock.pass_(seconds=1)
+    bot.tick()
+    assert summary(tg) == []
+    clock.pass_(seconds=1)
+    bot.tick()
+    assert [p["text"] for p in summary(tg)] == ["Чернеток: 2"]
+    assert summary_id(conn) > last_preview_message(conn)
+
+
+def test_new_previews_move_summary_to_bottom(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    old = summary_id(conn)
+
+    forwarded_post(upd, bot, tg, 100, "late", "Кеди 40 розмір. 900грн", files=2)
+    clock.pass_(seconds=1)
+    bot.tick()  # ще збирається — не чіпаємо
+    assert [m for m, p in tg.calls if m == "deleteMessage"] == []
+    clock.pass_(seconds=3)
+    bot.tick()  # прев'ю
+    clock.pass_(seconds=3)
+    bot.tick()  # «Чернеток: 4» — унизу
+
+    assert ("deleteMessage", {"chat_id": SELLER, "message_id": old}) in tg.calls
+    assert [p["text"] for p in summary(tg)] == ["Чернеток: 3", "Чернеток: 4"]
+    assert summary_id(conn) > last_preview_message(conn)
+    assert conn.execute("SELECT count(*) FROM bot_summaries").fetchone()[0] == 1
+
+
+def test_ten_previews_one_summary_no_flicker(conn, bot, tg, upd, clock):
+    for n in range(10):  # пости надходять один за одним, прев'ю — у різних тактах
+        forwarded_post(upd, bot, tg, 10 + n * 10, f"g{n}", f"Кеди {36 + n} розмір. 800грн", 1)
+        clock.pass_(seconds=4)
+        bot.tick()
+    clock.pass_(seconds=3)
+    bot.tick()
+    assert len(previews(tg)) == 10
+    assert [p["text"] for p in summary(tg)] == ["Чернеток: 10"]
+    assert [m for m, p in tg.calls if m in ("deleteMessage", "editMessageText")] == []
+
+
+def test_count_change_edits_in_place_without_moving(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    old = summary_id(conn)
+    preview = conn.execute("SELECT preview_message_id FROM bot_drafts WHERE id = 3").fetchone()[0]
+    press(upd, bot, tg, draft_id=3, preview=preview)
+    clock.pass_(seconds=3)
+    bot.tick()
+    edits = [p for m, p in tg.calls if m == "editMessageText"]
+    assert [(e["message_id"], e["text"]) for e in edits] == [(old, "Чернеток: 2")]
+    assert [m for m, p in tg.calls if m == "deleteMessage"] == []
+    assert summary_id(conn) == old
+
+
+def test_old_summary_not_deletable_loses_buttons(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    old = summary_id(conn)
+    tg.errors["deleteMessage"] = TelegramError("Telegram відмовив (deleteMessage, 400)")
+    forwarded_post(upd, bot, tg, 100, "late", "Кеди 40 розмір. 900грн", files=2)
+    clock.pass_(seconds=4)
+    bot.tick()
+    clock.pass_(seconds=3)
+    bot.tick()
+    assert ("editMessageReplyMarkup", {"chat_id": SELLER, "message_id": old}) in tg.calls
+    assert summary_id(conn) != old and summary_id(conn) > last_preview_message(conn)
+
+
+def test_summary_moves_once_when_previews_follow_each_other(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    forwarded_post(upd, bot, tg, 100, "a", "Кеди 40 розмір. 900грн", files=1)
+    clock.pass_(seconds=4)
+    bot.tick()  # прев'ю A; підсумок тепер вище за нього
+    forwarded_post(upd, bot, tg, 110, "b", "Кеди 41 розмір. 900грн", files=1)
+    clock.pass_(seconds=2, milliseconds=500)
+    bot.tick()  # B ще збирається — підсумок не чіпаємо
+    clock.pass_(seconds=1)
+    bot.tick()  # прев'ю B
+    clock.pass_(seconds=3)
+    bot.tick()
+    assert len([m for m, p in tg.calls if m == "deleteMessage"]) == 1
+    assert summary(tg)[-1]["text"] == "Чернеток: 5"
+    assert summary_id(conn) > last_preview_message(conn)
+
+
+def test_polls_fast_right_after_previews(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1)
+    assert bot.waiting()  # «Чернеток: N» може знадобитись опустити
+    clock.pass_(seconds=11)
+    assert not bot.waiting()

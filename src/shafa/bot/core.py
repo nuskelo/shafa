@@ -68,6 +68,7 @@ NO_EDIT = "noedit"
 PUBLISH_ALL = "puball"
 CANCEL_ALL = "cancelall"
 PUBLISH_ALL_PAUSE = 3  # секунд між постами «Опублікувати всі»
+SUMMARY_DELAY = timedelta(seconds=2)  # «Чернеток: N» — після останнього прев'ю, без мигтіння
 OPEN = ("collecting", "preview", "editing")  # відкриті чернетки
 
 TEXTS = {
@@ -397,10 +398,14 @@ class Bot:
     # --- Прев'ю ---
 
     def waiting(self) -> bool:
-        """Є чернетки, що чекають прев'ю (опитувати Telegram частіше)."""
+        """Є чернетки, що чекають прев'ю, або щойно було прев'ю («Чернеток: N» має опуститись
+        донизу) — опитувати Telegram частіше."""
+        recent = (self.clock() - SUMMARY_DELAY * 5).isoformat(timespec="seconds")
         return bool(
             self.conn.execute(
-                "SELECT 1 FROM bot_drafts WHERE state = 'collecting' AND asked = 0"
+                "SELECT 1 FROM bot_drafts WHERE (state = 'collecting' AND asked = 0) "
+                "OR (state = 'preview' AND preview_at >= ?)",
+                (recent,),
             ).fetchone()
         )
 
@@ -910,7 +915,12 @@ class Bot:
         ]]}  # fmt: skip
 
     def _summaries(self) -> None:
-        """«Чернеток: N» з кнопками, коли відкритих ≥ 2; змінилось N — оновити; < 2 — без кнопок."""
+        """«Чернеток: N» з кнопками, коли відкритих ≥ 2 — завжди НИЖЧЕ за останнє прев'ю.
+
+        Нові прев'ю ще йдуть (чернетка чекає прев'ю або від останнього < 2 с) — чекаємо. Після
+        повідомлення з'явилось нове прев'ю — старе видаляємо, нове внизу. Змінилось лише N —
+        редагуємо на місці; < 2 — без кнопок.
+        """
         marks = ", ".join("?" * len(OPEN))
         chats = {
             r[0]
@@ -920,32 +930,51 @@ class Bot:
                 OPEN,
             )
         }
+        settled = (self.clock() - SUMMARY_DELAY).isoformat(timespec="seconds")
         for chat_id in sorted(chats):
             row = self.conn.execute(
                 "SELECT * FROM bot_summaries WHERE chat_id = ?", (chat_id,)
             ).fetchone()
             if row is not None and row["running"]:
                 continue
-            count = len(self._open_drafts(chat_id))
+            drafts = self._open_drafts(chat_id)
+            count = len(drafts)
             text = TEXTS["summary"].format(n=count)
-            if count >= 2 and row is None:
-                sent = self.say(chat_id, text, self._summary_markup())
-                with self.conn:
-                    self.conn.execute(
-                        "INSERT INTO bot_summaries (chat_id, message_id, shown) VALUES (?, ?, ?)",
-                        (chat_id, (sent or {}).get("message_id"), count),
-                    )
-            elif row is not None and row["shown"] != count:
-                markup = self._summary_markup() if count >= 2 else None
-                self._edit_summary(chat_id, row["message_id"], text, markup)
-                with self.conn:
-                    if count >= 2:
+            if count < 2:
+                if row is not None:
+                    self._edit_summary(chat_id, row["message_id"], text, None)
+                    with self.conn:
+                        self.conn.execute("DELETE FROM bot_summaries WHERE chat_id = ?", (chat_id,))
+                continue
+            coming = any(d["state"] == "collecting" and not d["asked"] for d in drafts)
+            latest = max((d["preview_at"] or "" for d in drafts), default="")
+            last_preview = max((d["preview_message_id"] or 0 for d in drafts), default=0)
+            below = row is not None and (row["message_id"] or 0) > last_preview
+            if row is not None and below:
+                if row["shown"] != count:
+                    self._edit_summary(chat_id, row["message_id"], text, self._summary_markup())
+                    with self.conn:
                         self.conn.execute(
                             "UPDATE bot_summaries SET shown = ? WHERE chat_id = ?",
                             (count, chat_id),
                         )
-                    else:
-                        self.conn.execute("DELETE FROM bot_summaries WHERE chat_id = ?", (chat_id,))
+                continue
+            if coming or latest > settled:  # прев'ю ще йдуть — не мигтимо
+                continue
+            if row is not None and row["message_id"]:
+                try:
+                    self.tg.delete_message(chat_id, row["message_id"])
+                except TelegramError as error:  # старше 48 год тощо — лишаємо без кнопок
+                    self.log(f"«Чернеток: N» не видалено: {error}")
+                    self._drop_buttons(chat_id, row["message_id"])
+            sent = self.say(chat_id, text, self._summary_markup())
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO bot_summaries (chat_id, message_id, shown) VALUES (?, ?, ?) "
+                    "ON CONFLICT (chat_id) DO UPDATE SET message_id = excluded.message_id, "
+                    "shown = excluded.shown",
+                    (chat_id, (sent or {}).get("message_id"), count),
+                )
 
     def _edit_summary(
         self, chat_id: int, message_id: int | None, text: str, markup: dict | None

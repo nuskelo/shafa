@@ -185,6 +185,9 @@ class Telegram:
         }
         return self.call("editMessageText", params)
 
+    def delete_message(self, chat_id: int, message_id: int) -> None:
+        self.call("deleteMessage", {"chat_id": chat_id, "message_id": message_id})
+
     def drop_buttons(self, chat_id: int, message_id: int) -> None:
         self.call(
             "editMessageReplyMarkup",
