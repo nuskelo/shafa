@@ -14,6 +14,7 @@
     {% for status, title in tabs.items() %}
     <a href="/{{ status }}" class="tab{% if status == current %} current{% endif %}">{{ title }} <span class="count">{{ counts[status] }}</span></a>
     {% endfor %}
+    <a href="/settings" class="tab{% if current == "settings" %} current{% endif %}">Налаштування</a>
   </nav>
   {% if can_quit %}
   <form method="post" action="/quit" class="quit">

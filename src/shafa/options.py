@@ -1,0 +1,99 @@
+"""Налаштування, які Продавчиня чи Власник міняють на екрані (WIN-001, OQ-006). Без секретів.
+
+Значення перевіряються тими самими правилами, що їх потім читають робот і ШІ (`publish.daily_limit`,
+`batch.limits`), і пишуться в `.env` у теці даних. Секрети (ключ ШІ, токен бота) — лише майстер.
+"""
+
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+from shafa import config, places
+from shafa.batch import BATCH_SETTING, DAILY_USD, MONEY_SETTING, WAIT_DAYS, WAIT_SETTING
+from shafa.robot.publish import DAILY_LIMIT, DAILY_LIMIT_SETTING, DELETE_SETTING
+
+ROOT_SETTING = "SHAFA_ROOT_DIR"
+
+
+@dataclass(frozen=True)
+class Option:
+    name: str
+    label: str
+    hint: str
+    default: str
+    kind: str  # int / money / path / flag
+
+
+OPTIONS = (
+    Option(
+        DAILY_LIMIT_SETTING, "Публікацій на Шафі за добу", "від 1 до 100", str(DAILY_LIMIT), "int"
+    ),
+    Option(MONEY_SETTING, "Витрати на ШІ за добу, $", "від 0,01 до 100", str(DAILY_USD), "money"),
+    Option(
+        WAIT_SETTING, "ШІ — через скільки днів після посту", "від 0 до 60", str(WAIT_DAYS), "int"
+    ),
+    Option(BATCH_SETTING, "Товарів в одному пакеті ШІ", "від 1 до 500", "50", "int"),
+    Option(ROOT_SETTING, "Головна папка з фото", "папка має існувати", "", "path"),
+    Option(DELETE_SETTING, "Видаляти папки з «Опубліковано» через 3 дні", "", "", "flag"),
+)
+_LIMITS = {
+    DAILY_LIMIT_SETTING: (1, 100),
+    WAIT_SETTING: (0, 60),
+    BATCH_SETTING: (1, 500),
+}
+
+
+def current() -> dict[str, str]:
+    """Що зараз діє (налаштоване або типове)."""
+    values = {o.name: config.setting(o.name) or o.default for o in OPTIONS}
+    if not values[ROOT_SETTING]:
+        values[ROOT_SETTING] = str(places.default_root())
+    flag = (values[DELETE_SETTING] or "").lower() in ("1", "так", "yes", "true")
+    values[DELETE_SETTING] = "1" if flag else ""
+    return values
+
+
+def check(form: dict[str, str]) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """Форма → (значення для `.env`, помилки за назвою поля, попередження)."""
+    values: dict[str, str] = {}
+    errors: dict[str, str] = {}
+    warnings: list[str] = []
+    for option in OPTIONS:
+        raw = (form.get(option.name) or "").strip()
+        if option.kind == "flag":
+            values[option.name] = "1" if raw else "0"
+        elif option.kind == "int":
+            low, high = _LIMITS[option.name]
+            if not raw.isdigit() or not low <= int(raw) <= high:
+                errors[option.name] = f"ціле число {option.hint}"
+            else:
+                values[option.name] = str(int(raw))
+        elif option.kind == "money":
+            try:
+                money = Decimal(raw.replace(",", "."))
+            except InvalidOperation:
+                money = Decimal(-1)
+            if not money.is_finite() or not Decimal(0) < money <= 100:
+                errors[option.name] = f"сума {option.hint}"
+            else:
+                values[option.name] = format(money.normalize(), "f")
+        else:
+            path = Path(raw.strip('"')) if raw else None
+            if path is None or not path.is_dir():
+                errors[option.name] = "такої папки немає"
+            else:
+                values[option.name] = str(path)
+                if places.in_onedrive(path):
+                    warnings.append(
+                        "Головна папка в OneDrive: фото поїдуть у хмару, програма читатиме їх "
+                        f"повільно. Краще {places.default_root()}"
+                    )
+    return values, errors, warnings
+
+
+def save(form: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Перевірити й записати. Повертає (помилки, попередження); з помилками нічого не пише."""
+    values, errors, warnings = check(form)
+    if not errors:
+        config.save_settings(values)
+    return errors, warnings

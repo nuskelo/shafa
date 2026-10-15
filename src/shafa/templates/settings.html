@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Налаштування · Шафа-помічник{% endblock %}
+{% block main %}
+<h1>Налаштування</h1>
+{% for warning in warnings %}<p class="note yellow">{{ warning }}</p>{% endfor %}
+<form method="post" action="/settings" class="settings">
+  <input type="hidden" name="token" value="{{ token }}">
+  {% for o in options %}
+  <div class="field{% if o.name in errors %} bad{% endif %}">
+    <label for="s-{{ o.name }}">{{ o.label }}</label>
+    <div class="input">
+      {% if o.kind == "flag" %}
+      <input type="checkbox" id="s-{{ o.name }}" name="{{ o.name }}" value="1"{% if values.get(o.name) == "1" %} checked{% endif %}>
+      {% else %}
+      <input id="s-{{ o.name }}" name="{{ o.name }}" value="{{ values.get(o.name, "") }}"{% if o.kind != "path" %} class="short" inputmode="decimal"{% endif %}>
+      {% if o.hint %}<small>{{ o.hint }}</small>{% endif %}
+      {% endif %}
+      {% if o.name in errors %}<p class="error">{{ errors[o.name] }}</p>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+  <div class="actions"><button class="approve">Зберегти</button></div>
+</form>
+<p class="meta">Ключ ШІ, токен бота й чати — лише в майстрі налаштування (секрети на екрані не показуються).</p>
+{% endblock %}

@@ -26,7 +26,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import jinja2
 from PIL import UnidentifiedImageError
 
-from shafa import ai, batch, catalog, config, db, fill, photos, review
+from shafa import ai, batch, catalog, config, db, fill, options, photos, review
 from shafa.db import Status
 from shafa.folders import PUBLISHED_DIR, list_folders
 from shafa.robot import control, lock, publish
@@ -310,6 +310,10 @@ class App:
             return self.ai_post(request)
         if path == "/bot" and request.method == "POST":
             return self.bot_post(request)
+        if path == "/settings" and get:
+            return self.settings_page(request)
+        if path == "/settings" and request.method == "POST":
+            return self.settings_post(request)
         if path == "/quit" and request.method == "POST" and self.on_quit is not None:
             done = self.on_quit()
             return self.page("quit.html", done=done)
@@ -349,6 +353,42 @@ class App:
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
         }
+
+    # --- Налаштування (без секретів) ---
+
+    def settings_page(
+        self,
+        request: Request,
+        values: dict[str, str] | None = None,
+        errors: dict[str, str] | None = None,
+        warnings: list[str] | None = None,
+        message: str | None = None,
+    ) -> Response:
+        conn = self.connect()
+        try:
+            return self.page(
+                "settings.html",
+                **self._chrome(conn, request),
+                current="settings",
+                options=options.OPTIONS,
+                values=values or options.current(),
+                errors=errors or {},
+                warnings=warnings or [],
+                message=message or MESSAGES.get(request.arg("msg")),
+            )
+        finally:
+            conn.close()
+
+    def settings_post(self, request: Request) -> Response:
+        form = {name: (values or [""])[0] for name, values in request.form.items()}
+        errors, warnings = options.save(form)
+        if errors:
+            return self.settings_page(
+                request, form, errors, warnings, "Не збережено: виправте поля, позначені червоним"
+            )
+        self.root = Path(form[options.ROOT_SETTING].strip().strip('"'))  # екран — одразу
+        message = "Збережено. Робот і бот візьмуть нові значення з наступного запуску."
+        return self.settings_page(request, warnings=warnings, message=message)
 
     # --- Бот ---
 
