@@ -17,3 +17,5 @@ result.json
 *.JPG
 !tests/fixtures/**
 .DS_Store
+dist/
+build/
