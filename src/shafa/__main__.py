@@ -139,6 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
     cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
     commands.add_parser("quit", help="закрити програму: екран і бота (для оновлення)")
+    commands.add_parser("setup", help="майстер налаштування на її ноутбуці (секрети приховано)")
     cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
@@ -497,6 +498,10 @@ def main(argv: list[str] | None = None) -> int:
 
         opener = (lambda url: None) if args.no_browser else webbrowser.open
         return app.start(opener, args.port)
+    if args.command == "setup":
+        from shafa import wizard
+
+        return wizard.run()
     if args.command == "quit":
         from shafa import app
 
