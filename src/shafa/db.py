@@ -192,6 +192,9 @@ ALTER TABLE ai_requests ADD COLUMN batch_id INTEGER REFERENCES ai_batches (id);
 # `published`; `uncertain` — відповіді каналу не було (не повторюємо), `failed` — не вийшло, нічого
 # не опубліковано, `canceled`, `expired`. `bot_draft_parts` — повідомлення чернетки: текст і фото
 # (`photo` — «як фото», `jpeg`/`png` — файлом). `bot_status` — стан процесу бота для екрана.
+# `comments` — альбом усіх фото в коментарях під постом (≥ 2 фото): `waiting` — чекаємо пересланий
+# пост у групі обговорення, `late` — не прийшов за 2 хв (їй і Власнику сказано), `sending` — запис
+# ДО відправки альбому, `done`, `failed`.
 BOT = """
 CREATE TABLE bot_updates (
     update_id  INTEGER PRIMARY KEY,
@@ -209,6 +212,8 @@ CREATE TABLE bot_drafts (
     post_id            INTEGER,
     folder_name        TEXT,
     note               TEXT,
+    published_at       TEXT,
+    comments           TEXT CHECK (comments IN ('waiting', 'late', 'sending', 'done', 'failed')),
     created_at         TEXT NOT NULL,
     last_message_at    TEXT NOT NULL,
     updated_at         TEXT NOT NULL

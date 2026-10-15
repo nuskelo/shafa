@@ -11,6 +11,14 @@
 - D6: підпис — як у її постах: порожній рядок, «Пишіть сюди 👉 @…», без форматування.
 - D7: дата поста — дата повідомлення в каналі, місцевий час без поясу (як в Експорті).
 - D8: папка з номером уже є — фото в «<номер>-бот» і повідомлення Власнику.
+
+Ітерація 2 (рішення Власника):
+- Підпис: текст → `#VS_N_розмір` (окремий рядок, `hashtag.py`) → порожній рядок → «Пишіть сюди…» →
+  порожній рядок → «Всі фото в коментарях ⬇️» (лише якщо фото ≥ 2). Незрозумілий розмір — питаємо.
+- Фото ≥ 2: усі (і перше) — альбомом у коментарі під постом: відповідь на пересланий у групу
+  обговорення пост. Не прийшов за 2 хв — їй «фото ще не додались», Власнику тривога, додаємо, коли
+  прийде (до 24 год). Пост у канал удруге — ніколи.
+- Прев'ю — точно як у каналі: фото-картинкою, з усіма рядками.
 """
 
 import io
@@ -24,11 +32,16 @@ from typing import Any
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import rules
+from shafa.bot.hashtag import UNCLEAR, hashtag
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
 
 SIGNATURE = "Пишіть сюди 👉 @viktoriaviktoriatg"  # як у її постах (звірено з Експортом)
+COMMENTS_LINE = "Всі фото в коментарях ⬇️"
 WINDOW = timedelta(minutes=2)  # D5
+ASK_WINDOW = timedelta(minutes=10)  # бот щось спитав — її відповідь чекаємо довше
+COMMENTS_WAIT = timedelta(minutes=2)  # пересланий у групу пост
+COMMENTS_GIVE_UP = timedelta(hours=24)
 SETTLE = timedelta(seconds=3)  # тиша після останнього повідомлення — показуємо прев'ю
 PREVIEW_VALID = timedelta(hours=24)  # D2
 MAX_PHOTOS = 10
@@ -48,10 +61,12 @@ TEXTS = {
     "not_photo": "Я приймаю лише текст і фото. Надішли фото як звичайне фото або JPG.",
     "need_photos": "Надішли фото до цього тексту (до 10).",
     "need_text": "Надішли текст поста до цих фото.",
+    "need_size": "Не можу зрозуміти розмір. Допиши розмір (наприклад «38 розмір» або «ідуть на "
+    "37») — і я покажу прев'ю.",
     "too_many": "Забагато фото: {n}. Максимум 10 — надішли пост заново.",
     "too_long": "Текст задовгий: {n} символів разом із підписом, максимум 1024. Скороти й надішли "
     "пост заново.",
-    "preview": "Так буде в каналі (фото: {n}; у канал — перше, у папку для Шафи — усі). "
+    "preview": "Так буде в каналі (фото: {n}; у канал — перше{comments}, у папку для Шафи — усі). "
     "Опублікувати?",
     "publishing": "Публікую…",
     "already": "Цей пост уже опубліковано: {link}",
@@ -66,6 +81,8 @@ TEXTS = {
     "failed": "Не вийшло: {why}. Нічого не опубліковано — надішли пост ще раз.",
     "done": "Опубліковано: {link}\nЗбережено фото для Шафи: {n}.",
     "late": "(отримано о {time}, опубліковано із запізненням)",
+    "comments_late": "Пост {link} є, але фото в коментарі ще не додались — додам, щойно зможу.",
+    "comments_done": "Фото додано в коментарі до поста {link}.",
 }
 
 
@@ -79,18 +96,30 @@ class Settings:
     seller_chat: int | None
     owner_chat: int | None
     root: Path  # Головна папка
+    discussion_id: int | None = None  # група обговорення каналу (коментарі)
 
     @property
     def chats(self) -> set[int]:
         return {c for c in (self.seller_chat, self.owner_chat) if c is not None}
 
 
-def caption_of(texts: list[str]) -> str:
-    """Текст поста + підпис, як у її постах (D6). Підпис уже є — не дублюємо."""
+def caption_of(texts: list[str], photos: int = 1) -> str | None:
+    """Підпис поста, як у її постах: текст → хештег → «Пишіть сюди…» → «Всі фото в коментарях»
+    (фото ≥ 2). Хештег чи підпис уже є — не дублюємо. None — розмір незрозумілий (спитати її)."""
     body = "\n".join(t.strip() for t in texts if t and t.strip())
-    if rules.SIGNATURE.search(body):
-        return body
-    return f"{body}\n\n{SIGNATURE}"
+    tag = hashtag(body)
+    if tag == UNCLEAR:
+        return None
+    signed = rules.SIGNATURE.search(body)
+    if tag and signed:  # хештег — перед її власним «Пишіть сюди…»
+        body = f"{body[: signed.start()].rstrip()}\n{tag}\n\n{body[signed.start() :]}"
+    elif tag:
+        body = f"{body}\n{tag}"
+    if not signed:
+        body = f"{body}\n\n{SIGNATURE}"
+    if photos >= 2:
+        body = f"{body}\n\n{COMMENTS_LINE}"
+    return body
 
 
 def caption_length(text: str) -> int:
@@ -200,6 +229,10 @@ class Bot:
 
     def _message(self, update_id: int, message: dict) -> None:
         chat = message.get("chat")
+        discussion = self.settings.discussion_id
+        if discussion is not None and isinstance(chat, dict) and chat.get("id") == discussion:
+            self._discussion(update_id, message)
+            return
         if not self._allowed(chat, message.get("from")):  # чужі — мовчки
             self._mark(update_id)
             return
@@ -259,12 +292,15 @@ class Bot:
         return None, None
 
     def _open_draft(self, chat_id: int) -> sqlite3.Row | None:
-        """Чернетка, до якої додається повідомлення: остання в цьому чаті не пізніше 2 хв тому."""
+        """Чернетка, до якої додається повідомлення: остання в цьому чаті не пізніше 2 хв тому;
+        якщо бот у ній щось спитав (фото, текст, розмір) — не пізніше 10 хв."""
         since = (self.clock() - WINDOW).isoformat(timespec="seconds")
+        asked_since = (self.clock() - ASK_WINDOW).isoformat(timespec="seconds")
         return self.conn.execute(
             "SELECT * FROM bot_drafts WHERE chat_id = ? AND state IN ('collecting', 'preview') "
-            "AND last_message_at >= ? ORDER BY id DESC LIMIT 1",
-            (chat_id, since),
+            "AND (last_message_at >= ? OR (state = 'collecting' AND asked = 1 "
+            "AND last_message_at >= ?)) ORDER BY id DESC LIMIT 1",
+            (chat_id, since, asked_since),
         ).fetchone()
 
     # --- Прев'ю ---
@@ -296,6 +332,7 @@ class Bot:
         ).fetchall()
         for draft in drafts:
             self._preview(draft)
+        self._comments_overdue(now_)
 
     def _parts(self, draft_id: int) -> list[sqlite3.Row]:
         return self.conn.execute(
@@ -323,7 +360,11 @@ class Bot:
             self._set(draft_id, state="failed", note="забагато фото")
             self.say(chat_id, TEXTS["too_many"].format(n=len(photos)))
             return
-        caption = caption_of(texts)
+        caption = caption_of(texts, len(photos))
+        if caption is None:
+            self._set(draft_id, asked=1)
+            self.say(chat_id, TEXTS["need_size"])
+            return
         if caption_length(caption) > CAPTION_MAX:
             self._set(draft_id, state="failed", note="задовгий текст")
             self.say(chat_id, TEXTS["too_long"].format(n=caption_length(caption)))
@@ -338,17 +379,20 @@ class Bot:
                 ]
             ]
         }
-        self.say(chat_id, TEXTS["preview"].format(n=len(photos)))
+        comments = ", у коментарі — усі" if len(photos) >= 2 else ""
+        self.say(chat_id, TEXTS["preview"].format(n=len(photos), comments=comments))
         first = photos[0]
-        try:
+        try:  # прев'ю — як у каналі: фото-картинкою (файл — завантажуємо як фото)
             if first["kind"] == "photo":
-                sent = self.tg.send_photo(chat_id, first["file_id"], caption, markup)
+                picture: Upload | str = first["file_id"]
             else:
-                sent = self.tg.send_document(chat_id, first["file_id"], caption, markup)
-        except TelegramError as error:
+                picture = Upload("1.jpg", for_channel(self._download(first)))
+            sent = self.tg.send_photo(chat_id, picture, caption, markup)
+        except (TelegramError, PhotoError, OSError) as error:
             self.log(f"Прев'ю не надіслано: {error}")
             self._set(draft_id, asked=1)  # без кнопок публікувати нічого; вона надішле ще раз
-            self.say(chat_id, TEXTS["failed"].format(why="прев'ю не надіслалось"))
+            why = str(error) if isinstance(error, PhotoError) else "прев'ю не надіслалось"
+            self.say(chat_id, TEXTS["failed"].format(why=why))
             return
         self._set(
             draft_id, state="preview", preview_message_id=sent.get("message_id"),
@@ -453,9 +497,12 @@ class Bot:
         self._drop_buttons(chat_id, draft["preview_message_id"])
 
         parts = self._parts(draft_id)
-        caption = caption_of([p["text"] for p in parts if p["text"]])
+        files = [p for p in parts if p["file_id"]]
+        caption = caption_of([p["text"] for p in parts if p["text"]], len(files))
         try:
-            photos = [self._download(p) for p in parts if p["file_id"]]
+            if caption is None:  # прев'ю пройшло, тож сюди не потрапляє; про всяк випадок
+                raise PhotoError("розмір незрозумілий")
+            photos = [self._download(p) for p in files]
             channel_photo = for_channel(photos[0])
         except (TelegramError, PhotoError, OSError) as error:
             why = str(error) if isinstance(error, PhotoError) else "фото не завантажились"
@@ -503,11 +550,12 @@ class Bot:
             return
         date = local_date(sent["date"]) if isinstance(sent.get("date"), int) else None
         date = date or self.clock().strftime("%Y-%m-%dT%H:%M:%S")
+        comments = "waiting" if len(photos) >= 2 else None
         with self.conn:
             self.conn.execute(
-                "UPDATE bot_drafts SET state = 'published', post_id = ?, updated_at = ? "
-                "WHERE id = ?",
-                (post_id, self._stamp(), draft_id),
+                "UPDATE bot_drafts SET state = 'published', post_id = ?, published_at = ?, "
+                "comments = ?, updated_at = ? WHERE id = ?",
+                (post_id, self._stamp(), comments, self._stamp(), draft_id),
             )
             self.conn.execute(
                 "INSERT INTO posts (post_id, date, text, source, added_at) "
@@ -518,7 +566,8 @@ class Bot:
         try:
             folder = self._save_folder(post_id, photos)
         except OSError as error:
-            self._set(draft_id, note=f"папка не створена: {error}")
+            # без папки альбому для коментарів немає — Власник розбереться руками
+            self._set(draft_id, note=f"папка не створена: {error}", comments=comments and "failed")
             self.say(chat_id, TEXTS["done"].format(link=link, n=0))
             self.tell_owner(f"пост {post_id} опубліковано, але папку не створено: {error}")
             return
@@ -554,7 +603,16 @@ class Bot:
     # --- Старт ---
 
     def recover(self) -> None:
-        """Після падіння: чернетки «публікую» — невідомо, чи пост у каналі. Не повторюємо (D2)."""
+        """Після падіння: «публікую» — невідомо, чи пост у каналі; «надсилаю коментарі» —
+        невідомо, чи альбом під постом. Не повторюємо (D2)."""
+        for row in self.conn.execute(
+            "SELECT id, post_id FROM bot_drafts WHERE comments = 'sending'"
+        ).fetchall():
+            self._set(row["id"], comments="failed")
+            self.tell_owner(
+                f"бот зупинився, коли додавав фото в коментарі до поста {row['post_id']} — "
+                "перевір коментарі; повторно не додаю."
+            )
         rows = self.conn.execute(
             "SELECT id, chat_id FROM bot_drafts WHERE state = 'publishing'"
         ).fetchall()
@@ -564,4 +622,84 @@ class Bot:
             self.tell_owner(
                 f"бот зупинився під час публікації чернетки {row['id']} — перевір канал; "
                 "повторно не публікую."
+            )
+
+    # --- Коментарі (альбом усіх фото під постом) ---
+
+    def _discussion(self, update_id: int, message: dict) -> None:
+        """Група обговорення: цікавить лише пересланий туди наш пост — на нього відповідаємо
+        альбомом. Решту повідомлень групи пропускаємо мовчки."""
+        origin = message.get("forward_origin") or {}
+        post_id = origin.get("message_id")
+        ours = (
+            message.get("is_automatic_forward") is True
+            and origin.get("type") == "channel"
+            and (origin.get("chat") or {}).get("id") == self.settings.channel_id
+            and isinstance(post_id, int)
+        )
+        if not ours:
+            self._mark(update_id)
+            return
+        with self.conn:  # «надсилаю» — ДО відправки альбому: вдруге не надішлемо
+            self.conn.execute("INSERT INTO bot_updates VALUES (?, ?)", (update_id, now()))
+            draft = self.conn.execute(
+                "SELECT * FROM bot_drafts WHERE post_id = ? AND state = 'published' "
+                "AND comments IN ('waiting', 'late')",
+                (post_id,),
+            ).fetchone()
+            if draft is None:
+                return
+            self.conn.execute(
+                "UPDATE bot_drafts SET comments = 'sending', updated_at = ? WHERE id = ?",
+                (self._stamp(), draft["id"]),
+            )
+        self._send_comments(draft, message["message_id"])
+
+    def _album(self, folder_name: str) -> list[Upload]:
+        folder = self.settings.root / folder_name
+        files = sorted(folder.glob("*.jpg"), key=lambda f: int(f.stem) if f.stem.isdigit() else 0)
+        return [Upload(f.name, for_channel(f.read_bytes())) for f in files[:MAX_PHOTOS]]
+
+    def _send_comments(self, draft: sqlite3.Row, forwarded_id: int) -> None:
+        link = post_link(self.settings.channel_id, draft["post_id"])
+        try:
+            album = self._album(draft["folder_name"] or "")
+            if len(album) < 2:
+                raise PhotoError("у папці поста менше двох фото")
+            self.tg.send_media_group(self.settings.discussion_id, album, forwarded_id)
+        except (TelegramError, PhotoError, OSError) as error:
+            self.log(f"Коментарі до поста {draft['post_id']}: {error}")
+            self._set(draft["id"], comments="failed")
+            sure = isinstance(error, TelegramError) and error.uncertain
+            self.tell_owner(
+                f"фото в коментарі до поста {link} "
+                + ("могли не додатись — перевір; повторно не додаю" if sure else "не додались")
+                + f" ({error})."
+            )
+            return
+        self._set(draft["id"], comments="done")
+        if draft["comments"] == "late":
+            self.say(draft["chat_id"], TEXTS["comments_done"].format(link=link))
+
+    def _comments_overdue(self, now_: datetime) -> None:
+        """Пересланого поста немає 2 хв — їй і Власнику; немає добу — здаємось."""
+        wait = (now_ - COMMENTS_WAIT).isoformat(timespec="seconds")
+        give_up = (now_ - COMMENTS_GIVE_UP).isoformat(timespec="seconds")
+        for row in self.conn.execute(
+            "SELECT * FROM bot_drafts WHERE comments = 'waiting' AND published_at <= ?", (wait,)
+        ).fetchall():
+            link = post_link(self.settings.channel_id, row["post_id"])
+            self._set(row["id"], comments="late")
+            self.say(row["chat_id"], TEXTS["comments_late"].format(link=link))
+            self.tell_owner(
+                f"пост {link}: пересланий у групу обговорення пост не прийшов за 2 хв — фото в "
+                "коментарях ще немає. Додам, щойно прийде (до 24 год)."
+            )
+        for row in self.conn.execute(
+            "SELECT * FROM bot_drafts WHERE comments = 'late' AND published_at <= ?", (give_up,)
+        ).fetchall():
+            self._set(row["id"], comments="failed")
+            self.tell_owner(
+                f"пост {post_link(self.settings.channel_id, row['post_id'])}: за добу фото в "
+                "коментарі так і не додались — додай руками з папки поста."
             )

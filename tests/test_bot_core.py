@@ -11,6 +11,7 @@ from shafa.bot.telegram import TelegramError, Upload
 KYIV = timezone(timedelta(hours=3))
 SELLER, OWNER, STRANGER = 111, 222, 999
 CHANNEL = -1002394827824
+GROUP = -1009990001112  # група обговорення каналу
 TEXT = "Шкіряні кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір"
 
 
@@ -51,6 +52,7 @@ class FakeTelegram:
         self.next_id = 500
         self.channel_posts = []
         self.last_preview = None
+        self.albums = []
 
     def _record(self, method, **params):
         self.calls.append((method, params))
@@ -71,12 +73,10 @@ class FakeTelegram:
             self.last_preview = self.next_id
         return {"message_id": self.next_id}
 
-    def send_document(self, chat_id, file_id, caption, markup=None):
-        self._record(
-            "sendDocument", chat_id=chat_id, file_id=file_id, caption=caption, markup=markup
-        )
-        self.last_preview = self.next_id
-        return {"message_id": self.next_id}
+    def send_media_group(self, chat_id, photos, reply_to):
+        self._record("sendMediaGroup", chat_id=chat_id, photos=photos, reply_to=reply_to)
+        self.albums.append((chat_id, photos, reply_to))
+        return [{"message_id": self.next_id}]
 
     def get_file(self, file_id):
         self._record("getFile", file_id=file_id)
@@ -111,7 +111,7 @@ def tg():
 
 @pytest.fixture
 def bot(conn, tg, root, clock):
-    settings = Settings(CHANNEL, SELLER, OWNER, root)
+    settings = Settings(CHANNEL, SELLER, OWNER, root, GROUP)
     return Bot(conn, tg, settings, clock=clock, log=lambda text: None)
 
 
@@ -181,13 +181,32 @@ def state(conn, draft_id=1):
 # --- Підпис і дрібниці ---
 
 
+SIGN = "Пишіть сюди 👉 @viktoriaviktoriatg"
+
+
 def test_caption_like_her_posts():
-    assert core.caption_of([TEXT]) == TEXT + "\n\nПишіть сюди 👉 @viktoriaviktoriatg"
-    assert core.caption_of(["  Кеди  ", "", "38 розмір\n"]) == (
-        "Кеди\n38 розмір\n\nПишіть сюди 👉 @viktoriaviktoriatg"
+    text = "Кросівки Lowa 37 розміру. 1200грн"
+    assert core.caption_of([text]) == f"{text}\n#VS_37_розмір\n\n{SIGN}"
+    assert core.caption_of([text], 2) == (
+        f"{text}\n#VS_37_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
     )
-    signed = "Кеди\n\nПишіть сюди 👉 @viktoriaviktoriatg"
-    assert core.caption_of([signed]) == signed  # уже є — не дублюємо
+    assert core.caption_of(["  Кеди  ", "", "38 розмір\n"]) == (
+        f"Кеди\n38 розмір\n#VS_38_розмір\n\n{SIGN}"
+    )
+
+
+def test_caption_does_not_duplicate_her_hashtag_or_signature():
+    assert core.caption_of([TEXT]) == f"{TEXT}\n\n{SIGN}"  # хештег уже є
+    signed = f"Кеди 38 розмір. 800грн\n\n{SIGN}"
+    assert core.caption_of([signed]) == f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}"
+    assert core.caption_of([f"Сумка шкіряна. 900грн\n#VS_сумки\n\n{SIGN}"], 3) == (
+        f"Сумка шкіряна. 900грн\n#VS_сумки\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+    )
+
+
+def test_caption_other_things_without_hashtag_and_unclear_size():
+    assert core.caption_of(["Рукавиці шкіряні. 300грн"]) == f"Рукавиці шкіряні. 300грн\n\n{SIGN}"
+    assert core.caption_of(["Кросівки Nike. 1200грн"]) is None
 
 
 def test_caption_length_counts_like_telegram():
@@ -216,7 +235,8 @@ def test_album_preview_then_publish(conn, bot, tg, upd, clock, root):
     assert state(conn) == "preview"
     preview = [(m, p) for m, p in tg.calls if m == "sendPhoto"][-1][1]
     assert preview["chat_id"] == SELLER and preview["photo"] == "f1"  # найбільший розмір першого
-    assert preview["caption"] == core.caption_of([TEXT])
+    assert preview["caption"] == core.caption_of([TEXT], 3)
+    assert preview["caption"].endswith("\n\nВсі фото в коментарях ⬇️")
     buttons = preview["markup"]["inline_keyboard"][0]
     assert [b["callback_data"] for b in buttons] == ["pub:1", "cancel:1"]
     assert tg.channel_posts == []  # без натискання нічого не публікується
@@ -225,7 +245,7 @@ def test_album_preview_then_publish(conn, bot, tg, upd, clock, root):
 
     ((photo_sent, caption),) = tg.channel_posts
     assert isinstance(photo_sent, Upload) and photo_sent.data == tg.files["f1"]
-    assert caption == core.caption_of([TEXT])
+    assert caption == preview["caption"]  # прев'ю = канал
     assert state(conn) == "published"
     folder = root / "1401"
     assert sorted(p.name for p in folder.iterdir()) == ["1.jpg", "2.jpg", "3.jpg"]
@@ -448,7 +468,9 @@ def test_jpeg_file_saved_as_original_and_uploaded_to_channel(conn, bot, tg, upd,
     bot.handle(upd(message={**document(11, "d1", "IMG_1.JPG", "image/jpeg"), "caption": TEXT}))
     clock.pass_(seconds=4)
     bot.tick()
-    assert [m for m, p in tg.calls if m == "sendDocument"]  # прев'ю — тим самим файлом
+    (preview,) = [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]]
+    assert isinstance(preview["photo"], Upload)  # прев'ю файлу — фото-картинкою, як у каналі
+    assert preview["photo"].data == tg.files["d1"]
     press(upd, bot, tg)
 
     assert (root / "1401" / "1.jpg").read_bytes() == tg.files["d1"]
@@ -567,7 +589,7 @@ def test_bot_post_becomes_card_and_survives_new_export(conn, bot, tg, upd, clock
     (root / "1401" / "a.jpg").write_bytes(jpeg())
     send_post(bot, tg, upd, clock, files=2)
     press(upd, bot, tg)
-    send_post(bot, tg, upd, clock, files=1, text="Кеди Ecco 38. 900грн")
+    send_post(bot, tg, upd, clock, files=1, text="Кеди Ecco 38 розмір. 900грн")
     press(upd, bot, tg, draft_id=2)
 
     export = {1402: Post(1402, "2020-01-01T00:00:00", "старий текст з Експорту")}
@@ -577,7 +599,10 @@ def test_bot_post_becomes_card_and_survives_new_export(conn, bot, tg, upd, clock
     assert cards["1402"]["status"] == "new"
     assert cards["1401-бот"]["problem_code"] == "bad_folder_name"
     post = conn.execute("SELECT source, text FROM posts WHERE post_id = 1402").fetchone()
-    assert tuple(post) == ("bot", core.caption_of(["Кеди Ecco 38. 900грн"]))  # Експорт не затер
+    assert tuple(post) == (
+        "bot",
+        core.caption_of(["Кеди Ecco 38 розмір. 900грн"]),
+    )  # Експорт не затер
     assert result.folders == 3
 
 
@@ -596,3 +621,173 @@ def test_largest_photo_size_taken_whatever_the_order(conn, bot, tg, upd, clock):
              {"file_id": "small", "width": 90, "height": 67}]  # fmt: skip
     bot.handle(upd(message=message(11, photo=sizes, caption=TEXT)))
     assert conn.execute("SELECT file_id FROM bot_draft_parts").fetchone()[0] == "big"
+
+
+# --- Незрозумілий розмір ---
+
+
+def test_unclear_size_asks_and_waits_ten_minutes_for_answer(conn, bot, tg, upd, clock):
+    tg.files["f1"] = jpeg()
+    bot.handle(upd(message=photo(11, "f1", caption="Кросівки Nike в ідеальному стані. 1200грн")))
+    clock.pass_(seconds=4)
+    bot.tick()
+    assert tg.texts(SELLER)[-1].startswith("Не можу зрозуміти розмір")
+    assert state(conn) == "collecting" and tg.last_preview is None
+
+    clock.pass_(minutes=8)  # відповіла не одразу — та сама чернетка
+    bot.handle(upd(message=message(12, text="42 розмір")))
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    assert state(conn) == "preview"
+    assert conn.execute("SELECT count(*) FROM bot_drafts").fetchone()[0] == 1
+    preview = [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]][-1]
+    assert "#VS_42_розмір" in preview["caption"]
+
+
+def test_ask_window_ends_after_ten_minutes(conn, bot, tg, upd, clock):
+    bot.handle(upd(message=photo(11, "f1", caption="Кросівки Nike. 1200грн")))
+    clock.pass_(seconds=4)
+    bot.tick()
+    clock.pass_(minutes=10, seconds=1)
+    bot.handle(upd(message=message(12, text="42 розмір")))
+    assert conn.execute("SELECT count(*) FROM bot_drafts").fetchone()[0] == 2
+
+
+# --- Коментарі ---
+
+
+def forwarded(msg_id, post_id, channel=CHANNEL, automatic=True, chat_id=GROUP):
+    return {
+        "message_id": msg_id,
+        "chat": {"id": chat_id, "type": "supergroup"},
+        "is_automatic_forward": automatic,
+        "forward_origin": {"type": "channel", "chat": {"id": channel}, "message_id": post_id},
+    }
+
+
+def published(bot, tg, upd, clock, files=3):
+    send_post(bot, tg, upd, clock, files=files)
+    press(upd, bot, tg)
+
+
+def comments(conn, draft_id=1):
+    return conn.execute("SELECT comments FROM bot_drafts WHERE id = ?", (draft_id,)).fetchone()[0]
+
+
+def test_all_photos_go_to_comments_as_album_reply(conn, bot, tg, upd, clock, root):
+    published(bot, tg, upd, clock, files=3)
+    assert comments(conn) == "waiting"
+    assert tg.albums == []
+
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    ((chat_id, photos, reply_to),) = tg.albums
+    assert (chat_id, reply_to) == (GROUP, 77)
+    assert [p.data for p in photos] == [tg.files["f1"], tg.files["f2"], tg.files["f3"]]
+    assert comments(conn) == "done"
+
+
+def test_one_photo_no_comments(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=1)
+    bot.handle(upd(message=forwarded(77, 1401)))
+    assert comments(conn) is None and tg.albums == []
+    assert "коментар" not in tg.channel_posts[0][1]
+
+
+def test_forward_redelivered_or_repeated_album_once(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock)
+    update = upd(message=forwarded(77, 1401))
+    bot.handle(update)
+    bot.handle(update)
+    bot.handle(upd(message=forwarded(78, 1401)))
+    assert len(tg.albums) == 1
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        forwarded(77, 1401, automatic=False),  # хтось переслав руками
+        forwarded(77, 1401, channel=-1005555),  # пост іншого каналу
+        forwarded(77, 9999),  # не наш пост
+        {**message(77, text="Купую!"), "chat": {"id": GROUP, "type": "supergroup"}},
+    ],
+)
+def test_other_group_messages_ignored_silently(conn, bot, tg, upd, clock, msg):
+    published(bot, tg, upd, clock)
+    calls = len(tg.calls)
+    bot.handle(upd(message=msg))
+    assert tg.calls[calls:] == [] and comments(conn) == "waiting"
+
+
+def test_forward_late_seller_told_owner_alarmed_album_added_later(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock)
+    clock.pass_(minutes=1, seconds=59)
+    bot.tick()
+    assert comments(conn) == "waiting"
+
+    clock.pass_(seconds=2)
+    bot.tick()
+    bot.tick()
+
+    assert comments(conn) == "late"
+    assert tg.texts(SELLER)[-1] == (
+        "Пост https://t.me/c/2394827824/1401 є, але фото в коментарі ще не додались — додам, "
+        "щойно зможу."
+    )
+    assert sum("не прийшов за 2 хв" in t for t in tg.texts(OWNER)) == 1
+
+    clock.pass_(hours=3)
+    bot.handle(upd(message=forwarded(77, 1401)))
+    assert len(tg.albums) == 1 and comments(conn) == "done"
+    assert (
+        tg.texts(SELLER)[-1] == "Фото додано в коментарі до поста https://t.me/c/2394827824/1401."
+    )
+    assert len(tg.channel_posts) == 1  # пост у канал удруге — ніколи
+
+
+def test_forward_never_came_gives_up_after_a_day(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock)
+    clock.pass_(minutes=3)
+    bot.tick()
+    clock.pass_(hours=24)
+    bot.tick()
+    assert comments(conn) == "failed"
+    assert any("так і не додались" in t for t in tg.texts(OWNER))
+    bot.handle(upd(message=forwarded(77, 1401)))
+    assert tg.albums == []
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_album_error_not_repeated_owner_told(conn, bot, tg, upd, clock, uncertain):
+    published(bot, tg, upd, clock)
+    tg.errors["sendMediaGroup"] = TelegramError("Telegram відмовив (sendMediaGroup)", uncertain)
+
+    bot.handle(upd(message=forwarded(77, 1401)))
+    tg.errors.clear()
+    bot.handle(upd(message=forwarded(78, 1401)))
+
+    assert comments(conn) == "failed" and tg.albums == []
+    text = tg.texts(OWNER)[-1]
+    assert ("могли не додатись" in text) is uncertain
+
+
+def test_crash_while_sending_album_is_not_repeated(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock)
+    with conn:
+        conn.execute("UPDATE bot_drafts SET comments = 'sending'")
+    bot.recover()
+    bot.handle(upd(message=forwarded(77, 1401)))
+    assert comments(conn) == "failed" and tg.albums == []
+    assert any("перевір коментарі" in t for t in tg.texts(OWNER))
+
+
+def test_png_preview_is_jpeg_picture(conn, bot, tg, upd, clock):
+    tg.files["d1"] = png()
+    bot.handle(upd(message={**document(11, "d1", "IMG_1377.PNG", "image/png"), "caption": TEXT}))
+    clock.pass_(seconds=4)
+    bot.tick()
+    (preview,) = [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]]
+    assert isinstance(preview["photo"], Upload)
+    with Image.open(io.BytesIO(preview["photo"].data)) as image:
+        assert image.format == "JPEG"

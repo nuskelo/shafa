@@ -172,12 +172,6 @@ class Telegram:
             return self.call("sendPhoto", params, files={"photo": photo})
         return self.call("sendPhoto", {**params, "photo": photo})
 
-    def send_document(self, chat_id: int, file_id: str, caption: str, markup: dict | None = None):
-        params: dict[str, Any] = {"chat_id": chat_id, "document": file_id, "caption": caption}
-        if markup is not None:
-            params["reply_markup"] = markup
-        return self.call("sendDocument", params)
-
     def answer_callback(self, callback_id: str, text: str) -> None:
         self.call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
 
