@@ -43,6 +43,24 @@ def stop_process(lock_name: str, kill: Callable[[int, int], None] = os.kill) -> 
     return True
 
 
+def quit_app(kill: Callable[[int, int], None] = os.kill, wait: float = 10.0) -> bool:
+    """`python -m shafa quit` (оновлення): загасити екран, бота, «Стоп» роботу. True — екран був.
+
+    Екран гаситься TerminateProcess — його `finally` не виконається, тож адресу `ui.url`
+    прибираємо тут, коли замок звільниться (інакше наступний ярлик відкрив би мертву адресу).
+    """
+    stopped = stop_process(LOCK_NAME, kill)
+    quit_all(kill)
+    lock_file = config.data_dir() / LOCK_NAME
+    for _ in range(int(wait * 10)):
+        if lock.busy(lock_file) is None:
+            break
+        threading.Event().wait(0.1)
+    if lock.busy(lock_file) is None:
+        (config.data_dir() / URL_NAME).unlink(missing_ok=True)
+    return stopped
+
+
 def quit_all(kill: Callable[[int, int], None] = os.kill) -> list[str]:
     """«Вийти»: бот — загасити; робот — «Стоп» (допише поточний товар). Повертає, що зроблено."""
     from shafa.bot import run as bot_run

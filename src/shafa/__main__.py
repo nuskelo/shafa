@@ -505,9 +505,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "quit":
         from shafa import app
 
-        stopped = app.stop_process(app.LOCK_NAME)
-        done = app.quit_all()
-        print("Програму закрито" if stopped or done else "Програма не працювала")
+        print("Програму закрито" if app.quit_app() else "Програма не працювала")
         return 0
     root = _root(parser, args)
     if not args.export.is_file():

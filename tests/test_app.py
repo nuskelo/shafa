@@ -115,3 +115,23 @@ def test_no_quit_button_in_plain_ui(conn, tmp_path, root):
     assert "Вийти" not in html(get(screen, "/review"))
     assert screen.handle(web.Request("POST", "/quit", {}, {"token": [TOKEN]},
                                      {"host": "127.0.0.1:8765"})).status == 404  # fmt: skip
+
+
+def test_quit_command_kills_screen_and_cleans_stale_url():
+    data = config.data_dir()
+    data.mkdir(parents=True, exist_ok=True)
+    url = data / app.URL_NAME
+    url.write_text("http://127.0.0.1:8799/", encoding="utf-8")
+    killed = []
+    held = lock.acquire("ui", data / app.LOCK_NAME)
+
+    def kill(pid, sig):  # «процес помер» — ОС звільняє його замок
+        killed.append(pid)
+        held.release()
+
+    assert app.quit_app(kill=kill, wait=1) is True
+    assert len(killed) == 1 and not url.exists()
+
+
+def test_quit_command_when_not_running():
+    assert app.quit_app(kill=lambda pid, sig: None, wait=0.1) is False
