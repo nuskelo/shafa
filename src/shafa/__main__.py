@@ -500,7 +500,28 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+LOG_NAME = "app.log"
+
+
+def prepare_output() -> None:
+    """Вивід програми.
+
+    Ярлик запускає `pythonw.exe` — без вікна, і тоді `sys.stdout`/`sys.stderr` — None: друк і
+    помилки йдуть у журнал `app.log` у теці даних. У консолі Windows може не бути кирилиці чи «·» —
+    там краще знак питання, ніж падіння.
+    """
+    if sys.stdout is None or sys.stderr is None:
+        path = config.data_dir() / LOG_NAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stream = open(path, "a", encoding="utf-8", errors="replace", buffering=1)  # noqa: SIM115
+        sys.stdout = sys.stdout or stream
+        sys.stderr = sys.stderr or stream
+        return
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
+
 if __name__ == "__main__":
-    # Консоль Windows може не мати кирилиці чи «·» — краще знак питання, ніж падіння.
-    sys.stdout.reconfigure(errors="replace")
+    prepare_output()
     sys.exit(main())

@@ -352,3 +352,42 @@ def test_pause_resume_stop_reach_running_session(conn, db_path, capsys):
     for flag, stored in (("--pause", "pause"), ("--resume", None), ("--stop", "stop")):
         assert main(["robot", flag, "--db", str(db_path)]) == 0
         assert conn.execute("SELECT command FROM sessions").fetchone()[0] == stored
+
+
+# --- Запуск без вікна (pythonw) ---
+
+
+def test_no_console_output_goes_to_log(monkeypatch):
+    import sys
+
+    from shafa import __main__ as entry
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    entry.prepare_output()
+    print("Екран перевірки · кирилиця")
+    print("помилка", file=sys.stderr)
+    sys.stdout.flush()
+
+    log = config.data_dir() / "app.log"
+    assert log.read_text(encoding="utf-8") == "Екран перевірки · кирилиця\nпомилка\n"
+    sys.stdout.close()
+
+
+def test_pythonw_starts_without_crash(tmp_path):
+    """Справжній процес без stdout/stderr (як pythonw): старт не падає, вивід — у журнал."""
+    import os
+    import subprocess
+    import sys
+
+    env = {**os.environ, "SHAFA_DATA_DIR": str(tmp_path)}
+    code = (
+        "import sys, runpy; sys.stdout = None; sys.stderr = None; "
+        "sys.argv = ['shafa', 'rules', '--export', 'немає.json', '--post', '1']; "
+        "runpy.run_module('shafa', run_name='__main__')"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, timeout=60, check=False
+    )
+    assert result.returncode == 2  # argparse: файлу немає — помилка, не падіння на старті
+    assert "Файл Експорту не знайдено" in (tmp_path / "app.log").read_text(encoding="utf-8")
