@@ -133,3 +133,22 @@ def test_get_updates_waits_longer_than_poll():
     params, read_timeout = seen[0]
     assert params == {"timeout": 25, "allowed_updates": ["message", "callback_query"], "offset": 41}
     assert read_timeout > 25
+
+
+def test_media_group_is_album_reply_with_attachments():
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, request.read()))
+        return httpx2.Response(200, json={"ok": True, "result": [{"message_id": 9}]})
+
+    photos = [Upload("1.jpg", b"\xff\xd8one"), Upload("2.jpg", b"\xff\xd8two")]
+    assert telegram(handler).send_media_group(-100777, photos, reply_to=55) == [{"message_id": 9}]
+
+    path, body = seen[0]
+    assert path.endswith("/sendMediaGroup")
+    text = body.decode("utf-8", errors="replace")
+    media = [{"type": "photo", "media": "attach://p0"}, {"type": "photo", "media": "attach://p1"}]
+    assert json.dumps(media) in text
+    assert json.dumps({"message_id": 55}) in text
+    assert 'name="p0"; filename="1.jpg"' in text and 'name="p1"; filename="2.jpg"' in text
