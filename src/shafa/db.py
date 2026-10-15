@@ -194,7 +194,9 @@ ALTER TABLE ai_requests ADD COLUMN batch_id INTEGER REFERENCES ai_batches (id);
 # (`photo` — «як фото», `jpeg`/`png` — файлом). `bot_status` — стан процесу бота для екрана.
 # `comments` — альбом усіх фото в коментарях під постом (≥ 2 фото): `waiting` — чекаємо пересланий
 # пост у групі обговорення, `late` — не прийшов за 2 хв (їй і Власнику сказано), `sending` — запис
-# ДО відправки альбому, `done`, `failed`.
+# ДО відправки альбому, `done`, `failed`. `editing` — вона виправляє текст («Редагувати»): наступний
+# її текст замінює текст чернетки. `bot_summaries` — повідомлення «Чернеток: N» з кнопками
+# «Опублікувати всі / Скасувати всі» в її чаті.
 BOT = """
 CREATE TABLE bot_updates (
     update_id  INTEGER PRIMARY KEY,
@@ -204,11 +206,12 @@ CREATE TABLE bot_updates (
 CREATE TABLE bot_drafts (
     id                 INTEGER PRIMARY KEY,
     chat_id            INTEGER NOT NULL,
-    state              TEXT NOT NULL CHECK (state IN ('collecting', 'preview', 'publishing',
-                       'published', 'uncertain', 'failed', 'canceled', 'expired')),
+    state              TEXT NOT NULL CHECK (state IN ('collecting', 'preview', 'editing',
+                       'publishing', 'published', 'uncertain', 'failed', 'canceled', 'expired')),
     asked              INTEGER NOT NULL DEFAULT 0,
     preview_message_id INTEGER,
     preview_at         TEXT,
+    edit_message_id    INTEGER,  -- «Надішли виправлений текст» з кнопкою «Скасувати редагування»
     post_id            INTEGER,
     folder_name        TEXT,
     note               TEXT,
@@ -227,6 +230,13 @@ CREATE TABLE bot_draft_parts (
     kind       TEXT CHECK (kind IN ('photo', 'jpeg', 'png')),
     media_group TEXT,  -- альбом Telegram: частини одного альбому — завжди одна чернетка
     PRIMARY KEY (draft_id, message_id)
+);
+
+CREATE TABLE bot_summaries (
+    chat_id    INTEGER PRIMARY KEY,
+    message_id INTEGER,
+    shown      INTEGER NOT NULL,           -- скільки чернеток написано в повідомленні
+    running    INTEGER NOT NULL DEFAULT 0  -- «Опублікувати всі» триває: вдруге не запуститься
 );
 
 CREATE TABLE bot_status (

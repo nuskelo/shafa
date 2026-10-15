@@ -22,11 +22,18 @@
   обговорення пост. Не прийшов за 2 хв — їй «фото ще не додались», Власнику тривога, додаємо, коли
   прийде (до 24 год). Пост у канал удруге — ніколи.
 - Прев'ю — точно як у каналі: фото-картинкою, з усіма рядками.
+- «Редагувати»: бот надсилає лише її текст і чекає виправлений; наступний її текст (без фото) —
+  новий текст чернетки, нове прев'ю, хештег перераховується. «Скасувати редагування» — прев'ю
+  знову. Фото в цей час — нова чернетка.
+- Чернеток ≥ 2 — повідомлення «Чернеток: N» з «Опублікувати всі / Скасувати всі». «Опублікувати
+  всі» — по черзі, з паузою, кожна тим самим шляхом, що й одна кнопка (рівно один пост); ті, що
+  чекають її відповіді, пропускає. Повторне натискання нічого не дублює.
 """
 
 import io
 import re
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -56,6 +63,12 @@ CHANNEL_SIDE = 2560  # якщо оригінал не влазить у лімі
 
 PUBLISH = "pub"
 CANCEL = "cancel"
+EDIT = "edit"
+NO_EDIT = "noedit"
+PUBLISH_ALL = "puball"
+CANCEL_ALL = "cancelall"
+PUBLISH_ALL_PAUSE = 3  # секунд між постами «Опублікувати всі»
+OPEN = ("collecting", "preview", "editing")  # відкриті чернетки
 
 TEXTS = {
     "help": "Надішли текст поста і фото (до 10) — я покажу, як буде в каналі, і чекатиму "
@@ -88,6 +101,16 @@ TEXTS = {
     "failed": "Не вийшло: {why}. Нічого не опубліковано — надішли пост ще раз.",
     "done": "Опубліковано: {link}\nЗбережено фото для Шафи: {n}.",
     "late": "(отримано о {time}, опубліковано із запізненням)",
+    "editing": "Ти редагуєш текст — надішли новий текст або натисни «Скасувати редагування».",
+    "edit_start": "Редагую",
+    "edit_ask": "Надішли виправлений текст (хештег і «Пишіть сюди» я додам сам).",
+    "edit_canceled": "Редагування скасовано — ось прев'ю знову.",
+    "summary": "Чернеток: {n}",
+    "all_busy": "Уже публікую всі — зачекай",
+    "all_start": "Публікую всі…",
+    "all_done": "Опубліковано {done}, лишилось {left}.",
+    "all_waiting": "Чекають твоєї відповіді: {names}.",
+    "all_canceled": "Скасовано чернеток: {n}. Нічого не опубліковано.",
     "comments_late": "Пост {link} є, але фото в коментарі ще не додались — додам, щойно зможу.",
     "comments_done": "Фото додано в коментарі до поста {link}.",
 }
@@ -214,8 +237,10 @@ class Bot:
         settings: Settings,
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         log: Callable[[str], None] = print,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.conn, self.tg, self.settings, self.clock, self.log = conn, tg, settings, clock, log
+        self.sleep = sleep
 
     # --- Надсилання без падінь (відповідь не дійшла — не привід ламати обробку) ---
 
@@ -282,6 +307,8 @@ class Bot:
         if refusal or (part is None and not text):
             self._mark(update_id)
             self.say(chat_id, TEXTS[refusal or "not_photo"])
+            return
+        if part is None and self._edited(update_id, chat_id, message, text):
             return
         stamp = self._stamp()
         group = message.get("media_group_id")
@@ -385,7 +412,7 @@ class Bot:
         with self.conn:
             self.conn.execute(
                 "UPDATE bot_drafts SET state = 'expired', updated_at = ? "
-                "WHERE state IN ('collecting', 'preview') AND last_message_at < ? "
+                "WHERE state IN ('collecting', 'preview', 'editing') AND last_message_at < ? "
                 "AND coalesce(preview_at, last_message_at) < ?",
                 (self._stamp(), stale, stale),
             )
@@ -397,6 +424,7 @@ class Bot:
         for draft in drafts:
             self._preview(draft)
         self._comments_overdue(now_)
+        self._summaries()
 
     def _parts(self, draft_id: int) -> list[sqlite3.Row]:
         return self.conn.execute(
@@ -439,10 +467,11 @@ class Bot:
             self._drop_buttons(chat_id, draft["preview_message_id"])
         markup = {
             "inline_keyboard": [
+                [{"text": "Опублікувати", "callback_data": f"{PUBLISH}:{draft_id}"}],
                 [
-                    {"text": "Опублікувати", "callback_data": f"{PUBLISH}:{draft_id}"},
+                    {"text": "Редагувати", "callback_data": f"{EDIT}:{draft_id}"},
                     {"text": "Скасувати", "callback_data": f"{CANCEL}:{draft_id}"},
-                ]
+                ],
             ]
         }
         comments = ", у коментарі — усі" if len(photos) >= 2 else ""
@@ -487,26 +516,30 @@ class Bot:
             self._mark(update_id)
             return
         action, _, raw_id = str(query.get("data") or "").partition(":")
+        if action in (PUBLISH_ALL, CANCEL_ALL):
+            self._all(update_id, query, chat["id"], action)
+            return
         draft = None
         if raw_id.isdigit():
             draft = self.conn.execute(
                 "SELECT * FROM bot_drafts WHERE id = ? AND chat_id = ?", (int(raw_id), chat["id"])
             ).fetchone()
-        if draft is None or action not in (PUBLISH, CANCEL):
+        if draft is None or action not in (PUBLISH, CANCEL, EDIT, NO_EDIT):
             self._mark(update_id)
             self._answer(query.get("id", ""), TEXTS["gone"])
             return
-        if action == CANCEL:
-            self._cancel(update_id, query, draft)
-        else:
-            self._publish(update_id, query, draft)
+        handler = {
+            CANCEL: self._cancel, PUBLISH: self._publish, EDIT: self._edit,
+            NO_EDIT: self._no_edit,
+        }[action]  # fmt: skip
+        handler(update_id, query, draft)
 
     def _cancel(self, update_id: int, query: dict, draft: sqlite3.Row) -> None:
         with self.conn:
             self.conn.execute("INSERT INTO bot_updates VALUES (?, ?)", (update_id, now()))
             cursor = self.conn.execute(
                 "UPDATE bot_drafts SET state = 'canceled', updated_at = ? "
-                "WHERE id = ? AND state IN ('collecting', 'preview')",
+                "WHERE id = ? AND state IN ('collecting', 'preview', 'editing')",
                 (self._stamp(), draft["id"]),
             )
         if cursor.rowcount == 1:
@@ -526,6 +559,8 @@ class Bot:
             return TEXTS["busy"]
         if row["state"] == "expired":
             return TEXTS["expired"]
+        if row["state"] == "editing":
+            return TEXTS["editing"]
         return TEXTS["gone"]
 
     # --- Публікація ---
@@ -561,8 +596,12 @@ class Bot:
             self._answer(callback_id, self._state_text(draft_id))
             return
         self._answer(callback_id, TEXTS["publishing"])
-        self._drop_buttons(chat_id, draft["preview_message_id"])
+        self._run_publish(draft)
 
+    def _run_publish(self, draft: sqlite3.Row) -> None:
+        """Чернетка вже `publishing` (записано в базі) → канал, папка, коментарі."""
+        draft_id, chat_id = draft["id"], draft["chat_id"]
+        self._drop_buttons(chat_id, draft["preview_message_id"])
         parts = self._parts(draft_id)
         files = [p for p in parts if p["file_id"]]
         caption = caption_of([p["text"] for p in parts if p["text"]], len(files))
@@ -671,7 +710,10 @@ class Bot:
 
     def recover(self) -> None:
         """Після падіння: «публікую» — невідомо, чи пост у каналі; «надсилаю коментарі» —
-        невідомо, чи альбом під постом. Не повторюємо (D2)."""
+        невідомо, чи альбом під постом. Не повторюємо (D2). «Опублікувати всі» перервалось —
+        позначку знімаємо (чернетки, що встигли стати «публікую», — нижче, без повтору)."""
+        with self.conn:
+            self.conn.execute("DELETE FROM bot_summaries WHERE running = 1")
         for row in self.conn.execute(
             "SELECT id, post_id FROM bot_drafts WHERE comments = 'sending'"
         ).fetchall():
@@ -770,3 +812,243 @@ class Bot:
                 f"пост {post_link(self.settings.channel_id, row['post_id'])}: за добу фото в "
                 "коментарі так і не додались — додай руками з папки поста."
             )
+
+    # --- «Редагувати» ---
+
+    def _edit(self, update_id: int, query: dict, draft: sqlite3.Row) -> None:
+        pressed = (query.get("message") or {}).get("message_id")
+        if draft["state"] != "preview" or draft["preview_message_id"] != pressed:
+            self._mark(update_id)
+            refusal = "old_preview" if draft["state"] == "preview" else None
+            self._answer(query.get("id", ""), TEXTS[refusal] if refusal else self._state_text(
+                draft["id"]))  # fmt: skip
+            return
+        with self.conn:
+            self.conn.execute("INSERT INTO bot_updates VALUES (?, ?)", (update_id, now()))
+            others = self.conn.execute(
+                "SELECT * FROM bot_drafts WHERE chat_id = ? AND state = 'editing'",
+                (draft["chat_id"],),
+            ).fetchall()
+            cursor = self.conn.execute(
+                "UPDATE bot_drafts SET state = 'editing', updated_at = ? "
+                "WHERE id = ? AND state = 'preview'",
+                (self._stamp(), draft["id"]),
+            )
+        if cursor.rowcount == 0:
+            self._answer(query.get("id", ""), self._state_text(draft["id"]))
+            return
+        for other in others:  # редагувати можна одну чернетку — іншій повертаємо прев'ю
+            self._back_to_preview(other)
+        self._answer(query.get("id", ""), TEXTS["edit_start"])
+        self._drop_buttons(draft["chat_id"], pressed)
+        self.say(draft["chat_id"], own_text([p["text"] for p in self._parts(draft["id"])]))
+        markup = {"inline_keyboard": [[
+            {"text": "Скасувати редагування", "callback_data": f"{NO_EDIT}:{draft['id']}"}
+        ]]}  # fmt: skip
+        prompt = self.say(draft["chat_id"], TEXTS["edit_ask"], markup)
+        self._set(draft["id"], edit_message_id=(prompt or {}).get("message_id"))
+
+    def _back_to_preview(self, draft: sqlite3.Row) -> None:
+        """Редагування скінчилось — прев'ю знову (на найближчому `tick`)."""
+        self._set(draft["id"], state="collecting", asked=0, edit_message_id=None)
+        if draft["edit_message_id"]:
+            self._drop_buttons(draft["chat_id"], draft["edit_message_id"])
+
+    def _no_edit(self, update_id: int, query: dict, draft: sqlite3.Row) -> None:
+        self._mark(update_id)
+        fresh = self.conn.execute(
+            "SELECT * FROM bot_drafts WHERE id = ?", (draft["id"],)
+        ).fetchone()
+        if fresh["state"] != "editing":
+            self._answer(query.get("id", ""), self._state_text(draft["id"]))
+            return
+        self._back_to_preview(fresh)
+        self._answer(query.get("id", ""), TEXTS["edit_canceled"])
+        self.say(draft["chat_id"], TEXTS["edit_canceled"])
+
+    def _edited(self, update_id: int, chat_id: int, message: dict, text: str | None) -> bool:
+        """Текст без фото, поки чернетка в редагуванні, — її новий текст. True — оброблено."""
+        draft = self.conn.execute(
+            "SELECT * FROM bot_drafts WHERE chat_id = ? AND state = 'editing' "
+            "ORDER BY updated_at DESC, id DESC LIMIT 1",
+            (chat_id,),
+        ).fetchone()
+        if draft is None or not text:
+            return False
+        stamp = self._stamp()
+        with self.conn:
+            self.conn.execute("INSERT INTO bot_updates VALUES (?, ?)", (update_id, now()))
+            self.conn.execute(
+                "UPDATE bot_draft_parts SET text = NULL WHERE draft_id = ?", (draft["id"],)
+            )
+            self.conn.execute(
+                "INSERT OR IGNORE INTO bot_draft_parts VALUES (?, ?, ?, NULL, NULL, NULL)",
+                (draft["id"], message.get("message_id"), text),
+            )
+            self.conn.execute(
+                "UPDATE bot_drafts SET state = 'collecting', asked = 0, edit_message_id = NULL, "
+                "last_message_at = ?, updated_at = ? WHERE id = ?",
+                (stamp, stamp, draft["id"]),
+            )
+        if draft["edit_message_id"]:
+            self._drop_buttons(chat_id, draft["edit_message_id"])
+        return True
+
+    # --- «Опублікувати всі» / «Скасувати всі» ---
+
+    def _open_drafts(self, chat_id: int) -> list[sqlite3.Row]:
+        marks = ", ".join("?" * len(OPEN))
+        return self.conn.execute(
+            f"SELECT * FROM bot_drafts WHERE chat_id = ? AND state IN ({marks}) ORDER BY id",
+            (chat_id, *OPEN),
+        ).fetchall()
+
+    def _summary_markup(self) -> dict:
+        return {"inline_keyboard": [[
+            {"text": "Опублікувати всі", "callback_data": f"{PUBLISH_ALL}:0"},
+            {"text": "Скасувати всі", "callback_data": f"{CANCEL_ALL}:0"},
+        ]]}  # fmt: skip
+
+    def _summaries(self) -> None:
+        """«Чернеток: N» з кнопками, коли відкритих ≥ 2; змінилось N — оновити; < 2 — без кнопок."""
+        marks = ", ".join("?" * len(OPEN))
+        chats = {
+            r[0]
+            for r in self.conn.execute(
+                f"SELECT chat_id FROM bot_drafts WHERE state IN ({marks}) "
+                "UNION SELECT chat_id FROM bot_summaries WHERE running = 0",
+                OPEN,
+            )
+        }
+        for chat_id in sorted(chats):
+            row = self.conn.execute(
+                "SELECT * FROM bot_summaries WHERE chat_id = ?", (chat_id,)
+            ).fetchone()
+            if row is not None and row["running"]:
+                continue
+            count = len(self._open_drafts(chat_id))
+            text = TEXTS["summary"].format(n=count)
+            if count >= 2 and row is None:
+                sent = self.say(chat_id, text, self._summary_markup())
+                with self.conn:
+                    self.conn.execute(
+                        "INSERT INTO bot_summaries (chat_id, message_id, shown) VALUES (?, ?, ?)",
+                        (chat_id, (sent or {}).get("message_id"), count),
+                    )
+            elif row is not None and row["shown"] != count:
+                markup = self._summary_markup() if count >= 2 else None
+                self._edit_summary(chat_id, row["message_id"], text, markup)
+                with self.conn:
+                    if count >= 2:
+                        self.conn.execute(
+                            "UPDATE bot_summaries SET shown = ? WHERE chat_id = ?",
+                            (count, chat_id),
+                        )
+                    else:
+                        self.conn.execute("DELETE FROM bot_summaries WHERE chat_id = ?", (chat_id,))
+
+    def _edit_summary(
+        self, chat_id: int, message_id: int | None, text: str, markup: dict | None
+    ) -> None:
+        if message_id is None:
+            return
+        try:
+            self.tg.edit_text(chat_id, message_id, text, markup)
+        except TelegramError as error:
+            self.log(f"«Чернеток: N» не оновлено: {error}")
+
+    def _all(self, update_id: int, query: dict, chat_id: int, action: str) -> None:
+        callback_id = query.get("id", "")
+        pressed = (query.get("message") or {}).get("message_id")
+        with self.conn:  # «публікую всі» — позначка ДО роботи: друге натискання нічого не робить
+            self.conn.execute("INSERT INTO bot_updates VALUES (?, ?)", (update_id, now()))
+            cursor = self.conn.execute(
+                "UPDATE bot_summaries SET running = 1 "
+                "WHERE chat_id = ? AND message_id = ? AND running = 0",
+                (chat_id, pressed),
+            )
+        if cursor.rowcount == 0:
+            busy = self.conn.execute(
+                "SELECT running FROM bot_summaries WHERE chat_id = ? AND message_id = ?",
+                (chat_id, pressed),
+            ).fetchone()
+            self._answer(callback_id, TEXTS["all_busy"] if busy else TEXTS["gone"])
+            return
+        self._drop_buttons(chat_id, pressed)
+        try:
+            if action == CANCEL_ALL:
+                self._answer(callback_id, TEXTS["canceled"])
+                self._cancel_all(chat_id)
+            else:
+                self._answer(callback_id, TEXTS["all_start"])
+                self._publish_all(chat_id)
+        finally:
+            with self.conn:
+                self.conn.execute("DELETE FROM bot_summaries WHERE chat_id = ?", (chat_id,))
+
+    def _cancel_all(self, chat_id: int) -> None:
+        drafts = self._open_drafts(chat_id)
+        marks = ", ".join("?" * len(OPEN))
+        with self.conn:
+            self.conn.execute(
+                f"UPDATE bot_drafts SET state = 'canceled', updated_at = ? "
+                f"WHERE chat_id = ? AND state IN ({marks})",
+                (self._stamp(), chat_id, *OPEN),
+            )
+        for draft in drafts:
+            for message_id in (draft["preview_message_id"], draft["edit_message_id"]):
+                if message_id:
+                    self._drop_buttons(chat_id, message_id)
+        self.say(chat_id, TEXTS["all_canceled"].format(n=len(drafts)))
+
+    def _publish_all(self, chat_id: int) -> None:
+        """Готові прев'ю — по черзі (як вона їх надіслала), той самий захист, що й одна кнопка."""
+        fresh = (self.clock() - PREVIEW_VALID).isoformat(timespec="seconds")
+        done = 0
+        for n, draft in enumerate(self._open_drafts(chat_id)):
+            if draft["state"] != "preview" or (draft["preview_at"] or "") < fresh:
+                continue
+            with self.conn:
+                cursor = self.conn.execute(
+                    "UPDATE bot_drafts SET state = 'publishing', updated_at = ? "
+                    "WHERE id = ? AND state = 'preview'",
+                    (self._stamp(), draft["id"]),
+                )
+            if cursor.rowcount == 0:
+                continue
+            if n and done:
+                self.sleep(PUBLISH_ALL_PAUSE)
+            self._run_publish(draft)
+            state = self.conn.execute(
+                "SELECT state FROM bot_drafts WHERE id = ?", (draft["id"],)
+            ).fetchone()[0]
+            done += state == "published"
+        left = self._open_drafts(chat_id)
+        text = TEXTS["all_done"].format(done=done, left=len(left))
+        if left:
+            names = ", ".join(f"«{first_line(d['id'], self)}»" for d in left)
+            text += "\n" + TEXTS["all_waiting"].format(names=names)
+        self.say(chat_id, text)
+
+
+def first_line(draft_id: int, bot: "Bot") -> str:
+    """Початок тексту чернетки — щоб вона впізнала, про яку мова."""
+    texts = [p["text"] for p in bot._parts(draft_id) if p["text"]]
+    line = texts[0].strip().split("\n")[0] if texts else "без тексту"
+    return line if len(line) <= 50 else line[:50].rstrip() + "…"
+
+
+def own_text(texts: list[str]) -> str:
+    """Лише її текст — без хештега, «Пишіть сюди…», «Всі фото в коментарях» і «без хештега»."""
+    lines = "\n".join(t.strip() for t in texts if t and t.strip()).split("\n")
+    kept = [
+        line
+        for line in lines
+        if not (
+            rules.SIGNATURE.search(line)
+            or COMMENTS.match(line)
+            or NO_TAG.match(line)
+            or re.fullmatch(r"\s*(#VS_\S+\s*)+", line, re.IGNORECASE)
+        )
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip() or "(тексту немає)"

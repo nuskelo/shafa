@@ -10,6 +10,7 @@ def test_schema_created_with_version(conn):
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
+        "bot_summaries",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
@@ -161,7 +162,7 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
         )
         conn.executescript(
             "DROP TABLE bot_updates; DROP TABLE bot_draft_parts; DROP TABLE bot_drafts;"
-            "DROP TABLE bot_status;"
+            "DROP TABLE bot_status; DROP TABLE bot_summaries;"
             "DROP TABLE ai_batch_items; DROP TABLE ai_batches;"
             "ALTER TABLE ai_requests DROP COLUMN batch_id;"
             "ALTER TABLE ai_requests DROP COLUMN cache_write_tokens;"
@@ -194,7 +195,7 @@ def test_version_6_migrated_adds_bot_tables(tmp_path):
         )
         conn.executescript(
             "DROP TABLE bot_updates; DROP TABLE bot_draft_parts; DROP TABLE bot_drafts;"
-            "DROP TABLE bot_status;"
+            "DROP TABLE bot_status; DROP TABLE bot_summaries;"
         )
         conn.execute("PRAGMA user_version = 6")
     conn.close()
@@ -202,7 +203,13 @@ def test_version_6_migrated_adds_bot_tables(tmp_path):
     conn = db.connect(path)
 
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
-    assert {"bot_updates", "bot_drafts", "bot_draft_parts", "bot_status"} <= tables(conn)
+    assert {
+        "bot_updates",
+        "bot_drafts",
+        "bot_draft_parts",
+        "bot_status",
+        "bot_summaries",
+    } <= tables(conn)
     assert conn.execute("SELECT count(*) FROM posts").fetchone()[0] == 1
     with conn, pytest.raises(sqlite3.IntegrityError):
         conn.execute(

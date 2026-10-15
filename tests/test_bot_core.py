@@ -89,6 +89,11 @@ class FakeTelegram:
     def answer_callback(self, callback_id, text):
         self._record("answerCallbackQuery", text=text)
 
+    def edit_text(self, chat_id, message_id, text, markup=None):
+        self._record("editMessageText", chat_id=chat_id, message_id=message_id, text=text,
+                     markup=markup)  # fmt: skip
+        return {"message_id": message_id}
+
     def drop_buttons(self, chat_id, message_id):
         self._record("editMessageReplyMarkup", chat_id=chat_id, message_id=message_id)
 
@@ -237,8 +242,8 @@ def test_album_preview_then_publish(conn, bot, tg, upd, clock, root):
     assert preview["chat_id"] == SELLER and preview["photo"] == "f1"  # найбільший розмір першого
     assert preview["caption"] == core.caption_of([TEXT], 3)
     assert preview["caption"].endswith("\n\nВсі фото в коментарях ⬇️")
-    buttons = preview["markup"]["inline_keyboard"][0]
-    assert [b["callback_data"] for b in buttons] == ["pub:1", "cancel:1"]
+    buttons = [b["callback_data"] for row in preview["markup"]["inline_keyboard"] for b in row]
+    assert buttons == ["pub:1", "edit:1", "cancel:1"]
     assert tg.channel_posts == []  # без натискання нічого не публікується
 
     press(upd, bot, tg)
@@ -343,7 +348,7 @@ def test_photo_without_caption_after_ready_post_is_separate(conn, bot, tg, upd, 
     bot.tick()
 
     assert [state(conn, 1), state(conn, 2)] == ["preview", "collecting"]
-    assert tg.texts(SELLER)[-1] == "Надішли текст поста до цих фото."
+    assert "Надішли текст поста до цих фото." in tg.texts(SELLER)
     press(upd, bot, tg, preview=first_preview)
     assert len(tg.channel_posts) == 1 and "Збережено фото для Шафи: 1." in tg.texts(SELLER)[-1]
 
@@ -988,3 +993,266 @@ def test_comments_line_between_paragraphs_leaves_no_gap(conn, bot, tg, upd, cloc
     bot.tick()
     (shown,) = previews(tg)
     assert shown["caption"].startswith("Кеди 38 розмір. 800грн\n\nВідправка Новою поштою\n#VS_")
+
+
+# --- «Редагувати» ---
+
+
+def edit_query(upd, bot, tg, conn, action="edit", draft_id=1, message_id=None):
+    if message_id is None:
+        message_id = conn.execute(
+            "SELECT preview_message_id FROM bot_drafts WHERE id = ?", (draft_id,)
+        ).fetchone()[0]
+    query = {"id": "cb", "from": {"id": SELLER}, "data": f"{action}:{draft_id}",
+             "message": {"message_id": message_id, "chat": chat()}}  # fmt: skip
+    bot.handle(upd(callback_query=query))
+
+
+def test_edit_sends_only_her_text_then_new_text_new_preview(conn, bot, tg, upd, clock):
+    ready = f"Черевики Ecco 38 розмір. 1500грн\n#VS_38_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+    forwarded_post(upd, bot, tg, 10, "g", ready, files=2)
+    clock.pass_(seconds=4)
+    bot.tick()
+    old_preview = last_preview_id(tg)
+
+    edit_query(upd, bot, tg, conn)
+
+    assert state(conn) == "editing"
+    assert ("editMessageReplyMarkup", {"chat_id": SELLER, "message_id": old_preview}) in tg.calls
+    assert tg.texts(SELLER)[-2] == "Черевики Ecco 38 розмір. 1500грн"  # лише її текст
+    assert tg.texts(SELLER)[-1].startswith("Надішли виправлений текст")
+    press(upd, bot, tg, preview=old_preview)  # стара кнопка — нічого
+    assert tg.answers()[-1].startswith("Ти редагуєш текст")
+    assert tg.channel_posts == []
+
+    bot.handle(upd(message=message(30, text="Черевики Ecco 39 розмір. 1700грн")))
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    assert state(conn) == "preview"
+    new = previews(tg)[-1]
+    assert new["caption"] == (
+        f"Черевики Ecco 39 розмір. 1700грн\n#VS_39_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+    )
+    press(upd, bot, tg)
+    assert tg.channel_posts[0][1] == new["caption"]
+
+
+def test_edit_keeps_her_own_new_hashtag(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1, text="Кеди 38 розмір. 800грн")
+    edit_query(upd, bot, tg, conn)
+    bot.handle(upd(message=message(30, text="Кеди 38 розмір. 800грн\n#VS_37_розмір")))
+    clock.pass_(seconds=4)
+    bot.tick()
+    caption = previews(tg)[-1]["caption"]
+    assert caption.count("#VS_") == 1 and "#VS_37_розмір" in caption
+
+
+def test_cancel_edit_returns_same_preview(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1)
+    before = previews(tg)[-1]["caption"]
+    edit_query(upd, bot, tg, conn)
+    prompt = [p for m, p in tg.calls if m == "sendMessage" and p["markup"]][-1]
+    assert prompt["markup"]["inline_keyboard"][0][0]["callback_data"] == "noedit:1"
+
+    edit_query(upd, bot, tg, conn, action="noedit", message_id=0)
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    assert state(conn) == "preview"
+    assert previews(tg)[-1]["caption"] == before
+    assert "Редагування скасовано — ось прев'ю знову." in tg.texts(SELLER)
+
+
+def test_photo_while_editing_is_new_draft_text_still_edits(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1, text="Кеди 38 розмір. 800грн")
+    edit_query(upd, bot, tg, conn)
+    tg.files["n1"] = jpeg()
+    bot.handle(upd(message=photo(40, "n1")))  # фото — нова чернетка
+    bot.handle(upd(message=message(41, text="Кеди 39 розмір. 900грн")))  # текст — редагування
+
+    assert conn.execute("SELECT count(*) FROM bot_drafts").fetchone()[0] == 2
+    draft1 = [p["text"] for p in bot._parts(1) if p["text"]]
+    draft2 = bot._parts(2)
+    assert draft1 == ["Кеди 39 розмір. 900грн"]
+    assert [(p["file_id"], p["text"]) for p in draft2] == [("n1", None)]
+
+
+def test_own_text_strips_what_bot_adds():
+    texts = [f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"]
+    assert core.own_text(texts) == "Кеди 38 розмір. 800грн"
+
+
+# --- «Опублікувати всі» / «Скасувати всі» ---
+
+
+def three_previews(upd, bot, tg, clock, texts=None):
+    texts = texts or [
+        "Кросівки Lowa 37 розміру. 1200грн",
+        "Черевики Ecco 38 розмір. 1500грн",
+        "Шкіряна сумка Furla. 1800грн",
+    ]
+    for n, text in enumerate(texts):
+        forwarded_post(upd, bot, tg, 10 + n * 10, f"g{n}", text, files=2)
+    clock.pass_(seconds=4)
+    bot.tick()
+    return texts
+
+
+def summary(tg):
+    return [p for m, p in tg.calls if m == "sendMessage" and p["text"].startswith("Чернеток")]
+
+
+def press_all(upd, bot, tg, conn, action="puball", update=None):
+    message_id = conn.execute("SELECT message_id FROM bot_summaries").fetchone()
+    query = {
+        "id": "cb",
+        "from": {"id": SELLER},
+        "data": f"{action}:0",
+        "message": {"message_id": message_id[0] if message_id else 999, "chat": chat()},
+    }
+    update = update or upd(callback_query=query)  # fmt: skip
+    bot.handle(update)
+    return update
+
+
+def test_summary_after_previews_with_buttons(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    (sent,) = summary(tg)
+    assert sent["text"] == "Чернеток: 3"
+    assert [b["callback_data"] for b in sent["markup"]["inline_keyboard"][0]] == [
+        "puball:0", "cancelall:0"
+    ]  # fmt: skip
+    last_call = [m for m, p in tg.calls if m in ("sendMessage", "sendPhoto")][-1]
+    assert last_call == "sendMessage"  # після всіх прев'ю
+
+
+def test_one_draft_no_summary(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1)
+    assert summary(tg) == []
+
+
+def test_publish_all_in_order_with_pause_each_once(conn, bot, tg, upd, clock):
+    sleeps = []
+    bot.sleep = sleeps.append
+    texts = three_previews(upd, bot, tg, clock)
+
+    update = press_all(upd, bot, tg, conn)
+    bot.handle(update)  # повторна доставка
+    press_all(upd, bot, tg, conn)  # друге натискання (кнопки вже немає)
+
+    assert [c.split("\n")[0] for _, c in tg.channel_posts] == texts
+    assert sleeps == [core.PUBLISH_ALL_PAUSE, core.PUBLISH_ALL_PAUSE]
+    assert "Опубліковано 3, лишилось 0." in tg.texts(SELLER)
+    assert [state(conn, i) for i in (1, 2, 3)] == ["published"] * 3
+
+
+def test_publish_all_skips_drafts_waiting_for_her(conn, bot, tg, upd, clock):
+    bot.sleep = lambda s: None
+    three_previews(upd, bot, tg, clock, texts=[
+        "Кросівки Lowa 37 розміру. 1200грн",
+        "Кросівки Nike в ідеальному стані. 1500грн",  # розмір незрозумілий — питання
+        "Шкіряна сумка Furla. 1800грн",
+    ])  # fmt: skip
+    assert summary(tg)[-1]["text"] == "Чернеток: 3"
+
+    press_all(upd, bot, tg, conn)
+
+    assert len(tg.channel_posts) == 2
+    assert state(conn, 2) == "collecting"
+    result = [t for t in tg.texts(SELLER) if t.startswith("Опубліковано 2")][-1]
+    assert result == (
+        "Опубліковано 2, лишилось 1.\n"
+        "Чекають твоєї відповіді: «Кросівки Nike в ідеальному стані. 1500грн»."
+    )
+
+
+def test_publish_all_does_not_republish_published(conn, bot, tg, upd, clock):
+    bot.sleep = lambda s: None
+    three_previews(upd, bot, tg, clock)
+    press(upd, bot, tg, draft_id=2, preview=conn.execute(
+        "SELECT preview_message_id FROM bot_drafts WHERE id = 2").fetchone()[0])  # fmt: skip
+    bot.tick()
+    press_all(upd, bot, tg, conn)
+    assert len(tg.channel_posts) == 3
+
+
+def test_summary_updates_and_disappears(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    summary_id = conn.execute("SELECT message_id FROM bot_summaries").fetchone()[0]
+    for draft_id in (1, 2):
+        preview = conn.execute(
+            "SELECT preview_message_id FROM bot_drafts WHERE id = ?", (draft_id,)
+        ).fetchone()[0]
+        press(upd, bot, tg, draft_id=draft_id, preview=preview)
+        bot.tick()
+    edits = [p for m, p in tg.calls if m == "editMessageText"]
+    assert [(e["message_id"], e["text"]) for e in edits] == [
+        (summary_id, "Чернеток: 2"), (summary_id, "Чернеток: 1")
+    ]  # fmt: skip
+    assert edits[0]["markup"] is not None and edits[1]["markup"] is None  # одна — без кнопок
+    assert conn.execute("SELECT count(*) FROM bot_summaries").fetchone()[0] == 0
+
+
+def test_cancel_all(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    press_all(upd, bot, tg, conn, action="cancelall")
+    assert [state(conn, i) for i in (1, 2, 3)] == ["canceled"] * 3
+    assert tg.channel_posts == []
+    assert "Скасовано чернеток: 3. Нічого не опубліковано." in tg.texts(SELLER)
+    dropped = [p["message_id"] for m, p in tg.calls if m == "editMessageReplyMarkup"]
+    previews_ids = [r[0] for r in conn.execute("SELECT preview_message_id FROM bot_drafts")]
+    assert set(previews_ids) <= set(dropped)
+
+
+def test_publish_all_already_running_does_nothing(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    with conn:
+        conn.execute("UPDATE bot_summaries SET running = 1")  # інший запуск триває
+    press_all(upd, bot, tg, conn)
+    assert tg.channel_posts == []
+    assert tg.answers()[-1] == "Уже публікую всі — зачекай"
+
+
+def test_crash_during_publish_all_summary_comes_back(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    with conn:
+        conn.execute("UPDATE bot_summaries SET running = 1")
+    bot.recover()
+    bot.tick()
+    assert [p["text"] for p in summary(tg)] == ["Чернеток: 3", "Чернеток: 3"]
+
+
+def test_publish_all_skips_expired_preview(conn, bot, tg, upd, clock):
+    bot.sleep = lambda s: None
+    three_previews(upd, bot, tg, clock)
+    with conn:  # прев'ю першої — старше доби (tick ще не встиг позначити)
+        conn.execute("UPDATE bot_drafts SET preview_at = '2020-01-01T00:00:00+03:00' WHERE id = 1")
+    press_all(upd, bot, tg, conn)
+    assert len(tg.channel_posts) == 2 and state(conn, 1) == "preview"
+
+
+def test_photo_with_caption_while_editing_is_new_post(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1, text="Кеди 38 розмір. 800грн")
+    edit_query(upd, bot, tg, conn)
+    tg.files["n1"] = jpeg()
+    bot.handle(upd(message=photo(40, "n1", caption="Кеди 40 розмір. 1000грн")))
+    assert state(conn, 1) == "editing"
+    assert [p["text"] for p in bot._parts(2)] == ["Кеди 40 розмір. 1000грн"]
+
+
+def test_edit_second_draft_returns_first_to_preview(conn, bot, tg, upd, clock):
+    three_previews(upd, bot, tg, clock)
+    edit_query(upd, bot, tg, conn, draft_id=1)
+    edit_query(upd, bot, tg, conn, draft_id=2)
+    assert [state(conn, 1), state(conn, 2)] == ["collecting", "editing"]
+    clock.pass_(seconds=4)
+    bot.tick()
+    assert state(conn, 1) == "preview"
+
+
+def test_edit_on_old_preview_refused(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock, files=1)
+    edit_query(upd, bot, tg, conn, message_id=12345)
+    assert state(conn) == "preview"
+    assert tg.answers()[-1] == "Це старе прев'ю — натисни кнопку під останнім."

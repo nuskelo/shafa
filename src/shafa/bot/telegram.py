@@ -175,6 +175,16 @@ class Telegram:
     def answer_callback(self, callback_id: str, text: str) -> None:
         self.call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
 
+    def edit_text(self, chat_id: int, message_id: int, text: str, markup: dict | None = None):
+        """Новий текст повідомлення; без `markup` — і без кнопок."""
+        params = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "reply_markup": markup or {"inline_keyboard": []},
+        }
+        return self.call("editMessageText", params)
+
     def drop_buttons(self, chat_id: int, message_id: int) -> None:
         self.call(
             "editMessageReplyMarkup",
