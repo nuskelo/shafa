@@ -475,6 +475,9 @@ def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    note = config.migrate_env()
+    if note:
+        print(note)
     if args.command == "rules":
         return run_rules(parser, args)
     if args.command == "fill":
