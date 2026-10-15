@@ -166,6 +166,7 @@ def build() -> Path:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="replace")  # консоль Windows (cp1252) без кирилиці — не падати
     command = sys.argv[1] if len(sys.argv) > 1 else ""
     if command == "lock":
         lock()

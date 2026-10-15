@@ -72,10 +72,13 @@ def shortcut(link: Path, target: Path, arguments: str = "", icon: Path | None = 
         **os.environ, "SHAFA_LNK": str(link), "SHAFA_TARGET": str(target),
         "SHAFA_ARGS": arguments, "SHAFA_WD": str(target.parent), "SHAFA_ICON": str(icon or ""),
     }  # fmt: skip
-    subprocess.run(
+    result = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
-        env=env, check=True, capture_output=True,
+        env=env, check=False, capture_output=True,
     )  # fmt: skip
+    if result.returncode != 0:
+        why = (result.stderr or result.stdout).decode("utf-8", errors="replace").strip()
+        raise OSError(f"Ярлик «{link.name}» не створено: {why[-500:]}")
 
 
 def shafa_login() -> None:

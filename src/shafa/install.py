@@ -88,4 +88,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    from shafa.__main__ import prepare_output
+
+    prepare_output()  # консоль без кирилиці (cp1252) — знак питання, не падіння
     sys.exit(main())
