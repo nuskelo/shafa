@@ -16,8 +16,10 @@ SECRET = "sk-тестовий-секрет-FIX001"
 
 
 def child(code: str, env: dict | None = None) -> subprocess.CompletedProcess:
+    env = dict(os.environ) if env is None else env
+    env["PYTHONIOENCODING"] = "utf-8"  # шляхи з кирилицею; консоль Windows — cp1252
     return subprocess.run(
-        [sys.executable, "-c", code], env=env if env is not None else dict(os.environ),
+        [sys.executable, "-c", code], env=env,
         capture_output=True, text=True, encoding="utf-8", timeout=60, check=False,
     )  # fmt: skip
 
