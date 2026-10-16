@@ -1,6 +1,8 @@
 """Команди.
 
 `python -m shafa scan --export … --root … --db …` — зіставити папки й пости.
+`python -m shafa import-old --export <папка експорту> --list <файл.txt> [--db …]` — старі пости
+з Експорту (з фото) без папок → Картки з одним фото поста (CORE-005); база — програми.
 `python -m shafa rules --export … --post N` — поля, які заповнює код, для одного поста.
 `python -m shafa fill --db … --root … [--post N] [--limit K] [--dry-run]` — ШІ-бланк для Карток.
 `python -m shafa fill --db … --root … --batch [--limit K] | --estimate` — пакет ШІ (Картки, чий пост
@@ -112,6 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--export", type=Path, required=True, help="шлях до result.json")
     _add_root(cmd)
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
+    cmd = commands.add_parser("import-old", help="старі пости з Експорту → Картки з одним фото")
+    cmd.add_argument("--export", type=Path, required=True, help="папка Експорту (або result.json)")
+    cmd.add_argument("--list", type=Path, required=True, help="файл з номерами постів (.txt)")
+    cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
     cmd = commands.add_parser("rules", help="поля, які заповнює код, для одного поста")
     cmd.add_argument("--export", type=Path, required=True, help="шлях до result.json")
     cmd.add_argument("--post", type=int, required=True, help="номер поста")
@@ -485,6 +491,8 @@ def main(argv: list[str] | None = None) -> int:
         print(note)
     if args.command == "rules":
         return run_rules(parser, args)
+    if args.command == "import-old":
+        return run_import_old(parser, args)
     if args.command == "fill":
         return run_fill(parser, args)
     if args.command == "ui":
@@ -519,6 +527,30 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
     print(format_result(result))
+    return 0
+
+
+def run_import_old(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from shafa import app, borh
+
+    export = args.export / "result.json" if args.export.is_dir() else args.export
+    if not export.is_file():
+        parser.error(f"Експорт не знайдено: {export}")
+    if not args.list.is_file():
+        parser.error(f"Файл-список не знайдено: {args.list}")
+    try:
+        numbers = borh.read_list(args.list)
+    except (borh.ListError, UnicodeDecodeError) as error:
+        parser.error(f"Файл-список: {error}")
+    posts = read_export(export)
+    path = args.db or app.db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = db.connect(path)
+    try:
+        result = borh.import_old(conn, posts, export.parent, numbers)
+    finally:
+        conn.close()
+    print(result.text())
     return 0
 
 

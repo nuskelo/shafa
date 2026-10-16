@@ -11,6 +11,7 @@ from typing import Any
 
 from shafa import catalog
 from shafa.db import Status
+from shafa.folders import item_folder
 from shafa.review import Card
 
 ORDER = ("material_upper", "material_lining", "season", "type", "style", "gender")
@@ -50,7 +51,7 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
     f = {name: view.value for name, view in card.fields.items()}
     notes: list[str] = []
 
-    photos = [root / card.folder_name / p.file_name for p in card.photos]
+    photos = [item_folder(root, card.folder_name) / p.file_name for p in card.photos]
     missing = [p.name for p in photos if not p.is_file()]
     if not photos or missing:
         raise PlanError("Немає фото: " + (", ".join(missing) or "папка порожня"))

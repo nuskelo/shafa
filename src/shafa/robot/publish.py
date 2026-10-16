@@ -24,7 +24,7 @@ from urllib.parse import urlsplit
 
 from shafa import catalog, config, review
 from shafa.db import Status, now
-from shafa.folders import PUBLISHED_DIR
+from shafa.folders import PUBLISHED_DIR, is_old
 from shafa.robot import listings as listings_mod
 from shafa.robot import lock
 from shafa.robot.form import (
@@ -189,7 +189,12 @@ def request(conn: sqlite3.Connection, what: str | None) -> bool:
 
 
 def move_published(root: Path, folder_name: str) -> str | None:
-    """Папка опублікованого → `<Головна>/Опубліковано/`. Повертає нотатку, якщо не вийшло (D1)."""
+    """Папка опублікованого → `<Головна>/Опубліковано/`. Повертає нотатку, якщо не вийшло (D1).
+
+    Старий пост (CORE-005) папки в Головній не має: його фото лишається в теці даних.
+    """
+    if is_old(folder_name):
+        return None
     source = root / folder_name
     target = root / PUBLISHED_DIR / folder_name
     if target.exists():

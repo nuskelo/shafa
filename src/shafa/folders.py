@@ -4,8 +4,14 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from shafa import config
+
 PHOTO_SUFFIXES = {".jpg", ".jpeg"}
 PUBLISHED_DIR = "Опубліковано"  # зарезервована назва: сюди робот переносить опубліковане (D1)
+# Картки старих постів з Експорту (CORE-005): одне фото поста, скопійоване в теку даних
+# `<дані>/borh/<номер>/`, а не папка в Головній. Назва Картки — `borh-<номер>`.
+OLD_PREFIX = "borh-"
+OLD_DIR = "borh"
 _POST_NUMBER = re.compile(r"\d{1,7}")
 _DIGITS = re.compile(r"(\d+)")
 
@@ -26,6 +32,26 @@ def post_id_from_name(name: str, channel_id: str | None) -> int | None:
         if _POST_NUMBER.fullmatch(rest):
             return int(rest)
     return None
+
+
+def is_old(folder_name: str) -> bool:
+    """Картка старого поста з Експорту (фото в теці даних)."""
+    return folder_name.startswith(OLD_PREFIX)
+
+
+def old_folder_name(post_id: int) -> str:
+    return f"{OLD_PREFIX}{post_id}"
+
+
+def old_root() -> Path:
+    return config.data_dir() / OLD_DIR
+
+
+def item_folder(root: Path, folder_name: str) -> Path:
+    """Де лежать фото Картки: папка в Головній або (старий пост) тека в даних програми."""
+    if is_old(folder_name):
+        return old_root() / folder_name.removeprefix(OLD_PREFIX)
+    return root / folder_name
 
 
 def natural_key(name: str) -> tuple:
@@ -50,10 +76,13 @@ def list_photos(folder: Path) -> tuple[str, ...]:
 
 
 def list_folders(root: Path, channel_id: str | None) -> list[Folder]:
-    """Папки товарів першого рівня, у порядку «як у провіднику». Теку «Опубліковано» пропускає."""
+    """Папки товарів першого рівня, у порядку «як у провіднику».
+
+    Теку «Опубліковано» і назви `borh-…` (зарезервовані для старих постів) пропускає.
+    """
     folders = [
         Folder(p.name, post_id_from_name(p.name, channel_id), list_photos(p))
         for p in root.iterdir()
-        if p.is_dir() and not _is_hidden(p) and p.name != PUBLISHED_DIR
+        if p.is_dir() and not _is_hidden(p) and p.name != PUBLISHED_DIR and not is_old(p.name)
     ]
     return sorted(folders, key=lambda f: natural_key(f.name))

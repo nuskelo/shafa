@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from shafa.db import Status, now
 from shafa.export import Post
-from shafa.folders import Folder, natural_key
+from shafa.folders import Folder, is_old, natural_key
 from shafa.rules import many_items, price_from_text
 
 MAX_PHOTOS = 10
@@ -91,6 +91,23 @@ def find_problem(
     return None
 
 
+def _old_posts(conn: sqlite3.Connection) -> set[int]:
+    """Пости, завантажені як старі (CORE-005): для них папка в Головній — дубль."""
+    return {
+        r[1]
+        for r in conn.execute("SELECT folder_name, post_id FROM items WHERE post_id IS NOT NULL")
+        if is_old(r[0])
+    }
+
+
+def folder_problem(
+    folder: Folder, texts: dict[int, str], twins: dict[int, list[str]], old: set[int]
+) -> tuple[str, str] | None:
+    if folder.post_id in old:
+        return "duplicate_post", f"Пост {folder.post_id} уже завантажено як старий (без папки)"
+    return find_problem(folder, texts, twins)
+
+
 def _save_item(conn: sqlite3.Connection, folder: Folder, problem: tuple[str, str] | None) -> None:
     status = Status.PROBLEM if problem else Status.NEW
     code, text = problem or (None, None)
@@ -157,6 +174,8 @@ def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
     for row in rows:
         if row["folder_name"] in present or row["problem_code"] == "folder_missing":
             continue
+        if is_old(row["folder_name"]):  # фото старого поста — у теці даних, не в Головній
+            continue
         if robot_problem(row["problem_code"]):
             continue
         conn.execute(
@@ -179,8 +198,9 @@ def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]
         save_posts(conn, posts)
         texts = _texts(conn)
         twins = _twins(folders)
+        old = _old_posts(conn)
         for folder in folders:
-            _save_item(conn, folder, find_problem(folder, texts, twins))
+            _save_item(conn, folder, folder_problem(folder, texts, twins, old))
         _mark_missing(conn, {f.name for f in folders})
 
     new = conn.execute("SELECT count(*) FROM items WHERE status = ?", (Status.NEW,)).fetchone()[0]
@@ -207,6 +227,10 @@ def rescan_folder(conn: sqlite3.Connection, folder_name: str, folders: list[Fold
         ).fetchone()
         if row is None or not touchable(row["status"], row["problem_code"]):
             return None
+        if is_old(folder_name):
+            from shafa import borh  # borh бере правила звідси
+
+            return borh.recheck(conn, row["id"])
         folder = next((f for f in folders if f.name == folder_name), None)
         if folder is None:
             conn.execute(
@@ -218,5 +242,6 @@ def rescan_folder(conn: sqlite3.Connection, folder_name: str, folders: list[Fold
                 (Status.PROBLEM, now(), row["id"]),
             )
             return Status.PROBLEM
-        _save_item(conn, folder, find_problem(folder, _texts(conn), _twins(folders)))
+        problem = folder_problem(folder, _texts(conn), _twins(folders), _old_posts(conn))
+        _save_item(conn, folder, problem)
         return conn.execute("SELECT status FROM items WHERE id = ?", (row["id"],)).fetchone()[0]
