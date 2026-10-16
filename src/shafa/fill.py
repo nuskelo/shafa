@@ -13,6 +13,7 @@ from PIL import UnidentifiedImageError
 
 from shafa import ai
 from shafa.db import Status, now
+from shafa.folders import item_folder
 from shafa.photos import PreparedPhoto, prepare
 
 # Захист від випадкових витрат: більше запитів за один запуск не буває.
@@ -84,7 +85,7 @@ def plan(
     photos = []
     for name in names:
         try:
-            photos.append(prepare(root / row["folder_name"] / name))
+            photos.append(prepare(item_folder(root, row["folder_name"]) / name))
         except (OSError, UnidentifiedImageError):
             return Skipped(row["folder_name"], f"Фото не відкривається: {name}")
     request = ai.build_request(text[0], photos, cache=batch)

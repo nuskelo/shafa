@@ -31,7 +31,7 @@ from PIL import UnidentifiedImageError
 from shafa import ai, batch, catalog, config, db, fill, options, photos, review
 from shafa.db import Status
 from shafa.export import parse_export
-from shafa.folders import PUBLISHED_DIR, list_folders
+from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
 from shafa.robot import control, lock, publish
 from shafa.scan import STICKY, rescan_folder, scan
 
@@ -812,8 +812,8 @@ class App:
             conn.close()
         if row is None:
             return text(404, "Фото не знайдено")
-        root = self.root.resolve()
-        folders = [root / row["folder_name"]]
+        root = (old_root() if is_old(row["folder_name"]) else self.root).resolve()
+        folders = [item_folder(self.root, row["folder_name"]).resolve()]
         if row["status"] == Status.PUBLISHED:  # робот переносить папку в «Опубліковано» (TD-016)
             folders.insert(0, root / PUBLISHED_DIR / row["folder_name"])
         path = next((p for f in folders if (p := (f / row["file_name"]).resolve()).is_file()), None)

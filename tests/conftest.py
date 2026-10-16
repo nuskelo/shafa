@@ -29,6 +29,8 @@ def no_real_settings(tmp_path_factory, monkeypatch):
         "ANTHROPIC_AUTH_TOKEN",
         "SHAFA_ROOT_DIR",
         "SHAFA_DAILY_LIMIT",
+        "SHAFA_DAILY_OLD",
+        "SHAFA_DAILY_NEW",
     ):
         monkeypatch.delenv(name, raising=False)
     # Тека даних (замок робота, журнал) — тимчасова: тести не бачать справжньої.

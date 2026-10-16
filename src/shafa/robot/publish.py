@@ -7,7 +7,10 @@
 Будь-яка поломка сайту чи входу → Картка в «Проблеми», робот зупиняється (не пропускає далі).
 
 Ліміт доби — сумарно за календарну добу місцевого часу ноутбука (D5), з урахуванням попередніх
-запусків. Пауза/Стоп — команда в базі (`sessions.command`), робот перевіряє її між товарами.
+запусків. Окремо (CORE-005) — її межі «старих» (`borh`) і «нових» (папка/бот) на день, разом ≤ 30:
+спершу нові, потім старі, кожна група — до своєї межі; невикористане не переноситься; межі
+перечитуються перед кожною Карткою. Рахується кожна спроба, що дійшла до кліку «Додати річ».
+Пауза/Стоп — команда в базі (`sessions.command`), робот перевіряє її між товарами.
 """
 
 import random
@@ -24,7 +27,7 @@ from urllib.parse import urlsplit
 
 from shafa import catalog, config, review
 from shafa.db import Status, now
-from shafa.folders import PUBLISHED_DIR
+from shafa.folders import PUBLISHED_DIR, is_old
 from shafa.robot import listings as listings_mod
 from shafa.robot import lock
 from shafa.robot.form import (
@@ -39,6 +42,10 @@ from shafa.robot.plan import PlanError, plan
 
 DAILY_LIMIT = 30
 DAILY_LIMIT_SETTING = "SHAFA_DAILY_LIMIT"
+OLD_SETTING = "SHAFA_DAILY_OLD"  # старих (з Експорту, одне фото) на день
+NEW_SETTING = "SHAFA_DAILY_NEW"  # нових (папка, бот) на день
+OLD_DEFAULT, NEW_DEFAULT = 10, 0
+GROUPS_MAX = 30  # старих і нових разом на день
 DELETE_SETTING = "SHAFA_DELETE_PUBLISHED"  # видаляти папки з «Опубліковано» (типово — ні)
 DELETE_AFTER = timedelta(days=3)
 PAUSE = (60.0, 180.0)  # с між товарами
@@ -95,33 +102,80 @@ def daily_limit() -> int:
     return int(raw)
 
 
+@dataclass(frozen=True)
+class Groups:
+    """Скільки старих і нових — межа на день або почато сьогодні."""
+
+    old: int
+    new: int
+
+    def text(self, limits: "Groups") -> str:
+        return f"старих {self.old} з {limits.old} · нових {self.new} з {limits.new}"
+
+
+def group_limits() -> Groups:
+    """Межі «старих» і «нових» на день з налаштувань; кожна 0–30, разом ≤ 30."""
+    values = []
+    for name, default in ((OLD_SETTING, OLD_DEFAULT), (NEW_SETTING, NEW_DEFAULT)):
+        raw = config.setting(name)
+        if raw is None:
+            values.append(default)
+            continue
+        if not raw.isdigit() or not 0 <= int(raw) <= GROUPS_MAX:
+            raise SetupError(f"{name} — ціле число від 0 до {GROUPS_MAX}")
+        values.append(int(raw))
+    if sum(values) > GROUPS_MAX:
+        raise SetupError(f"{OLD_SETTING} + {NEW_SETTING} — разом не більше {GROUPS_MAX}")
+    return Groups(*values)
+
+
 def delete_enabled() -> bool:
     return (config.setting(DELETE_SETTING) or "").lower() in ("1", "так", "yes", "true")
 
 
-def started_today(conn: sqlite3.Connection, today: datetime) -> int:
-    """Скільки публікацій почато за місцеву добу `today` (і успішних, і невпевнених)."""
+def _started_rows(conn: sqlite3.Connection, today: datetime) -> list[str]:
+    """Назви Карток, чию публікацію почато за місцеву добу `today` (дійшли до кліку)."""
     since = (today - timedelta(days=2)).astimezone(UTC).isoformat(timespec="seconds")
     rows = conn.execute(
-        "SELECT publish_started_at FROM items WHERE publish_started_at >= ?", (since,)
+        "SELECT folder_name, publish_started_at FROM items WHERE publish_started_at >= ?", (since,)
     )
     day = today.astimezone().date()
-    return sum(1 for r in rows if datetime.fromisoformat(r[0]).astimezone().date() == day)
+    return [r[0] for r in rows if datetime.fromisoformat(r[1]).astimezone().date() == day]
+
+
+def started_today(conn: sqlite3.Connection, today: datetime) -> int:
+    """Скільки публікацій почато за місцеву добу `today` (і успішних, і невпевнених)."""
+    return len(_started_rows(conn, today))
+
+
+def started_groups(conn: sqlite3.Connection, today: datetime) -> Groups:
+    """Скільки старих і нових почато за місцеву добу `today`."""
+    names = _started_rows(conn, today)
+    old = sum(1 for n in names if is_old(n))
+    return Groups(old, len(names) - old)
+
+
+def group_open(folder_name: str, started: Groups, limits: Groups) -> bool:
+    """Чи можна сьогодні ще одну Картку з групи цієї Картки."""
+    if is_old(folder_name):
+        return started.old < limits.old
+    return started.new < limits.new
+
+
+def queue_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Схвалені Картки: спершу нові (папка, бот), потім старі; у групі — найстаріші пости першими."""
+    return conn.execute(
+        """
+        SELECT items.id, items.folder_name FROM items LEFT JOIN posts USING (post_id)
+        WHERE items.status = ? AND items.purged_at IS NULL
+        ORDER BY items.folder_name LIKE 'borh-%', posts.date IS NULL, posts.date, items.id
+        """,
+        (Status.APPROVED,),
+    ).fetchall()
 
 
 def queue(conn: sqlite3.Connection) -> list[int]:
-    """Схвалені Картки, найстаріші пости першими."""
-    return [
-        r[0]
-        for r in conn.execute(
-            """
-            SELECT items.id FROM items LEFT JOIN posts USING (post_id)
-            WHERE items.status = ? AND items.purged_at IS NULL
-            ORDER BY posts.date IS NULL, posts.date, items.id
-            """,
-            (Status.APPROVED,),
-        )
-    ]
+    return [r[0] for r in queue_rows(conn)]
 
 
 def already_published(conn: sqlite3.Connection, item_id: int, post_id: int | None) -> str | None:
@@ -189,7 +243,12 @@ def request(conn: sqlite3.Connection, what: str | None) -> bool:
 
 
 def move_published(root: Path, folder_name: str) -> str | None:
-    """Папка опублікованого → `<Головна>/Опубліковано/`. Повертає нотатку, якщо не вийшло (D1)."""
+    """Папка опублікованого → `<Головна>/Опубліковано/`. Повертає нотатку, якщо не вийшло (D1).
+
+    Старий пост (CORE-005) папки в Головній не має: його фото лишається в теці даних.
+    """
+    if is_old(folder_name):
+        return None
     source = root / folder_name
     target = root / PUBLISHED_DIR / folder_name
     if target.exists():
@@ -290,9 +349,12 @@ class Run:
         allowed = min(limit, day_limit - started_today(self.conn, today))
         if allowed <= 0:
             return Stop("limit", f"ліміт доби ({day_limit}) вичерпано")
-        ids = queue(self.conn)
-        if not ids:
+        rows = queue_rows(self.conn)
+        if not rows:
             return Stop("done", "черга порожня")
+        limits, started = group_limits(), started_groups(self.conn, today)
+        if not any(group_open(r["folder_name"], started, limits) for r in rows):
+            return Stop("limit", f"на сьогодні все: {started.text(limits)}")
         if not self.session.open_form():
             return Stop("login", "немає входу на Шафу")
         try:
@@ -302,19 +364,31 @@ class Run:
         self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)}")
 
         driver = self.make_driver(self.session)
-        done, previous = 0, None
-        for item_id in ids:
+        done, previous, held_back = 0, None, False
+        for row in rows:
             if done >= allowed:
                 return Stop("limit", "ліміт" + (" доби" if allowed < limit else " запуску"))
             if (stop := self._wait_command(report.session_id)) is not None:
                 return stop
             if previous is True and (stop := self._pause(report.session_id)) is not None:
                 return stop
-            previous = self._one(report, item_id, driver, listings)
+            # Межі — щоразу знову: зміна налаштувань діє з наступної Картки, доба може змінитись.
+            try:
+                limits = group_limits()
+            except SetupError as error:
+                return Stop("error", str(error))
+            started = started_groups(self.conn, self.today())
+            if not group_open(row["folder_name"], started, limits):
+                held_back = True
+                continue
+            previous = self._one(report, row["id"], driver, listings)
             if previous is True:
                 done += 1
             elif isinstance(previous, Stop):
                 return previous
+        if held_back:
+            started = started_groups(self.conn, self.today())
+            return Stop("limit", f"на сьогодні все: {started.text(limits)}")
         return Stop("done", "черга закінчилась")
 
     def _wait_command(self, session_id: int) -> Stop | None:

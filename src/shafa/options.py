@@ -10,7 +10,16 @@ from pathlib import Path
 
 from shafa import config, places
 from shafa.batch import BATCH_SETTING, DAILY_USD, MONEY_SETTING, WAIT_DAYS, WAIT_SETTING
-from shafa.robot.publish import DAILY_LIMIT, DAILY_LIMIT_SETTING, DELETE_SETTING
+from shafa.robot.publish import (
+    DAILY_LIMIT,
+    DAILY_LIMIT_SETTING,
+    DELETE_SETTING,
+    GROUPS_MAX,
+    NEW_DEFAULT,
+    NEW_SETTING,
+    OLD_DEFAULT,
+    OLD_SETTING,
+)
 
 ROOT_SETTING = "SHAFA_ROOT_DIR"
 
@@ -26,6 +35,20 @@ class Option:
 
 OPTIONS = (
     Option(
+        OLD_SETTING,
+        "Старих на день (старі пости, одне фото)",
+        f"від 0 до {GROUPS_MAX}; старих і нових разом — до {GROUPS_MAX}",
+        str(OLD_DEFAULT),
+        "int",
+    ),
+    Option(
+        NEW_SETTING,
+        "Нових на день (бот, папки з фото)",
+        f"від 0 до {GROUPS_MAX}; старих і нових разом — до {GROUPS_MAX}",
+        str(NEW_DEFAULT),
+        "int",
+    ),
+    Option(
         DAILY_LIMIT_SETTING, "Публікацій на Шафі за добу", "від 1 до 100", str(DAILY_LIMIT), "int"
     ),
     Option(MONEY_SETTING, "Витрати на ШІ за добу, $", "від 0,01 до 100", str(DAILY_USD), "money"),
@@ -37,6 +60,8 @@ OPTIONS = (
     Option(DELETE_SETTING, "Видаляти папки з «Опубліковано» через 3 дні", "", "", "flag"),
 )
 _LIMITS = {
+    OLD_SETTING: (0, GROUPS_MAX),
+    NEW_SETTING: (0, GROUPS_MAX),
     DAILY_LIMIT_SETTING: (1, 100),
     WAIT_SETTING: (0, 60),
     BATCH_SETTING: (1, 500),
@@ -88,6 +113,13 @@ def check(form: dict[str, str]) -> tuple[dict[str, str], dict[str, str], list[st
                         "Головна папка в OneDrive: фото поїдуть у хмару, програма читатиме їх "
                         f"повільно. Краще {places.default_root()}"
                     )
+    if OLD_SETTING in values and NEW_SETTING in values:
+        total = int(values[OLD_SETTING]) + int(values[NEW_SETTING])
+        if total > GROUPS_MAX:
+            errors[OLD_SETTING] = errors[NEW_SETTING] = (
+                f"старих і нових разом {total}, а можна не більше {GROUPS_MAX} на день — "
+                "зменш одне з чисел"
+            )
     return values, errors, warnings
 
 

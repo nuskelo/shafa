@@ -160,7 +160,7 @@ def test_schema_uses_only_supported_features():
     assert all(n["additionalProperties"] is False for n in objects)
     assert all(set(n["required"]) == set(n["properties"]) for n in objects)
     assert sum(1 for n in nodes if "anyOf" in n) <= 16  # ліміт union-типів
-    assert set(ai.SCHEMA["properties"]) == {*ai.FIELDS, "doubts"}
+    assert set(ai.SCHEMA["properties"]) == {*ai.FIELDS, "size_system", "doubts"}
 
 
 def test_estimate_counts_photos_exactly():
@@ -359,7 +359,8 @@ def test_accessory_fields():
     assert not fields["section"].yellow
     assert (fields["sizes"].value, fields["sizes"].reason) == ([], "у цього розділу розміру немає")
     assert fields["gender"].value == "Для жінок"
-    assert fields["material_upper"].reason == "немає у списку Шафи: Замша"
+    # CORE-005: «Замша» не названа в тексті — відкинуто, без жовтого
+    assert (fields["material_upper"].value, fields["material_upper"].yellow) == (["Шкіра"], False)
 
 
 def test_gender_and_teen_only_where_they_belong():
@@ -392,9 +393,8 @@ def test_type_style_and_limits_from_section():
     assert (fields["type"].value, fields["type"].yellow) == ("Челсі", False)
     assert (fields["style"].value, fields["style"].yellow) == ("Класичний", False)
     assert not fields["season"].yellow  # до 4
-    fields = check(type="Кеди", material_upper=["Шкіра", "Замша", "Нубук", "Текстиль"])
+    fields = check(type="Кеди")
     assert fields["type"].reason == "немає у списку Шафи: Кеди"
-    assert fields["material_upper"].reason == "більше 3"
 
 
 @pytest.mark.parametrize(
