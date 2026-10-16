@@ -13,6 +13,7 @@ from typing import Any
 import anthropic
 
 from shafa import catalog, rules
+from shafa import sizes as sizes_mod
 from shafa.catalog import Kind
 from shafa.photos import PreparedPhoto
 
@@ -65,6 +66,7 @@ SCHEMA: dict[str, Any] = {
         "title": _STRING,
         "section": _STRING,
         "sizes": _STRINGS,
+        "size_system": {"type": "string", "enum": list(sizes_mod.SYSTEMS)},
         "colors": {"type": "array", "items": {"type": "string", "enum": list(catalog.COLORS)}},
         "brand": _NULLABLE,
         "material_upper": _STRINGS,
@@ -89,7 +91,7 @@ SCHEMA: dict[str, Any] = {
             },
         },
     },
-    "required": [*FIELDS, "doubts"],
+    "required": [*FIELDS, "size_system", "doubts"],
     "additionalProperties": False,
 }
 
@@ -363,6 +365,25 @@ def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, fl
     return Field("sizes", shown), numbers[0]
 
 
+def check_sizes_any(
+    answer: dict[str, Any], path: str | None, kind: Kind | None, post_text: str
+) -> tuple[Field, float | None]:
+    """Розміри: US/UK з тексту — у європейські за таблицею коду (CORE-005), далі як завжди."""
+    system = answer.get("size_system")
+    raw = _strings(answer.get("sizes"))
+    if system not in (sizes_mod.US, sizes_mod.UK) or not raw:
+        return check_sizes(answer.get("sizes"), path, post_text)
+    if kind is Kind.ACCESSORY:
+        return check_sizes([], path, post_text)
+    converted, doubt = sizes_mod.to_eu(raw, system, kind)
+    if not converted:
+        return Field("sizes", [], True, doubt), None
+    field, first = check_sizes(converted, path, post_text)
+    if doubt:
+        return Field(field.name, field.value, True, _join(field.reason, doubt)), first
+    return field, first
+
+
 def check_size_hint(section: Field, kind: Kind | None, size: float | None) -> Field:
     """Розділ жовтіє, якщо розмір підказує іншу групу (малюки / дитяче / жіноче / чоловіче)."""
     if kind is None or size is None or kind in expected_kinds(size):
@@ -436,6 +457,23 @@ def check_values(name: str, value: Any, path: str | None, single: bool = False) 
     return Field(name, shown(found))
 
 
+# CORE-005, `docs/rules.md` §9: матеріал верху — лише ці три і лише якщо названі в тексті.
+MATERIALS = ("Шкіра", "Замша", "Нубук")
+_FAKE_LEATHER = re.compile(r"штучн\w*\s+шкір|еко-?\s?шкір|шкірзам|кожзам|екокож", re.IGNORECASE)
+
+
+def check_material(value: Any, path: str | None, post_text: str) -> Field:
+    """Будь-який інший матеріал (текстиль, сітка…) або не з тексту — поле порожнє, без жовтого."""
+    values = _as_list(value)
+    if values is None:
+        return Field("material_upper", [], True, "немає у відповіді ШІ")
+    kept = [m for v in values if (m := catalog.canonical(v, MATERIALS)) and in_text(m, post_text)]
+    field = check_values("material_upper", list(dict.fromkeys(kept)), path)
+    if "Шкіра" in field.value and _FAKE_LEATHER.search(post_text) and not field.yellow:
+        return Field(field.name, field.value, True, "у тексті є штучна шкіра — перевір")
+    return field
+
+
 def check_lining(value: Any, path: str | None, post_text: str) -> Field:
     field = check_values("material_lining", value, path)
     absent = [v for v in field.value if not in_text(v, post_text)]
@@ -491,7 +529,7 @@ def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str)
     """Відповідь ШІ → поля бланка в порядку FIELDS, з жовтими позначками й причинами."""
     section, kind = check_section(answer.get("section"))
     path = catalog.find_section(section.value) if section.value else None  # None — розділу немає
-    sizes, first_size = check_sizes(answer.get("sizes"), path, post_text)
+    sizes, first_size = check_sizes_any(answer, path, kind, post_text)
     section = check_size_hint(section, kind, first_size)
     fields = [
         check_title(answer.get("title")),
@@ -499,7 +537,7 @@ def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str)
         sizes,
         check_colors(answer.get("colors")),
         Field("brand", _text(answer.get("brand"))),
-        check_values("material_upper", answer.get("material_upper"), path),
+        check_material(answer.get("material_upper"), path, post_text),
         check_lining(answer.get("material_lining"), path, post_text),
         check_values("season", answer.get("season"), path),
         check_values("type", answer.get("type"), path, single=True),
