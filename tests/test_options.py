@@ -14,6 +14,7 @@ def form(root, **changes):
     values = {
         "SHAFA_DAILY_LIMIT": "25", "SHAFA_AI_DAILY_USD": "2,5", "SHAFA_AI_WAIT_DAYS": "5",
         "SHAFA_AI_BATCH_LIMIT": "40", "SHAFA_ROOT_DIR": str(root), "SHAFA_DELETE_PUBLISHED": "1",
+        "SHAFA_DAILY_OLD": "10", "SHAFA_DAILY_NEW": "5",
     }  # fmt: skip
     values.update(changes)
     return {k: v for k, v in values.items() if v is not None}

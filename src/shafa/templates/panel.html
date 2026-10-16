@@ -2,7 +2,7 @@
   {% if fake %}<p class="fake">ПІДСТАВНА ШАФА — тест, нічого не публікується на справжній сайт</p>{% endif %}
   <div class="robot-state">
     <strong>{{ robot.text }}</strong>
-    <span class="robot-counts">Опубліковано сьогодні {{ robot.published_today }} з {{ robot.day_limit }} · Схвалених {{ robot.approved }}</span>
+    <span class="robot-counts">{{ robot.groups_text }} · Схвалених {{ robot.approved }}</span>
     {% if robot.last and "start" in robot.buttons %}<span class="robot-last">Останній запуск: {{ robot.last }}</span>{% endif %}
   </div>
   <form method="post" action="/robot" class="robot-buttons">

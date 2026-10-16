@@ -9,6 +9,13 @@ from test_review import add_card
 from test_web import PORT, TOKEN, get, html, location, post
 
 
+@pytest.fixture(autouse=True)
+def new_cards_allowed(monkeypatch):
+    """Тут перевіряється робот як такий: межа «нових на день» (CORE-005) не заважає."""
+    monkeypatch.setenv("SHAFA_DAILY_NEW", "30")
+    monkeypatch.setenv("SHAFA_DAILY_OLD", "0")
+
+
 class Spawner:
     """Підставний запуск процесу: запам'ятовує команди, нічого не запускає."""
 
@@ -68,7 +75,7 @@ def test_panel_on_every_page_and_start_disabled_without_approved(app):
     assert "Робот зупинений" in page
     assert 'value="start" class="approve" disabled' in page
     assert "Немає Схвалених Карток" in page
-    assert "Опубліковано сьогодні 0 з 30" in page
+    assert "Сьогодні: старих 0 з 0 · нових 0 з 30" in page
 
 
 def test_start_spawns_robot_process(conn, root, app, spawner):

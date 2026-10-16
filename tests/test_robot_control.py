@@ -10,6 +10,13 @@ from test_robot_publish import Env, add
 NOW = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
 
 
+@pytest.fixture(autouse=True)
+def new_cards_allowed(monkeypatch):
+    """Тут перевіряється робот як такий: межа «нових на день» (CORE-005) не заважає."""
+    monkeypatch.setenv("SHAFA_DAILY_NEW", "30")
+    monkeypatch.setenv("SHAFA_DAILY_OLD", "0")
+
+
 @pytest.fixture
 def lock_file(tmp_path):
     return tmp_path / "robot.lock"

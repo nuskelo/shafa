@@ -8,6 +8,13 @@ from shafa.robot import publish
 from test_robot_publish import Env, add
 
 
+@pytest.fixture(autouse=True)
+def new_cards_allowed(monkeypatch):
+    """Тут перевіряється публікація як така: межа «нових на день» (CORE-005) не заважає."""
+    monkeypatch.setenv("SHAFA_DAILY_NEW", "30")
+    monkeypatch.setenv("SHAFA_DAILY_OLD", "0")
+
+
 @pytest.mark.parametrize(
     ("text", "parsed"),
     [

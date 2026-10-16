@@ -16,7 +16,6 @@ from datetime import datetime
 from pathlib import Path
 
 from shafa import config
-from shafa.db import Status
 from shafa.robot import lock, publish
 
 ITEM_MINUTES = 4  # орієнтовно: стільки триває один товар (форма + фото + клік)
@@ -61,6 +60,13 @@ class State:
     wait_minutes: int | None = None  # скільки ще дописувати поточний товар
     last: str = ""  # як закінчилась остання сесія
     buttons: list[str] = field(default_factory=list)
+    # CORE-005: почато сьогодні (старих, нових) і межі на день
+    started: publish.Groups = field(default_factory=lambda: publish.Groups(0, 0))
+    limits: publish.Groups = field(default_factory=lambda: publish.Groups(0, 0))
+
+    @property
+    def groups_text(self) -> str:
+        return "Сьогодні: " + self.started.text(self.limits)
 
 
 def log_path() -> Path:
@@ -92,10 +98,14 @@ def state(
     last = conn.execute(
         "SELECT * FROM sessions WHERE ended_at IS NOT NULL ORDER BY id DESC LIMIT 1"
     ).fetchone()
-    approved = conn.execute(
-        "SELECT count(*) FROM items WHERE status = ? AND purged_at IS NULL", (Status.APPROVED,)
-    ).fetchone()[0]
+    rows = publish.queue_rows(conn)
+    approved = len(rows)
     today = publish.started_today(conn, now)
+    started = publish.started_groups(conn, now)
+    try:
+        limits: publish.Groups | None = publish.group_limits()
+    except publish.SetupError:
+        limits = None  # робот на старті зупиниться з поясненням; екран не падає
 
     wait = None
     if busy and busy.get("mode") == "publish":
@@ -130,6 +140,10 @@ def state(
         why_not = "Немає Схвалених Карток"
     elif idle and today >= day_limit:
         why_not = f"Сьогодні вже {today} з {day_limit} — ліміт доби вичерпано, продовжимо завтра"
+    elif idle and limits is None:
+        why_not = "Межі старих і нових на день у налаштуваннях неправильні"
+    elif idle and not any(publish.group_open(r["folder_name"], started, limits) for r in rows):
+        why_not = f"Сьогодні вже {started.text(limits)} — продовжимо завтра"
     can_start = idle and not why_not
 
     buttons = []
@@ -149,7 +163,7 @@ def state(
     if last is not None:
         last_text = LAST.get(last["stop_code"] or "", "") or (last["stop_reason"] or "")
     return State(code, text, today, day_limit, approved, can_start, why_not, wait, last_text,
-                 buttons)  # fmt: skip
+                 buttons, started, limits or publish.Groups(0, 0))  # fmt: skip
 
 
 def command(args: list[str], program: str = "robot") -> list[str]:

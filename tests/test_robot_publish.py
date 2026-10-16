@@ -18,6 +18,14 @@ from shafa.robot.listings import (
 )
 from test_robot_form import FakeDriver, FakeLocator, FakePage
 
+
+@pytest.fixture(autouse=True)
+def new_cards_allowed(monkeypatch):
+    """Тут перевіряється публікація як така: межа «нових на день» (CORE-005) не заважає."""
+    monkeypatch.setenv("SHAFA_DAILY_NEW", "30")
+    monkeypatch.setenv("SHAFA_DAILY_OLD", "0")
+
+
 OK = Submitted(sent=True, product_id=555)
 
 
