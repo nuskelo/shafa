@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class Status(StrEnum):
@@ -253,7 +253,36 @@ QUEUE = """
 ALTER TABLE items ADD COLUMN queue_pos INTEGER;
 """
 
-MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE}
+# Версія 9 (SITE-001): черга на сайт — пост, опублікований ботом, і скільки фото вже на сайті.
+# `state`: `fields` — поля ще не на сайті, `photos` — поля є, фото з `next_photo`, `done`, `failed`
+# (400/409 — не повторюємо). `fields` — JSON полів (рахуються один раз, ШІ — теж один раз).
+# `next_at` — не раніше (обрив, 5xx, 429). `site_cache` — список підкатегорій на добу.
+SITE = """
+CREATE TABLE site_jobs (
+    post_id     INTEGER PRIMARY KEY,  -- номер поста в каналі
+    folder_name TEXT NOT NULL,
+    posted_at   TEXT NOT NULL,        -- дата поста в каналі з поясом
+    text        TEXT NOT NULL,
+    state       TEXT NOT NULL CHECK (state IN ('fields', 'photos', 'done', 'failed')),
+    fields      TEXT,
+    next_photo  INTEGER NOT NULL DEFAULT 0,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    next_at     TEXT,
+    error       TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE site_cache (
+    name       TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+);
+"""
+
+MIGRATIONS = {
+    1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
+}  # fmt: skip
 
 
 def now() -> str:
