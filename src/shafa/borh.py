@@ -17,7 +17,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa.db import Status, now
 from shafa.export import Post
-from shafa.folders import Folder, item_folder, old_folder_name
+from shafa.folders import OLD_PREFIX, Folder, item_folder, old_folder_name
 from shafa.scan import find_problem, save_posts
 
 PHOTO_NAME = "1.jpg"
@@ -47,6 +47,7 @@ def read_list(path: Path) -> list[int]:
 class ImportResult:
     created: list[int] = field(default_factory=list)
     existed: list[int] = field(default_factory=list)
+    reordered: int = 0  # неопублікованим старим змінено місце в черзі
     not_in_export: list[int] = field(default_factory=list)
     no_photo: list[int] = field(default_factory=list)
     problems: list[tuple[int, str]] = field(default_factory=list)  # створено, але в Проблемах
@@ -56,6 +57,8 @@ class ImportResult:
             f"Створено: {len(self.created)} · вже було: {len(self.existed)} · "
             f"немає в експорті: {len(self.not_in_export)} · без фото: {len(self.no_photo)}"
         )
+        if self.reordered:
+            summary += f" · порядок оновлено: {self.reordered}"
         lines = [summary]
         if self.not_in_export:
             lines.append("Немає в експорті: " + ", ".join(map(str, self.not_in_export)))
@@ -93,18 +96,35 @@ def copy_photo(source: Path, target: Path) -> bool:
     return True
 
 
+_UNPUBLISHED = (Status.NEW, Status.PROBLEM, Status.REVIEW, Status.APPROVED)
+
+
+def _set_position(conn: sqlite3.Connection, post_id: int, position: int) -> bool:
+    """Стара Картка, ще не опублікована, — нове місце в черзі. Опублікованих і нових не чіпає."""
+    with conn:
+        cursor = conn.execute(
+            f"UPDATE items SET queue_pos = ? WHERE post_id = ? AND folder_name LIKE '{OLD_PREFIX}%' "
+            f"AND status IN ({', '.join('?' * len(_UNPUBLISHED))}) "
+            "AND queue_pos IS NOT ?",
+            (position, post_id, *_UNPUBLISHED, position),
+        )
+    return cursor.rowcount > 0
+
+
 def import_old(
     conn: sqlite3.Connection, posts: dict[int, Post], export_dir: Path, numbers: list[int]
 ) -> ImportResult:
-    """Картки для номерів зі списку. Повторний запуск нічого не дублює."""
+    """Картки для номерів зі списку; позиція в списку — місце в черзі. Повтор не дублює."""
     result = ImportResult()
-    for post_id in numbers:
+    for position, post_id in enumerate(numbers, start=1):
         post = posts.get(post_id)
         if post is None:
             result.not_in_export.append(post_id)
             continue
         if _known(conn, post_id):
             result.existed.append(post_id)
+            if _set_position(conn, post_id, position):
+                result.reordered += 1
             continue
         name = old_folder_name(post_id)
         target = item_folder(Path(), name) / PHOTO_NAME
@@ -120,11 +140,11 @@ def import_old(
             item_id = conn.execute(
                 """
                 INSERT INTO items (folder_name, post_id, status, problem_code, problem_text,
-                                   created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                                   created_at, updated_at, queue_pos)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (name, post_id, Status.PROBLEM if problem else Status.NEW,
-                 *(problem or (None, None)), stamp, stamp),
+                 *(problem or (None, None)), stamp, stamp, position),
             ).lastrowid  # fmt: skip
             conn.executemany(
                 "INSERT INTO photos (item_id, position, file_name) VALUES (?, ?, ?)",
