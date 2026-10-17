@@ -22,7 +22,7 @@ def home(monkeypatch, tmp_path):
 class Script:
     """Відповіді майстру по черзі; усе, що він показує, — у `shown`."""
 
-    def __init__(self, answers, secrets=(AI_SECRET, BOT_SECRET), windows=False, desktop=None):
+    def __init__(self, answers, secrets=(AI_SECRET, BOT_SECRET, ""), windows=False, desktop=None):
         self.answers, self.secrets = list(answers), list(secrets)
         self.shown, self.prompts, self.checks, self.links, self.logins = [], [], [], [], 0
         self.act = wizard.Actions(
@@ -95,7 +95,7 @@ def test_onedrive_root_can_still_be_chosen(home, monkeypatch):
 
 def test_rerun_keeps_secrets_on_enter(home):
     wizard.run(Script(["", *IDS, "ні"]).act)
-    script = Script(["", "", "", "", "", "ні"], secrets=("", ""))
+    script = Script(["", "", "", "", "", "ні"], secrets=("", "", ""))
 
     wizard.run(script.act)
 
@@ -106,7 +106,7 @@ def test_rerun_keeps_secrets_on_enter(home):
 
 
 def test_without_secrets_says_what_will_not_work(home):
-    script = Script(["", "", "", "", "", "ні"], secrets=("", ""))
+    script = Script(["", "", "", "", "", "ні"], secrets=("", "", ""))
     wizard.run(script.act)
     assert "Ключа ШІ немає — ШІ не працюватиме" in script.shown
     assert "Токена бота немає — бот не працюватиме" in script.shown
@@ -158,3 +158,13 @@ def test_check_ai_error_has_no_key(monkeypatch):
     text = wizard.check_ai(AI_SECRET)
     assert text == "Ключ ШІ не працює: Ключ Claude API не прийнято (401)"
     assert AI_SECRET not in text
+
+
+def test_site_key_optional_hidden_and_saved(home):
+    script = Script(["", *IDS, "ні"], secrets=(AI_SECRET, BOT_SECRET, "sk-site-секрет"))
+
+    wizard.run(script.act)
+
+    assert config.setting("SITE_INTEGRATION_KEY") == "sk-site-секрет"
+    assert "sk-site-секрет" not in script.everything()
+    assert any("Ключ сайту" in p and "необов'язково" in p for p in script.prompts)
