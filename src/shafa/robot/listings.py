@@ -206,13 +206,6 @@ def similar(a: str, b: str, brand: str | None = None) -> bool:
     return _ratio(a, b, brand) >= SIMILAR
 
 
-def colors_match(ours: list[str] | tuple[str, ...], theirs: tuple[str, ...]) -> bool:
-    """Колір відомий з обох боків — має бути хоч один спільний."""
-    if not ours or not theirs:
-        return True
-    return bool({c.casefold() for c in ours} & {c.casefold() for c in theirs})
-
-
 def prices_close(ours: int | None, theirs: int | None) -> bool:
     if not ours or not theirs:
         return True
@@ -252,7 +245,11 @@ def find_duplicate(
     title: str, slugs: frozenset[str], sizes: list[str], brand: str | None,
     listings: list[Listing], colors: list[str] | tuple[str, ...] = (), price: int | None = None,
 ) -> Listing | None:  # fmt: skip
-    """Її товар, найсхожіший на Картку, або None."""
+    """Її товар, найсхожіший на Картку, або None.
+
+    Колір не порівнюється (CORE-008 F, TD-034): кабінет «Мої речі» його не віддає — «колір
+    невідомий» не рахуємо ні збігом, ні незбігом. Параметр `colors` лишився для викликів.
+    """
     wanted_brand = (brand or "").casefold()
     found = [
         listing
@@ -261,7 +258,6 @@ def find_duplicate(
         and (listing.brand or "").casefold() == wanted_brand
         and sizes_close(sizes, listing.sizes)
         and similar(title, listing.name, brand)
-        and colors_match(colors, listing.colors)
         and prices_close(price, listing.price)
     ]
     return max(found, key=lambda x: _ratio(title, x.name, brand), default=None)
