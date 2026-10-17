@@ -174,12 +174,17 @@
         {% endif %}
       </div>
     </form>
+    {% if card.old_rules and card.status in ("review", "problem") %}
+    <p class="badge old-rules">заповнено старими правилами — варто перезаповнити</p>
+    {% endif %}
     {% if card.status == "review" %}
     {# Окрема форма: незбережені правки не пропадуть мовчки — браузер перепитає. #}
     <form method="post" action="/item/{{ card.id }}" class="ai-retry">
       <input type="hidden" name="token" value="{{ token }}">
       <button name="action" value="ai_retry">ШІ, спробуй ще раз</button>
       <small>новий бланк одразу (≈ 5 ¢); ваші правки лишаються</small>
+      <button name="action" value="refill">Перезаповнити</button>
+      <small>пакетом, дешевше (≈ 1,5 ¢), результат до години; ваші правки лишаються</small>
     </form>
     {% endif %}
     {% endif %}

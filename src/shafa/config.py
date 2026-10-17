@@ -93,7 +93,7 @@ def data_dir() -> Path:
     """
     custom = os.environ.get(DATA_DIR)
     if custom:
-        return Path(custom)
+        return Path(custom).expanduser()  # `~/shafa-viktoria` у лапках оболонка не розгортає
     if testing():
         raise RealPathInTests(f"Тест звернувся до справжньої теки даних: задайте {DATA_DIR}")
     return default_data_dir()

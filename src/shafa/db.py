@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class Status(StrEnum):
@@ -306,9 +306,17 @@ CREATE TABLE my_listings_read (
 ALTER TABLE items ADD COLUMN duplicate_name TEXT;
 """
 
+# Версія 11 (CORE-008): за якою версією правил (`rules.RULES_VERSION`) заповнено бланк (NULL —
+# до CORE-007: сірий ярлик «заповнено старими правилами»); `refill_at` — «Перезаповнити»:
+# Картка знову `new` і йде в пакет без чекання 7 днів, правки (`edits`) лишаються.
+REFILL = """
+ALTER TABLE items ADD COLUMN rules_version INTEGER;
+ALTER TABLE items ADD COLUMN refill_at TEXT;
+"""
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
-    9: LISTINGS,
+    9: LISTINGS, 10: REFILL,
 }  # fmt: skip
 
 

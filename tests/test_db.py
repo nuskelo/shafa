@@ -6,13 +6,14 @@ from shafa import db
 
 # CORE-007 (версія 10): прибрати, щоб база стала старшою версією
 LISTINGS_DROP = (
+    "ALTER TABLE items DROP COLUMN rules_version; ALTER TABLE items DROP COLUMN refill_at; "
     "DROP TABLE my_listings; DROP TABLE my_listings_read; "
     "ALTER TABLE items DROP COLUMN duplicate_name;"
-)
+)  # CORE-008 (версія 11): колонки rules_version і refill_at теж прибрати
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 10
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 11
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
@@ -190,8 +191,12 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
         23000, 0, 0
     )  # fmt: skip
     assert row["batch_id"] is None
-    assert conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0] == (
-        sql[:-1] + ", queue_pos INTEGER, duplicate_name TEXT)"  # лише нові колонки, без перебудови
+    assert (
+        conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0]
+        == (
+            sql[:-1]
+            + ", queue_pos INTEGER, duplicate_name TEXT, rules_version INTEGER, refill_at TEXT)"  # лише нові колонки, без перебудови
+        )
     )
     with conn, pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO ai_batches (status, created_at) VALUES ('waiting', 'x')")

@@ -213,7 +213,7 @@ def test_no_certain_answer_is_uncertain_and_stops(env, result):
     report = env.run()
 
     assert state(env.conn, first) == (Status.PROBLEM, "publish_uncertain")
-    assert "Перевір на Шафі" in row(env.conn, first)["problem_text"]
+    assert "Перевірте на Шафі" in row(env.conn, first)["problem_text"]
     assert state(env.conn, second) == (Status.APPROVED, None)
     assert len(env.driver.submits) == 1  # без повтору
     assert report.reason == "немає певної відповіді Шафи"
@@ -821,7 +821,8 @@ def test_uggs_are_not_duplicate_of_slippers():
     ("changes", "duplicate"),
     [
         ({"name": "Уги UGG замшеві 40 розмір у відмінному стані", "colors": ("Коричневий",)}, True),
-        ({"name": "Уги UGG замшеві оригінал 40 розміру", "colors": ("Чорний",)}, False),  # колір
+        ({"name": "Уги UGG замшеві оригінал 40 розміру", "colors": ("Чорний",)}, True),  # колір
+        # колір у кабінеті не віддається (TD-034) — різний колір дублем не заперечується
         (
             {"name": "Уги UGG замшеві оригінал 40 розміру", "colors": (), "price": 900},
             False,
@@ -830,7 +831,7 @@ def test_uggs_are_not_duplicate_of_slippers():
         ({"name": "Чоботи UGG замшеві 40 розміру", "colors": ("Коричневий",)}, False),  # тип
     ],
 )
-def test_duplicate_needs_same_type_color_and_close_price(changes, duplicate):
+def test_duplicate_needs_same_type_and_close_price_color_is_ignored(changes, duplicate):
     listing = Listing(**{**SLIPPERS.__dict__, **changes})
     assert (uggs_duplicate(listing) is listing) is duplicate
 

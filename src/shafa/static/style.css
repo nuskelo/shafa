@@ -199,3 +199,5 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* CORE-007: схоже оголошення в картці Проблеми — фото й назва поруч */
 .duplicate { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0; }
 .duplicate img { width: 160px; max-width: 40%; height: auto; border-radius: 6px; }
+
+.badge.old-rules { background: #e6e6e6; color: #555; }

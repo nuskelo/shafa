@@ -164,8 +164,8 @@ def _number(value: float) -> str:
     return f"{value:g}".replace(".", ",")
 
 
-def user_text(post_text: str) -> str:
-    """Текст поста і поля, які вже заповнив код (ціна, стан, устілка, мембрана)."""
+def user_text(post_text: str, corrections: list[tuple[str, str]] | None = None) -> str:
+    """Текст поста, поля коду (ціна, стан, устілка, мембрана) і її правки (CORE-008 B)."""
     price = rules.price_from_text(post_text)
     insole = rules.insole_lengths(post_text)
     code_fields = [
@@ -174,14 +174,26 @@ def user_text(post_text: str) -> str:
         "Довжина устілки: " + (", ".join(_number(x) for x in insole) if insole else "—"),
         f"Мембрана: {rules.membrane(post_text) or '—'}",
     ]
-    return (
+    text = (
         f"Текст поста:\n{post_for_ai(post_text)}\n\n"
         "Поля, які вже заповнив код (не повертай їх):\n" + "\n".join(code_fields)
     )
+    if corrections:
+        lines = "\n".join(
+            f"Продавчиня виправила: {label} → {value}" for label, value in corrections
+        )
+        text += (
+            "\n\nПравки Продавчині (вона знає товар краще за пост — прийми їх як є, "
+            f"не сперечайся й не ставь на них сумнів):\n{lines}"
+        )
+    return text
 
 
 def build_request(
-    post_text: str, photos: list[PreparedPhoto], cache: bool = False
+    post_text: str,
+    photos: list[PreparedPhoto],
+    cache: bool = False,
+    corrections: list[tuple[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Параметри `client.messages.create`: фото перед текстом, кожне з іменем файлу.
 
@@ -201,7 +213,7 @@ def build_request(
                 },
             }
         )
-    content.append({"type": "text", "text": user_text(post_text)})
+    content.append({"type": "text", "text": user_text(post_text, corrections)})
     system: str | list[dict[str, Any]] = system_prompt()
     if cache:
         system = [{"type": "text", "text": system, "cache_control": CACHE_CONTROL}]
@@ -659,13 +671,20 @@ def _code_sizes(
     return sizes, one and not sizes.yellow
 
 
-def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str) -> list[Field]:
-    """Відповідь ШІ → поля бланка в порядку FIELDS, з жовтими позначками й причинами."""
+def check_answer(
+    answer: dict[str, Any], photo_names: list[str], post_text: str, edited: str = ""
+) -> list[Field]:
+    """Відповідь ШІ → поля бланка в порядку FIELDS, з жовтими позначками й причинами.
+
+    `edited` — її відредаговані назва й опис (CORE-008 B): стать, тип розділу, підкладку й сезон
+    правила шукають і в них; решта (розмір, ціна, матеріал) — лише в пості.
+    """
+    words = f"{post_text}\n{edited}" if edited else post_text
     section, kind = check_section(answer.get("section"))
     path = catalog.find_section(section.value) if section.value else None  # None — розділу немає
     sizes, first_size = check_sizes_any(answer, path, kind, post_text)
-    section, group_decided = check_group(section, kind, first_size, post_text)
-    section = check_shoe_type(section, post_text)
+    section, group_decided = check_group(section, kind, first_size, words)
+    section = check_shoe_type(section, words)
     moved = catalog.find_section(section.value) if section.value else None
     if moved != path:  # код переніс у іншу групу чи тип — розміри за списком нового розділу
         path, kind = moved, catalog.section_kind(moved) if moved else None
@@ -683,8 +702,8 @@ def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str)
         check_colors(answer.get("colors")),
         Field("brand", _text(answer.get("brand"))),
         check_material(answer.get("material_upper"), path, post_text),
-        check_lining(answer.get("material_lining"), path, post_text),
-        check_season(answer.get("season"), path, post_text),
+        check_lining(answer.get("material_lining"), path, words),
+        check_season(answer.get("season"), path, words),
         check_values("type", answer.get("type"), path, single=True),
         check_values("style", answer.get("style"), path, single=True),
         check_teen(answer.get("teen"), path),

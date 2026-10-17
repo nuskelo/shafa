@@ -26,7 +26,7 @@ from typing import Any
 
 import anthropic
 
-from shafa import ai, config, fill
+from shafa import ai, config, fill, rules
 from shafa.db import Status, now
 from shafa.folders import OLD_PREFIX, is_old
 from shafa.robot import publish
@@ -123,10 +123,11 @@ class Queue:
 def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
     rows = conn.execute(
         f"""
-        SELECT items.id, items.folder_name, items.post_id, posts.date
+        SELECT items.id, items.folder_name, items.post_id, items.refill_at, posts.date
         FROM items JOIN posts USING (post_id)
         WHERE items.status = ? AND items.id NOT IN ({fill.IN_BATCH})
-        ORDER BY items.folder_name LIKE '{OLD_PREFIX}%', items.queue_pos IS NULL, items.queue_pos,
+        ORDER BY items.refill_at IS NULL, items.folder_name LIKE '{OLD_PREFIX}%',
+                 items.queue_pos IS NULL, items.queue_pos,
                  posts.date, items.id
         """,
         (Status.NEW,),
@@ -134,7 +135,9 @@ def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
     ready = [
         r
         for r in rows
-        if r["folder_name"].startswith(OLD_PREFIX) or post_is_old(r["date"], today, wait_days)
+        if r["refill_at"]  # перезаповнення: її Картка вже пройшла чекання (CORE-008)
+        or r["folder_name"].startswith(OLD_PREFIX)
+        or post_is_old(r["date"], today, wait_days)
     ]
     pending = conn.execute(
         "SELECT count(DISTINCT item_id) FROM ai_batch_items WHERE state = 'pending'"
@@ -158,6 +161,25 @@ def old_in_flight(conn: sqlite3.Connection) -> int:
         "WHERE b.state = 'pending' AND i.folder_name LIKE ?",
         (f"{OLD_PREFIX}%",),
     ).fetchone()[0]
+
+
+def refill_estimate(
+    conn: sqlite3.Connection, root: Path, item_ids: list[int] | None = None
+) -> tuple[int, int, int]:
+    """«Перезаповнити»: скільки Карток піде і скільки це коштує (мікродолари, ціна пакета).
+
+    Третє — скільки Карток не вийде підготувати (фото не відкривається). Нічого не надсилає.
+    """
+    rows = [r for r in fill.refill_candidates(conn) if item_ids is None or r["id"] in set(item_ids)]
+    count = cost = skipped = 0
+    for row in rows:
+        planned = fill.plan(conn, root, row, batch=True)
+        if isinstance(planned, fill.Skipped):
+            skipped += 1
+            continue
+        count += 1
+        cost += planned.estimate.cost_micro_usd
+    return count, cost, skipped
 
 
 # --- Гроші ---
@@ -228,7 +250,7 @@ def prepare(
     for row in q.ready:
         if len(plan.planned) >= cap:
             break
-        if is_old(row["folder_name"]):
+        if is_old(row["folder_name"]) and not row["refill_at"]:
             if old_room <= 0:
                 continue
             old_room -= 1
@@ -276,7 +298,7 @@ def send(
         for skipped in plan.skipped:
             conn.execute(
                 "UPDATE items SET status = ?, problem_code = 'ai_error', problem_text = ?, "
-                "updated_at = ? WHERE folder_name = ? AND status = ?",
+                "updated_at = ?, refill_at = NULL WHERE folder_name = ? AND status = ?",
                 (Status.PROBLEM, skipped.text, now(), skipped.folder_name, Status.NEW),
             )
     if not plan.planned:
@@ -338,7 +360,7 @@ class Collected:
     note: str | None = None  # не вдалося спитати API
 
 
-def _card_inputs(conn: sqlite3.Connection, item_id: int) -> tuple[list[str], str]:
+def _card_inputs(conn: sqlite3.Connection, item_id: int) -> tuple[list[str], str, str]:
     names = [
         r[0]
         for r in conn.execute(
@@ -348,7 +370,7 @@ def _card_inputs(conn: sqlite3.Connection, item_id: int) -> tuple[list[str], str
     row = conn.execute(
         "SELECT posts.text FROM items JOIN posts USING (post_id) WHERE items.id = ?", (item_id,)
     ).fetchone()
-    return names, row[0] if row else ""
+    return names, row[0] if row else "", rules.edit_text(fill.edits_of(conn, item_id))
 
 
 def _errored_text(result: Any) -> str:
@@ -383,8 +405,8 @@ def apply_result(conn: sqlite3.Connection, batch_id: int, line: Any, report: Col
                 state = "error"
                 report.errors += 1
             else:
-                names, text = _card_inputs(conn, item_id)
-                fields = ai.check_answer(answer, names, text)
+                names, text, edited = _card_inputs(conn, item_id)
+                fields = ai.check_answer(answer, names, text, edited)
                 fill.log_request(conn, item_id, usage, None, batch_id)
                 if fill.set_status(
                     conn, item_id, None, fields

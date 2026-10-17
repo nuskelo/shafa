@@ -24,11 +24,18 @@ MAX_CARDS = 3  # більше за один прогін не можна (тік
 UPLOAD_TIMEOUT = 120  # с на всі фото
 
 
-SUBMIT_TIMEOUT = 90  # с на відповідь Шафи після «Додати річ»
+SUBMIT_TIMEOUT = 60  # с на відповідь Шафи після «Додати річ»; без певної відповіді — «Перевірте»
 
 
 class FieldMissing(Exception):
-    """Поля форми не знайдено (Шафа змінила вигляд?). `args[0]` — назва поля на Шафі."""
+    """Поля форми не знайдено (Шафа змінила вигляд?). `args[0]` — назва поля на Шафі.
+
+    `details` — що є на формі натомість (для журналу, CORE-008 D): кнопки блоку й підписи розміру.
+    """
+
+    def __init__(self, label: str, details: str = "") -> None:
+        super().__init__(label)
+        self.details = details
 
 
 class BrandMissing(Exception):
@@ -150,6 +157,36 @@ FIND_BLOCK = """([label, mark]) => {
 }"""
 
 
+# Що є на формі, коли потрібного поля немає: кнопки й вкладки блоку (якщо блок знайдено) та всі
+# підписи зі словом «розмір» (вкладки систем розмірів: «Європейський», «Український»…).
+LIST_FIELDS = """(mark) => {
+  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+  const texts = els => [...new Set(els.map(e => norm(e.innerText || e.textContent))
+    .filter(t => t && t.length <= 40))].slice(0, 40);
+  const block = mark ? document.querySelector(`[data-robot-block='${mark}']`) : null;
+  return {
+    block: block ? texts([...block.querySelectorAll(
+      'button, [role=tab], [role=radio], [role=option], label')]) : [],
+    sizes: texts([...document.querySelectorAll('body *')].filter(
+      e => !e.children.length && /розмір/i.test(e.textContent || ''))),
+  };
+}"""
+
+
+def describe_form(page: Any, mark: str | None = None) -> str:
+    """Перелік назв полів і вкладок розміру на формі — для журналу, коли поля не знайдено."""
+    try:
+        found = page.evaluate(LIST_FIELDS, mark)
+    except Exception:  # noqa: BLE001 — діагностика не має ховати справжню причину
+        return ""
+    parts = []
+    if found.get("block"):
+        parts.append("у блоці: " + ", ".join(found["block"]))
+    if found.get("sizes"):
+        parts.append("підписи розміру: " + ", ".join(found["sizes"]))
+    return "; ".join(parts) or "на формі не знайдено нічого зі словом «розмір»"
+
+
 class PageDriver:
     """Дії у формі через `Session` (захищені кліки й клавіші)."""
 
@@ -162,7 +199,7 @@ class PageDriver:
         self._marks += 1
         mark = f"b{self._marks}"
         if not self.page.evaluate(FIND_BLOCK, [LABELS.get(label, label), mark]):
-            raise FieldMissing(label)
+            raise FieldMissing(label, describe_form(self.page))
         return self.page.locator(f"[data-robot-block='{mark}']")
 
     def set_photos(self, paths: list[str]) -> int:
@@ -216,7 +253,7 @@ class PageDriver:
         self.page.wait_for_load_state("networkidle")
 
     def pick(self, label: str, values: list[str]) -> None:
-        block = self._block(label)
+        block, mark = self._block(label), f"b{self._marks}"
         for value in values:
             button = block.get_by_role("button", name=value, exact=True)
             if not button.count():
@@ -226,13 +263,13 @@ class PageDriver:
                 continue
             combo = block.locator("input[role=combobox]")
             if not combo.count():
-                raise FieldMissing(f"{label}: {value}")
+                raise FieldMissing(f"{label}: {value}", describe_form(self.page, mark))
             combo.first.click()
             combo.first.fill(value)
             browser.pause()
             option = self.page.locator("[class*=option]").get_by_text(value, exact=True)
             if not option.count():
-                raise FieldMissing(f"{label}: {value}")
+                raise FieldMissing(f"{label}: {value}", describe_form(self.page, mark))
             self.session.click(option.first, f"{label}: {value}")
             self.session.press("Escape")
 
@@ -266,6 +303,19 @@ class PageDriver:
             browser.pause(0.5, 1.0)
             self.session.press("Enter", in_keywords=True)
 
+    def _click_publish(self, button: Any) -> str | None:
+        """Клік за квитком. Після кліку Шафа веде на сторінку реклами: клік може «зависнути» на
+        навігації, хоч товар уже створено, — таку помилку не рахуємо (відповідь `createProduct`
+        усе одно прийде). Відмова захисту — це `Forbidden`, її не ковтаємо. Повертає опис, якщо
+        клік завершився помилкою (для журналу)."""
+        try:
+            self.session.click_publish(button)
+        except guard.Forbidden:
+            raise
+        except Exception as error:  # noqa: BLE001 — тайм-аут навігації після кліку
+            return f"клік: {type(error).__name__}: {str(error)[:120]}"
+        return None
+
     def submit(self) -> Submitted:
         """Клік «Додати річ» за квитком і відповідь Шафи. Помилка до кліку — `FieldMissing`."""
         exact = re.compile(rf"^\s*{guard.PUBLISH_BUTTON}\s*$")
@@ -280,7 +330,7 @@ class PageDriver:
                 lambda r: r.request.method == "POST" and is_create_request(r.request),
                 timeout=SUBMIT_TIMEOUT * 1000,
             ) as info:
-                self.session.click_publish(button.first)
+                failure = self._click_publish(button.first)
             body = info.value.json()
         except Exception as error:  # noqa: BLE001 — тайм-аут, обрив, не JSON, відмова захисту
             failure = f"{type(error).__name__}: {str(error)[:200]}"
@@ -362,6 +412,8 @@ def dry_fill(
                 conn, card.id, "robot_field_missing", f"Робот не знайшов на Шафі поле «{error}»"
             )
             log(f"Пост {post_id}: не знайдено поле «{error}» — Картка в Проблемах, екран {shot}")
+            if error.details:
+                log(f"  · на формі: {error.details}")
             break
         if attempts := session.publish_attempts():
             raise RuntimeError(f"Заблоковано спроби публікації: {attempts}")

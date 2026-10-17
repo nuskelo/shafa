@@ -6,6 +6,7 @@
 записується. Профіль Chrome — тимчасовий, не профіль робота.
 """
 
+import contextlib
 import itertools
 import json
 import random
@@ -114,6 +115,10 @@ class FakeSession(browser.Session):
     def open_form(self) -> browser.Opened:
         self.page.goto(self.base + "/new", wait_until="load")
         return browser.Opened(browser.FORM, self.page.url)
+
+    def leave_result_page(self) -> None:
+        with contextlib.suppress(Exception):  # як у справжньої сесії
+            self.page.goto(self.base + "/new", wait_until="commit", timeout=5000)
 
     def outside(self) -> list[str]:
         """Запити, що намагались піти не на підставну Шафу (заблоковані)."""

@@ -33,6 +33,9 @@
     <input type="hidden" name="back" value="{{ back }}">
     <button name="action" value="update"{% if ai.busy %} disabled{% endif %}>Оновити</button>
     <span class="why">нові папки → ШІ пакетом; результати зазвичай до години</span>
+    {% if ai.refillable and not ai.busy %}
+    <a class="button" href="/refill">Перезаповнити не перевірені ({{ ai.refillable }})</a>
+    {% endif %}
   </form>
 </section>
 <section class="ai bot-{{ bot.code }}" aria-live="polite">

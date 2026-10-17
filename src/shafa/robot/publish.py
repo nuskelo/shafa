@@ -32,6 +32,9 @@ from shafa.robot import listings as listings_mod
 from shafa.robot import lock
 from shafa.robot.browser import NO_LOGIN
 from shafa.robot.form import (
+    SUBMIT_TIMEOUT as SUBMIT_WAIT,
+)
+from shafa.robot.form import (
     BrandMissing,
     Driver,
     FieldMissing,
@@ -49,13 +52,14 @@ OLD_DEFAULT, NEW_DEFAULT = 10, 0
 GROUPS_MAX = 30  # старих і нових разом на день
 DELETE_SETTING = "SHAFA_DELETE_PUBLISHED"  # видаляти папки з «Опубліковано» (типово — ні)
 DELETE_AFTER = timedelta(days=3)
+SHOT_WAIT = 10  # с: скріншот важкої сторінки (реклама) не має зависати робота
 PAUSE = (60.0, 180.0)  # с між товарами
 TICK = 5.0  # с: як часто під час паузи перевіряється Стоп
 SLEEP_JUMP = 60.0  # с: «тік» став довшим — ноутбук засинав
 ITEM_URL = "https://shafa.ua/uk/item/{id}-shafa"  # Шафа переводить на справжню адресу (301)
 
 UNCERTAIN = (
-    "Робот натиснув «Додати річ», але певної відповіді немає. Перевір на Шафі, чи товар з'явився"
+    "Перевірте на Шафі, чи опубліковано: робот натиснув «Додати річ», але певної відповіді немає"
 )
 
 
@@ -238,7 +242,7 @@ def recover(conn: sqlite3.Connection) -> list[int]:
     for item_id in ids:
         _problem(
             conn, item_id, Status.PUBLISHING, "publish_uncertain",
-            "Робот зупинився посеред публікації. Перевір на Шафі, чи товар з'явився",
+            "Перевірте на Шафі, чи опубліковано: робот зупинився посеред публікації",
         )  # fmt: skip
     with conn:
         conn.execute(
@@ -468,13 +472,19 @@ class Run:
             report.problems.append((card.post_id, code, text))
             self.log(f"Пост {card.post_id}: {text}")
 
+    def _url(self) -> str:
+        try:
+            return self.session.page.url
+        except Exception:  # noqa: BLE001
+            return "невідома"
+
     def _shot(self, card: review.Card | None, suffix: str) -> Path:
         self.screens.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         post = f"-{card.post_id}" if card is not None else ""
         shot = self.screens / f"{stamp}{post}-{suffix}.png"
         try:
-            self.session.page.screenshot(path=str(shot), full_page=True)
+            self.session.page.screenshot(path=str(shot), full_page=True, timeout=SHOT_WAIT * 1000)
         except Exception:  # noqa: BLE001 — екран лише для звіту; не ховати справжню причину
             return shot
         return shot
@@ -530,6 +540,10 @@ class Run:
             shot = self._shot(card, "нема-поля")
             self._problem(report, card, ok, "robot_field_missing",
                           f"Робот не знайшов на Шафі поле «{error}». Екран: {shot.name}")  # fmt: skip
+            if error.details:  # діагностика: що є на формі (не вгадуємо поле, CORE-008 D)
+                self.log(
+                    f"Пост {card.post_id}: поле «{error}» не знайдено; на формі — {error.details}"
+                )
             return Stop("site", "поле не знайдено — мабуть, Шафа змінила форму")
         except BrandMissing as error:
             self._problem(report, card, ok, "robot_brand_missing",
@@ -586,6 +600,7 @@ class Run:
             listings.append(listing)
             listings_mod.add(self.conn, listing)
             self._shot(card, "опубліковано")
+            self.session.leave_result_page()  # реклама/підняття — не чекаємо, нічого не тиснемо
             report.notes += [f"Пост {card.post_id}: {note}" for note in notes]
             if result.errors:
                 report.notes.append(f"Пост {card.post_id}: Шафа додала зауваження: {result.errors}")
@@ -606,6 +621,9 @@ class Run:
             self._problem(report, card, pub, "publish_error",
                           "Шафа не прийняла товар: " + "; ".join(result.errors))  # fmt: skip
             return Stop("error", "Шафа не прийняла товар")
+        self.log(f"Пост {card.post_id}: немає певної відповіді Шафи за {SUBMIT_WAIT} с "
+                 f"({result.failure or 'немає id у відповіді'}). Адреса: {self._url()}. "
+                 f"Екран: {shot}")  # fmt: skip
         self._problem(report, card, pub, "publish_uncertain",
                       f"{UNCERTAIN} ({result.failure or 'немає id у відповіді'})")  # fmt: skip
         return Stop("error", "немає певної відповіді Шафи")
@@ -666,8 +684,45 @@ def on_shafa(conn: sqlite3.Connection, root: Path, item_id: int, link: str) -> s
     return "on_shafa"
 
 
+def _same_name(a: str, b: str) -> str:
+    return " ".join(a.casefold().split())
+
+
+def listing_by_name(conn: sqlite3.Connection, item_id: int) -> sqlite3.Row | None:
+    """Її товар у знімку «Мої речі» з тією самою назвою, що й Картка (CORE-008 C), або None."""
+    card = review.load_card(conn, item_id)
+    title = card.fields["title"].value if card else None
+    if not title:
+        return None
+    wanted = _same_name(title, "")
+    return next(
+        (
+            r
+            for r in conn.execute("SELECT name, url FROM my_listings ORDER BY id DESC")
+            if _same_name(r["name"], "") == wanted
+        ),
+        None,
+    )
+
+
 def not_on_shafa(conn: sqlite3.Connection, item_id: int) -> str:
-    """«На Шафі немає → у Схвалені»: робот спробує ще раз (людина перевірила Шафу)."""
+    """«На Шафі немає → у Схвалені»: робот спробує ще раз (людина перевірила Шафу).
+
+    Перед повтором — пошук за назвою у знімку «Мої речі» (CORE-008 C): повтор публікації дає
+    дубль, тож знайдений товар не відпускаємо — Продавчиня дивиться на нього й каже «На Шафі є».
+    """
+    found = listing_by_name(conn, item_id)
+    if found is not None:
+        with conn:
+            conn.execute(
+                "UPDATE items SET problem_text = ?, updated_at = ? WHERE id = ? AND status = ? "
+                "AND problem_code IN (?, ?)",
+                (
+                    f"{UNCERTAIN}. У «Мої речі» вже є товар із такою назвою: {found['url']}",
+                    now(), item_id, Status.PROBLEM, *UNSURE,
+                ),
+            )  # fmt: skip
+        return "listing_found"
     done = _decide(
         conn, item_id, UNSURE, "status = ?, problem_code = NULL, problem_text = NULL",
         (Status.APPROVED,),
