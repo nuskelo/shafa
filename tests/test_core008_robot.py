@@ -9,7 +9,6 @@ from shafa.db import Status
 from shafa.robot import browser, form, guard, publish
 from shafa.robot.form import FieldMissing, PageDriver, describe_form
 from shafa.robot.listings import Listing, find_duplicate
-from test_robot_form import FakeLocator
 from test_robot_publish import OK, add, env, row, state  # noqa: F401 — фікстура env
 
 
@@ -359,3 +358,59 @@ def test_price_still_decides():
         find_duplicate("Уги UGG замшеві 40 розміру", SLUGS, ["40"], "UGG", [listing], [], 1300)
         is None
     )
+
+
+# --- E. Запуск на Mac із власною текою даних ---
+
+
+def test_data_dir_expands_tilde(monkeypatch):
+    monkeypatch.setenv("SHAFA_DATA_DIR", "~/shafa-viktoria")
+
+    from shafa import config
+
+    assert config.data_dir() == config.Path.home() / "shafa-viktoria"
+
+
+def test_everything_lives_in_the_chosen_data_dir(monkeypatch, tmp_path):
+    """База, профіль Chrome робота, замки, журнали й `.env` — лише в `SHAFA_DATA_DIR`."""
+    from shafa import app, config
+    from shafa.robot import control
+
+    data = tmp_path / "shafa-viktoria"
+    monkeypatch.setenv("SHAFA_DATA_DIR", str(data))
+    monkeypatch.setattr(config, "ENV_FILE", None)  # як у встановленій програмі
+
+    assert app.db_path() == data / "shafa.sqlite"
+    assert browser.profile_dir() == data / "robot-profile"
+    assert control.log_path().parent == data
+    assert config.env_file().parent == data
+
+
+def test_robot_and_bot_children_inherit_the_data_dir(monkeypatch, tmp_path):
+    import subprocess
+
+    from shafa.robot import control
+
+    seen = []
+
+    class Popen:
+        def __init__(self, command, **kwargs):
+            seen.append((command, kwargs["env"]))
+
+    monkeypatch.setattr(subprocess, "Popen", Popen)
+    monkeypatch.setenv("SHAFA_DATA_DIR", str(tmp_path))
+
+    control.spawn([], tmp_path / "r.log")
+    control.spawn([], tmp_path / "b.log", program="bot")
+
+    assert [c[3] for c, _ in seen] == ["robot", "bot"]
+    assert all(e["SHAFA_DATA_DIR"] == str(tmp_path) for _, e in seen)
+
+
+def test_tests_never_see_the_real_data_dir_or_env(monkeypatch):
+    from shafa import config
+
+    monkeypatch.delenv("SHAFA_DATA_DIR")
+
+    with pytest.raises(config.RealPathInTests):
+        config.data_dir()
