@@ -153,6 +153,7 @@ class Card:
     post_text: str | None
     fields: dict[str, FieldView]
     photos: list[Photo]
+    queue_pos: int | None = None  # місце старої Картки у списку імпорту
 
     @property
     def kind(self) -> Kind | None:
@@ -377,6 +378,7 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         row["post_text"],
         fields,
         photos,
+        row["queue_pos"],
     )
 
 
@@ -537,6 +539,12 @@ def _matches(card: Card, words: list[str]) -> bool:
     return all(w in haystack for w in words)
 
 
+def _queue_key(card: Card) -> tuple:
+    pos = card.queue_pos
+    date = card.post_date
+    return (pos is not None, pos or 0, date is None, date or "", natural_key(card.folder_name))
+
+
 def list_tab(conn: sqlite3.Connection, status: str, query: str = "") -> list[Card]:
     """Картки вкладки: старі пости першими; пошук — усі слова в назві, бренді, номері чи тексті."""
     ids = [
@@ -549,5 +557,5 @@ def list_tab(conn: sqlite3.Connection, status: str, query: str = "") -> list[Car
     words = query.casefold().split()
     if words:
         cards = [c for c in cards if _matches(c, words)]
-    cards.sort(key=lambda c: (c.post_date is None, c.post_date or "", natural_key(c.folder_name)))
+    cards.sort(key=_queue_key)  # як у черзі робота: нові за датою, старі за списком
     return cards
