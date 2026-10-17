@@ -42,7 +42,7 @@ from typing import Any
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from shafa import rules
+from shafa import rules, site
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
@@ -683,6 +683,7 @@ class Bot:
             self.tell_owner(f"пост {post_id} опубліковано, але папку не створено: {error}")
             return
         self._set(draft_id, folder_name=folder.name)
+        self._to_site(post_id, folder.name, sent, caption)
         late = ""
         received = self.conn.execute(
             "SELECT last_message_at FROM bot_drafts WHERE id = ?", (draft_id,)
@@ -697,6 +698,18 @@ class Bot:
                 f"папка {post_id} уже була — фото поста {post_id} збережено в «{folder.name}». "
                 "Розберись, яка правильна."
             )
+
+    def _to_site(self, post_id: int, folder_name: str, sent: dict, caption: str) -> None:
+        """Пост від бота → черга сайту (SITE-001). Лише запис у базу, мережі тут немає; будь-яка
+        помилка сайту публікацію в канал не ламає."""
+        try:
+            unix = sent.get("date")
+            moment = datetime.fromtimestamp(unix, UTC) if isinstance(unix, int) else self.clock()
+            posted_at = moment.astimezone().isoformat(timespec="seconds")
+            if site.enqueue(self.conn, post_id, folder_name, posted_at, caption):
+                self.log(f"Пост {post_id} — у черзі на сайт")
+        except Exception as error:  # noqa: BLE001 — канал важливіший за сайт
+            self.log(f"Пост {post_id} не став у чергу сайту: {type(error).__name__}")
 
     def _save_folder(self, post_id: int, photos: list[bytes]) -> Path:
         """Фото в `<Головна>/<номер>` (1.jpg, 2.jpg … у порядку надсилання). Є — `<номер>-бот`."""

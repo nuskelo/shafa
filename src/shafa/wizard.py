@@ -22,6 +22,7 @@ ROOT_LINK = "Шафа — фото товарів.lnk"
 SECRETS = (
     ("ANTHROPIC_API_KEY", "Ключ Claude API для неї (окремий, з Console)"),
     ("TELEGRAM_BOT_TOKEN", "Токен робочого бота (з @BotFather)"),
+    ("SITE_INTEGRATION_KEY", "Ключ сайту Viktoria Shoes (необов'язково; Enter — пропустити)"),
 )
 IDS = (
     ("TELEGRAM_BOT_CHANNEL_ID", "Id каналу, куди бот публікує (її канал — лише з твого дозволу)"),

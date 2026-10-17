@@ -1,6 +1,6 @@
 import pytest
 
-from shafa import batch, config, options, web
+from shafa import batch, config, options, site, web
 from shafa.robot import publish
 from test_web import PORT, TOKEN, get, html, post
 
@@ -79,4 +79,18 @@ def test_settings_post_needs_token(app, root):
 
 def test_options_have_no_secrets():
     names = {o.name for o in options.OPTIONS}
-    assert not names & {"ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN"}
+    assert not names & {"ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "SITE_INTEGRATION_KEY"}
+
+
+def test_site_switch_off_by_default_and_saved(app, root, monkeypatch):
+    monkeypatch.setenv(site.KEY, "sk-site-не-показувати")
+    page = html(get(app, "/settings"))
+    assert 'name="SHAFA_SITE_SEND" value="1">' in page  # типово вимкнено (без checked)
+    assert "sk-site" not in page and site.KEY not in page
+    assert not site.enabled()
+
+    post(app, "/settings", **form(root, SHAFA_SITE_SEND="1"))
+    assert site.enabled()
+
+    post(app, "/settings", **form(root))
+    assert not site.enabled()

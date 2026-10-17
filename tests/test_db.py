@@ -6,11 +6,11 @@ from shafa import db
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 8
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 9
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
-        "bot_summaries",
+        "bot_summaries", "site_jobs", "site_cache",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
@@ -168,6 +168,7 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
             "ALTER TABLE ai_requests DROP COLUMN cache_write_tokens;"
             "ALTER TABLE ai_requests DROP COLUMN cache_read_tokens;"
             "ALTER TABLE items DROP COLUMN queue_pos;"
+            "DROP TABLE site_jobs; DROP TABLE site_cache;"
         )
         conn.execute("PRAGMA user_version = 5")
     sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0]
@@ -200,6 +201,7 @@ def test_version_6_migrated_adds_bot_tables(tmp_path):
             "DROP TABLE bot_updates; DROP TABLE bot_draft_parts; DROP TABLE bot_drafts;"
             "DROP TABLE bot_status; DROP TABLE bot_summaries;"
             "ALTER TABLE items DROP COLUMN queue_pos;"
+            "DROP TABLE site_jobs; DROP TABLE site_cache;"
         )
         conn.execute("PRAGMA user_version = 6")
     conn.close()
@@ -232,6 +234,7 @@ def test_version_7_migrated_adds_queue_pos_and_keeps_cards(tmp_path):
             "VALUES ('borh-5', 5, 'new', 'x', 'x')"
         )
         conn.execute("ALTER TABLE items DROP COLUMN queue_pos")
+        conn.executescript("DROP TABLE site_jobs; DROP TABLE site_cache;")
         conn.execute("PRAGMA user_version = 7")
     conn.close()
 
@@ -240,4 +243,23 @@ def test_version_7_migrated_adds_queue_pos_and_keeps_cards(tmp_path):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     row = conn.execute("SELECT folder_name, queue_pos FROM items").fetchone()
     assert tuple(row) == ("borh-5", None)
+    conn.close()
+
+
+def test_version_8_migrated_adds_site_queue_and_keeps_posts(tmp_path):
+    path = tmp_path / "база.sqlite"
+    conn = db.connect(path)
+    with conn:
+        conn.execute(
+            "INSERT INTO posts (post_id, date, text, source, added_at) VALUES (5, 'x', 't', 'bot', 'x')"
+        )
+        conn.executescript("DROP TABLE site_jobs; DROP TABLE site_cache;")
+        conn.execute("PRAGMA user_version = 8")
+    conn.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    assert conn.execute("SELECT count(*) FROM site_jobs").fetchone()[0] == 0
+    assert conn.execute("SELECT post_id FROM posts").fetchone()[0] == 5
     conn.close()

@@ -1368,3 +1368,64 @@ def test_polls_fast_right_after_previews(conn, bot, tg, upd, clock):
     assert bot.waiting()  # «Чернеток: N» може знадобитись опустити
     clock.pass_(seconds=11)
     assert not bot.waiting()
+
+
+# --- Сайт (SITE-001): бот лише ставить пост у чергу, мережі до сайту тут немає ---
+
+
+@pytest.fixture
+def site_on(monkeypatch):
+    monkeypatch.setenv("SITE_INTEGRATION_KEY", "sk-site-test")
+    monkeypatch.setenv("SHAFA_SITE_SEND", "1")
+
+
+def site_jobs(conn):
+    return conn.execute(
+        "SELECT post_id, folder_name, posted_at, text, state FROM site_jobs"
+    ).fetchall()
+
+
+def test_published_post_queued_for_site_with_channel_date_and_zone(
+    conn, bot, tg, upd, clock, site_on, monkeypatch
+):
+    monkeypatch.setattr(core.site, "Site", None)  # будь-яка спроба мережі до сайту — падіння
+    send_post(bot, tg, upd, clock)
+    press(upd, bot, tg)
+
+    ((post_id, folder, posted_at, text, job_state),) = site_jobs(conn)
+    assert (post_id, folder, job_state) == (1401, "1401", "fields")
+    assert text == tg.channel_posts[0][1]  # текст поста як у каналі
+    moment = datetime.fromisoformat(posted_at)
+    assert moment.utcoffset() is not None and moment.timestamp() == 1_791_960_000
+    assert state(conn) == "published"
+
+
+def test_site_switched_off_nothing_queued(conn, bot, tg, upd, clock, monkeypatch):
+    monkeypatch.setenv("SITE_INTEGRATION_KEY", "sk-site-test")
+    send_post(bot, tg, upd, clock)
+    press(upd, bot, tg)
+
+    assert site_jobs(conn) == []
+    assert state(conn) == "published"
+
+
+def test_site_queue_failure_never_breaks_channel_publish(
+    conn, bot, tg, upd, clock, site_on, monkeypatch
+):
+    def broken(*args):
+        raise RuntimeError("база зайнята")
+
+    monkeypatch.setattr(core.site, "enqueue", broken)
+    send_post(bot, tg, upd, clock)
+    press(upd, bot, tg)
+
+    assert state(conn) == "published"
+    assert any(t.startswith("Опубліковано:") for t in tg.texts(SELLER))
+
+
+def test_channel_refusal_not_queued_for_site(conn, bot, tg, upd, clock, site_on):
+    send_post(bot, tg, upd, clock)
+    tg.errors["sendPhoto"] = TelegramError("ні", code=400)
+    press(upd, bot, tg)
+
+    assert site_jobs(conn) == []

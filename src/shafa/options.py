@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from shafa import config, places
+from shafa import config, places, site
 from shafa.batch import BATCH_SETTING, DAILY_USD, MONEY_SETTING, WAIT_DAYS, WAIT_SETTING
 from shafa.robot.publish import (
     DAILY_LIMIT,
@@ -58,6 +58,13 @@ OPTIONS = (
     Option(BATCH_SETTING, "Товарів в одному пакеті ШІ", "від 1 до 500", "50", "int"),
     Option(ROOT_SETTING, "Головна папка з фото", "папка має існувати", "", "path"),
     Option(DELETE_SETTING, "Видаляти папки з «Опубліковано» через 3 дні", "", "", "flag"),
+    Option(
+        site.SEND_SETTING,
+        "Відправляти на сайт нові пари з бота",
+        "потрібен ключ сайту в майстрі налаштувань",
+        "",
+        "flag",
+    ),
 )
 _LIMITS = {
     OLD_SETTING: (0, GROUPS_MAX),
@@ -73,8 +80,10 @@ def current() -> dict[str, str]:
     values = {o.name: config.setting(o.name) or o.default for o in OPTIONS}
     if not values[ROOT_SETTING]:
         values[ROOT_SETTING] = str(places.default_root())
-    flag = (values[DELETE_SETTING] or "").lower() in ("1", "так", "yes", "true")
-    values[DELETE_SETTING] = "1" if flag else ""
+    for option in OPTIONS:
+        if option.kind == "flag":
+            flag = (values[option.name] or "").lower() in ("1", "так", "yes", "true")
+            values[option.name] = "1" if flag else ""
     return values
 
 
