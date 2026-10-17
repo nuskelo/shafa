@@ -6,7 +6,7 @@ from shafa import db
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 7
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 8
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
@@ -167,6 +167,7 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
             "ALTER TABLE ai_requests DROP COLUMN batch_id;"
             "ALTER TABLE ai_requests DROP COLUMN cache_write_tokens;"
             "ALTER TABLE ai_requests DROP COLUMN cache_read_tokens;"
+            "ALTER TABLE items DROP COLUMN queue_pos;"
         )
         conn.execute("PRAGMA user_version = 5")
     sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0]
@@ -180,7 +181,9 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
         23000, 0, 0
     )  # fmt: skip
     assert row["batch_id"] is None
-    assert conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0] == sql
+    assert conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0] == (
+        sql[:-1] + ", queue_pos INTEGER)"  # лише нова колонка, таблиця не перебудована
+    )
     with conn, pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO ai_batches (status, created_at) VALUES ('waiting', 'x')")
     conn.close()
@@ -196,13 +199,14 @@ def test_version_6_migrated_adds_bot_tables(tmp_path):
         conn.executescript(
             "DROP TABLE bot_updates; DROP TABLE bot_draft_parts; DROP TABLE bot_drafts;"
             "DROP TABLE bot_status; DROP TABLE bot_summaries;"
+            "ALTER TABLE items DROP COLUMN queue_pos;"
         )
         conn.execute("PRAGMA user_version = 6")
     conn.close()
 
     conn = db.connect(path)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert {
         "bot_updates",
         "bot_drafts",
@@ -216,4 +220,24 @@ def test_version_6_migrated_adds_bot_tables(tmp_path):
             "INSERT INTO bot_drafts (chat_id, state, created_at, last_message_at, updated_at) "
             "VALUES (1, 'sent', 'x', 'x', 'x')"
         )
+    conn.close()
+
+
+def test_version_7_migrated_adds_queue_pos_and_keeps_cards(tmp_path):
+    path = tmp_path / "база.sqlite"
+    conn = db.connect(path)
+    with conn:
+        conn.execute(
+            "INSERT INTO items (folder_name, post_id, status, created_at, updated_at) "
+            "VALUES ('borh-5', 5, 'new', 'x', 'x')"
+        )
+        conn.execute("ALTER TABLE items DROP COLUMN queue_pos")
+        conn.execute("PRAGMA user_version = 7")
+    conn.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    row = conn.execute("SELECT folder_name, queue_pos FROM items").fetchone()
+    assert tuple(row) == ("borh-5", None)
     conn.close()

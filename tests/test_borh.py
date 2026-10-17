@@ -282,3 +282,48 @@ def test_robot_plan_takes_photo_from_data_dir(conn, posts, export_dir, root):
     steps, _ = plan(review.load_card(conn, item_id), root)
 
     assert steps[0].value == [str(old_root() / "100" / "1.jpg")]
+
+
+# --- Порядок у списку (CORE-006) ---
+
+
+def positions(conn):
+    return {
+        r["post_id"]: r["queue_pos"] for r in conn.execute("SELECT post_id, queue_pos FROM items")
+    }
+
+
+def test_import_records_list_position(conn, posts, export_dir):
+    run(conn, posts, export_dir, [104, 100, 105])
+
+    assert positions(conn) == {104: 1, 100: 2, 105: 3}
+
+
+def test_second_import_reorders_unpublished_without_duplicates(conn, posts, export_dir):
+    run(conn, posts, export_dir, [100, 104, 105])
+
+    result = run(conn, posts, export_dir, [105, 100, 104])
+
+    assert positions(conn) == {105: 1, 100: 2, 104: 3}
+    assert result.created == [] and result.reordered == 3
+    assert conn.execute("SELECT count(*) FROM items").fetchone()[0] == 3
+
+
+def test_second_import_does_not_touch_published_or_non_old(conn, posts, export_dir):
+    run(conn, posts, export_dir, [100, 104])
+    with conn:
+        conn.execute("UPDATE items SET status = 'published' WHERE post_id = 100")
+        conn.execute(
+            "INSERT INTO items (folder_name, post_id, status, created_at, updated_at) "
+            "VALUES ('105', 105, 'new', 'x', 'x')"
+        )  # Картка з папки, не старий борг
+
+    run(conn, posts, export_dir, [104, 105, 100])
+
+    assert positions(conn) == {100: 1, 104: 1, 105: None}
+
+
+def test_unchanged_order_reports_nothing_reordered(conn, posts, export_dir):
+    run(conn, posts, export_dir, [100, 104])
+
+    assert run(conn, posts, export_dir, [100, 104]).reordered == 0

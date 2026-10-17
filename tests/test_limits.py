@@ -222,3 +222,34 @@ def test_panel_state_counts_and_why_not(env):
     add_old(env, 800)
     s = control.state(env.conn, env.tmp / "robot.lock", now=env.today)
     assert s.can_start and not s.why_not
+
+
+# --- Порядок старих за списком (CORE-006) ---
+
+
+def set_pos(env, item, pos):
+    with env.conn:
+        env.conn.execute("UPDATE items SET queue_pos = ? WHERE id = ?", (pos, item))
+
+
+def test_queue_old_by_list_not_by_date_new_first(env):
+    first_in_list = add_old(env, 1, "2025-09-01T10:00:00")  # пізніша дата, але перший у списку
+    second_in_list = add_old(env, 2, "2024-01-01T10:00:00")
+    no_pos = add_old(env, 3, "2023-01-01T10:00:00")  # без позиції — після всіх зі списку
+    new = add_new(env, 9)
+    set_pos(env, first_in_list, 1)
+    set_pos(env, second_in_list, 2)
+
+    assert publish.queue(env.conn) == [new, first_in_list, second_in_list, no_pos]
+
+
+def test_reimport_order_changes_robot_queue(env):
+    a = add_old(env, 1)
+    b = add_old(env, 2)
+    set_pos(env, a, 1)
+    set_pos(env, b, 2)
+    assert publish.queue(env.conn) == [a, b]
+
+    set_pos(env, a, 5)
+
+    assert publish.queue(env.conn) == [b, a]

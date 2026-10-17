@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class Status(StrEnum):
@@ -248,7 +248,12 @@ CREATE TABLE bot_status (
 """
 
 # Що виконати, щоб перейти з версії N на N + 1 (текст SQL або функція, що сама ставить версію).
-MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT}
+# Версія 8 (CORE-006): позиція старої Картки у списку `import-old` (менше — раніше).
+QUEUE = """
+ALTER TABLE items ADD COLUMN queue_pos INTEGER;
+"""
+
+MIGRATIONS = {1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE}
 
 
 def now() -> str:

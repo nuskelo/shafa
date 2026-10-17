@@ -163,12 +163,13 @@ def group_open(folder_name: str, started: Groups, limits: Groups) -> bool:
 
 
 def queue_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Схвалені Картки: спершу нові (папка, бот), потім старі; у групі — найстаріші пости першими."""
+    """Схвалені Картки: спершу нові (папка, бот) за датою, потім старі за списком (`queue_pos`)."""
     return conn.execute(
         """
         SELECT items.id, items.folder_name FROM items LEFT JOIN posts USING (post_id)
         WHERE items.status = ? AND items.purged_at IS NULL
-        ORDER BY items.folder_name LIKE 'borh-%', posts.date IS NULL, posts.date, items.id
+        ORDER BY items.folder_name LIKE 'borh-%', items.queue_pos IS NULL, items.queue_pos,
+                 posts.date IS NULL, posts.date, items.id
         """,
         (Status.APPROVED,),
     ).fetchall()
