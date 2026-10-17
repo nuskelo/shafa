@@ -115,11 +115,29 @@ def _count(page: Any, selector: str) -> int:
         return 0
 
 
+# CORE-007: вікно робота можна згорнути чи закрити іншими вікнами — Chrome не гальмує фонову
+# вкладку (таймери, рендер), інакше робот на її ноутбуці «засинає».
+BACKGROUND_ARGS = (
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+)
+
+
 def launch(playwright: Any) -> Any:
     profile = profile_dir()
     profile.mkdir(parents=True, exist_ok=True)
-    return playwright.chromium.launch_persistent_context(
-        profile, channel="chrome", headless=False, viewport={"width": 1400, "height": 1000}
+    return open_profile(playwright.chromium, profile)
+
+
+def open_profile(chromium: Any, profile: Path) -> Any:
+    """Видимий встановлений Chrome з профілем робота; фонове гальмування вимкнене."""
+    return chromium.launch_persistent_context(
+        profile,
+        channel="chrome",
+        headless=False,
+        viewport={"width": 1400, "height": 1000},
+        args=list(BACKGROUND_ARGS),
     )
 
 

@@ -192,3 +192,22 @@ def test_manual_login_closes_browser_properly(
     assert result == why
     assert context.closed_by_us == closed_by_us  # штатне закриття — cookies входу записані
     assert not flag.exists()
+
+
+def test_launch_keeps_minimized_window_fast(tmp_path):
+    """CORE-007: згорнуте вікно Chrome не гальмує — аргументи передаються в запуск."""
+    calls = {}
+
+    class Chromium:
+        def launch_persistent_context(self, profile, **options):
+            calls.update(options, profile=profile)
+            return "context"
+
+    assert browser.open_profile(Chromium(), tmp_path / "profile") == "context"
+    for arg in (
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+    ):
+        assert arg in calls["args"]
+    assert calls["headless"] is False and calls["channel"] == "chrome"
