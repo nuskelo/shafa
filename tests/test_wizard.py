@@ -4,8 +4,8 @@ import pytest
 
 from shafa import config, places, wizard
 
-AI_SECRET = "sk-ant-тестовий-ключ-XYZ"
-BOT_SECRET = "123456:тестовий-токен-ABC"
+AI_SECRET = "sk-ant-test-key-XYZ"
+BOT_SECRET = "123456:test-token-ABC"
 
 
 @pytest.fixture(autouse=True)
@@ -161,10 +161,83 @@ def test_check_ai_error_has_no_key(monkeypatch):
 
 
 def test_site_key_optional_hidden_and_saved(home):
-    script = Script(["", *IDS, "ні"], secrets=(AI_SECRET, BOT_SECRET, "sk-site-секрет"))
+    script = Script(["", *IDS, "ні"], secrets=(AI_SECRET, BOT_SECRET, "sk-site-secret-key"))
 
     wizard.run(script.act)
 
-    assert config.setting("SITE_INTEGRATION_KEY") == "sk-site-секрет"
-    assert "sk-site-секрет" not in script.everything()
+    assert config.setting("SITE_INTEGRATION_KEY") == "sk-site-secret-key"
+    assert "sk-site-secret-key" not in script.everything()
     assert any("Ключ сайту" in p and "необов'язково" in p for p in script.prompts)
+
+
+# --- FIX-002: вставка в cmd і повторний запуск ---
+
+
+def test_ctrl_v_and_line_breaks_are_cleaned_from_pasted_values(home):
+    secrets = ("\x16" + AI_SECRET + "\r\n", " \x16" + BOT_SECRET + "\u200b", "")
+    script = Script(["", " 2394827824\r", *IDS[1:], "ні"], secrets=secrets)
+
+    wizard.run(script.act)
+
+    assert config.setting("ANTHROPIC_API_KEY") == AI_SECRET
+    assert config.setting("TELEGRAM_BOT_TOKEN") == BOT_SECRET
+    assert config.setting("TELEGRAM_BOT_CHANNEL_ID") == "2394827824"
+    assert script.checks[0] == ("ai", AI_SECRET)
+    assert any("правою кнопкою миші, один раз" in p for p in script.prompts)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "\x16",  # Ctrl+V у cmd: лише керівний символ
+        AI_SECRET + AI_SECRET,  # два правих кліки — дві копії
+        "ключ-кирилицею",
+    ],
+)
+def test_bad_secret_is_explained_and_asked_again_without_traceback(home, bad):
+    script = Script(["", *IDS, "ні"], secrets=(bad, AI_SECRET, BOT_SECRET, ""))
+
+    assert wizard.run(script.act) == 0
+
+    assert (
+        "Ключ/токен вставлено з помилкою — встав ще раз (вставка — правою кнопкою миші, один раз)"
+        in script.shown
+    )
+    assert config.setting("ANTHROPIC_API_KEY") == AI_SECRET
+
+
+def test_bad_token_format_asked_again(home):
+    script = Script(["", *IDS, "ні"], secrets=(AI_SECRET, "123456 токен", BOT_SECRET, ""))
+    wizard.run(script.act)
+    assert config.setting("TELEGRAM_BOT_TOKEN") == BOT_SECRET
+
+
+def test_bad_id_asked_again(home):
+    script = Script(["", "\x16", "2394827824", *IDS[1:], "ні"])
+    wizard.run(script.act)
+    assert any(s.startswith("Id — лише цифри") for s in script.shown)
+    assert config.setting("TELEGRAM_BOT_CHANNEL_ID") == "2394827824"
+
+
+def test_broken_saved_secret_is_not_kept_on_enter(home):
+    config.save_settings({"TELEGRAM_BOT_TOKEN": "\x16", "ANTHROPIC_API_KEY": "\x16" + AI_SECRET})
+    script = Script(["", *IDS, "ні"], secrets=("", "", ""))
+
+    wizard.run(script.act)
+
+    assert config.setting("ANTHROPIC_API_KEY") == AI_SECRET  # почищене збережене
+    assert any("Токен робочого бота" in s and "зіпсоване" in s for s in script.shown)
+    assert not any("Токен робочого бота (вже є" in p for p in script.prompts)
+    assert config.setting("TELEGRAM_BOT_TOKEN") is None  # зіпсоване не лишається
+    assert "Токена бота немає — бот не працюватиме" in script.shown
+
+
+def test_enter_keeps_current_root(home, tmp_path):
+    current = tmp_path / "D" / "Шафа-фото"
+    wizard.run(Script([str(current), *IDS, "ні"]).act)
+    script = Script(["", "", "", "", "", "ні"], secrets=("", "", ""))
+
+    wizard.run(script.act)
+
+    assert config.setting("SHAFA_ROOT_DIR") == str(current)
+    assert f"[Enter — {current}]" in script.prompts[0]
