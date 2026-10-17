@@ -14,6 +14,7 @@ from shafa.robot.listings import (
     find_duplicate,
     group_slugs,
     parse_feed,
+    similar,
     sizes_close,
 )
 from test_robot_form import FakeDriver, FakeLocator, FakePage
@@ -151,8 +152,15 @@ def state(conn, item_id):
 # --- Успіх ---
 
 
+def other_item(env, item_id):
+    """«Це інший товар»: та сама назва в тестах — не дубль щойно опублікованої (CORE-007)."""
+    with env.conn:
+        env.conn.execute("UPDATE items SET duplicate_ok_at = 'x' WHERE id = ?", (item_id,))
+
+
 def test_publishes_oldest_first_records_link_and_moves_folder(env):
     newer = add(env, "1400", 1400, "2025-05-01T10:00:00")
+    other_item(env, newer)
     older = add(env, "1342", 1342, "2025-03-01T10:00:00")
 
     report = env.run()
@@ -573,7 +581,7 @@ def test_stop_waits_for_current_item(env):
 
 def test_pause_holds_until_resumed(env):
     add(env, "1342", 1342)
-    add(env, "1400", 1400, "2025-05-01T10:00:00")
+    other_item(env, add(env, "1400", 1400, "2025-05-01T10:00:00"))
     env.on_submit = lambda: publish.request(env.conn, "pause")
     waits = []
 
@@ -785,3 +793,151 @@ def test_item_started_at_set_while_item_in_work(env):
     )
     env.run()
     assert seen[0]
+
+
+# --- CORE-007: хибний дубль і знімок «Мої речі» ---
+
+UGGS = "zhenskaya-obuv/uggi"
+SLIPPERS = Listing(
+    5, "Тапочки UGG оригінал 40 розміру в ідеальному стані", "UGG", UGGS, ("40",),
+    "https://shafa.ua/uk/item/5-x", colors=("Сірий",), price=1300,
+)  # fmt: skip
+
+
+def uggs_duplicate(listing, title="Уги UGG замшеві оригінал 40 розміру", colors=("Коричневий",),
+                   price=1800):  # fmt: skip
+    return find_duplicate(title, frozenset({UGGS}), ["40"], "UGG", [listing], colors, price)
+
+
+def test_uggs_are_not_duplicate_of_slippers():
+    """Жива перевірка 17.10 (перефразовано): високі коричневі уги проти сірих тапочок того ж бренду."""
+    assert uggs_duplicate(SLIPPERS) is None
+    # без шаблонних слів «оригінал 40 розміру» назви збігались би лише на бренд і розмір
+    same_type = Listing(**{**SLIPPERS.__dict__, "name": "Уги UGG оригінал 40 розміру"})
+    assert uggs_duplicate(same_type, colors=()) is same_type  # колір невідомий — сумнів
+
+
+@pytest.mark.parametrize(
+    ("changes", "duplicate"),
+    [
+        ({"name": "Уги UGG замшеві 40 розмір у відмінному стані", "colors": ("Коричневий",)}, True),
+        ({"name": "Уги UGG замшеві оригінал 40 розміру", "colors": ("Чорний",)}, False),  # колір
+        (
+            {"name": "Уги UGG замшеві оригінал 40 розміру", "colors": (), "price": 900},
+            False,
+        ),  # ціна
+        ({"name": "Уги UGG замшеві оригінал 40 розміру", "colors": (), "price": 1500}, True),
+        ({"name": "Чоботи UGG замшеві 40 розміру", "colors": ("Коричневий",)}, False),  # тип
+    ],
+)
+def test_duplicate_needs_same_type_color_and_close_price(changes, duplicate):
+    listing = Listing(**{**SLIPPERS.__dict__, **changes})
+    assert (uggs_duplicate(listing) is listing) is duplicate
+
+
+def test_parse_feed_reads_colors_price_and_photo_if_given():
+    node = {
+        "id": 9, "name": "Уги", "url": "/uk/x/9", "brand": {"name": "UGG"}, "catalogSlug": UGGS,
+        "sizes": [{"name": "40"}], "colors": [{"name": "Сірий"}], "price": "1 300",
+        "thumbnail": "https://images.shafa.ua/9.jpg",
+    }  # fmt: skip
+    response = {"data": {"viewer": {"products": {
+        "edges": [{"node": node}], "pageInfo": {"hasNextPage": False, "total": 1},
+    }}}}  # fmt: skip
+    listing = parse_feed(response)[0][0]
+    assert (listing.colors, listing.price, listing.photo) == (
+        ("Сірий",), 1300, "https://images.shafa.ua/9.jpg"
+    )  # fmt: skip
+    node.update(colors=None, price=None, thumbnail="javascript:x")
+    listing = parse_feed(response)[0][0]
+    assert (listing.colors, listing.price, listing.photo) == ((), None, None)
+
+
+def test_duplicate_problem_keeps_name_and_photo_for_screen(env, tmp_path):
+    item = add(env)
+    env.listings = [Listing(**{**SAME.__dict__, "photo": "https://images.shafa.ua/1.jpg"})]
+    fetched = []
+    with lock.hold("publish", env.tmp / "robot.lock") as held:
+        publish.Run(
+            env.conn, env.root, env.session, env.make_driver, env.load, env.tmp, held,
+            log=env.lines.append, sleep=lambda s: None, rand=lambda a, b: 0.0,
+            today=lambda: env.today, fetch_photo=lambda url: fetched.append(url) or b"jpeg",
+            photos_dir=tmp_path / "duplicates",
+        ).start(30, 30)  # fmt: skip
+    assert state(env.conn, item) == (Status.PROBLEM, "possible_duplicate")
+    assert row(env.conn, item)["duplicate_name"] == SAME.name
+    assert fetched == ["https://images.shafa.ua/1.jpg"]
+    assert (tmp_path / "duplicates" / f"{item}.jpg").read_bytes() == b"jpeg"
+
+
+def test_fresh_snapshot_skips_reading_cabinet(env):
+    from shafa.robot import listings
+
+    listings.store(env.conn, [SAME])
+    env.listings = RuntimeError("кабінет не мав читатись")
+    item = add(env)
+    env.run()
+    assert state(env.conn, item) == (Status.PROBLEM, "possible_duplicate")  # знімок діє
+    assert any("(знімок)" in line for line in env.lines)
+
+
+def test_old_or_empty_snapshot_reads_cabinet_and_stores_it(env):
+    from shafa.robot import listings
+
+    listings.store(env.conn, [SAME], now=datetime.now(UTC) - timedelta(days=8))
+    env.listings = []
+    add(env)
+    env.run()
+    assert listings.snapshot_info(env.conn)[0] == 1  # прочитано заново: лише опублікована Картка
+    assert listings.stored(env.conn, 7) is not None
+    env.conn.execute("DELETE FROM my_listings")
+    assert listings.stored(env.conn, 7) is None  # порожній знімок — читати
+
+
+def test_published_card_goes_into_snapshot_at_once(env):
+    from shafa.robot import listings
+
+    first = add(env)
+    twin = add(env, "1400", 1400, "2025-05-01T10:00:00")
+    env.run()
+    assert state(env.conn, first)[0] == Status.PUBLISHED
+    assert state(env.conn, twin) == (Status.PROBLEM, "possible_duplicate")  # та сама сесія
+    saved = listings.stored(env.conn, 7)
+    assert [(x.id, x.name, x.sizes, x.colors) for x in saved] == [
+        (556, "Шкіряні черевики ecco 38 розміру", ("38", "38.5"), ("Чорний",))
+    ]
+    env.listings = RuntimeError("кабінет не мав читатись")
+    other_item(env, twin)
+    with env.conn:
+        env.conn.execute(
+            "UPDATE items SET status = 'approved', problem_code = NULL WHERE id = ?", (twin,)
+        )
+    env.run()  # наступний запуск: знімок свіжий — кабінет не читається
+    assert state(env.conn, twin)[0] == Status.PUBLISHED
+
+
+def test_reread_button_makes_snapshot_stale(env):
+    from shafa.robot import listings
+
+    listings.store(env.conn, [SAME])
+    listings.reset(env.conn)
+    assert listings.stored(env.conn, 7) is None
+    assert listings.snapshot_info(env.conn) == (1, None)
+
+
+def test_refresh_days_setting(monkeypatch):
+    from shafa.robot import listings
+
+    monkeypatch.setenv(listings.DAYS_SETTING, "3")
+    assert listings.refresh_days() == 3
+    monkeypatch.setenv(listings.DAYS_SETTING, "31")
+    with pytest.raises(listings.SetupError):
+        listings.refresh_days()
+
+
+def test_template_words_do_not_make_titles_similar():
+    """Шаблон «оригінал 40 розміру в ідеальному стані» однаковий — порівнюється лише суть."""
+    a = "Черевики Ecco шкіряні високі оригінал 40 розміру в ідеальному стані"
+    b = "Черевики Ecco лакові низькі оригінал 40 розміру в ідеальному стані"
+    assert not similar(a, b, "Ecco")
+    assert similar(a, "Високі шкіряні черевики Ecco 40 розмір", "Ecco")

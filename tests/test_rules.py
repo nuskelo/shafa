@@ -301,3 +301,25 @@ def test_many_items_lines_with_own_prices():
 )
 def test_one_item(text):
     assert not many_items(text)
+
+
+# --- CORE-007 ---
+
+
+def test_said_gender_and_adult_signs():
+    from shafa import rules
+
+    assert rules.said_gender("Жіночі черевики 41 розміру") == rules.WOMEN
+    assert rules.said_gender("Кеди для хлопчика") == rules.BOYS
+    assert rules.said_gender("Підійдуть і на жіночу, і на чоловічу ногу") is None
+    assert rules.said_gender("Кросівки унісекс, чоловіча модель") is None
+    assert rules.adult_signs("Ботильйони на каблуку 36 розміру")
+    assert not rules.adult_signs("Кросівки 36 розміру")
+
+
+def test_season_without_fur_is_not_winter():
+    from shafa import rules
+
+    assert rules.season("Черевики без хутра, 38 розмір") == (None, None)
+    assert rules.season("Кеди 38 розмір") == (None, None)
+    assert rules.season("Весняні кросівки") == (["Весна"], None)

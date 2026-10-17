@@ -90,6 +90,12 @@ def section(path: str | None) -> dict[str, Any] | None:
     return snapshot()["sections"][found] if found else None
 
 
+def moved(path: str, group: str | None = None, type_name: str | None = None) -> str | None:
+    """Той самий тип в іншій групі або інший тип у тій самій групі; None — такого розділу немає."""
+    parent, name = normalize_section(path).rsplit(SEP, 1)
+    return find_section(f"{group or parent}{SEP}{type_name or name}")
+
+
 def section_kind(path: str) -> Kind | None:
     """Група розділу за початком шляху або None, якщо шлях не з нашої частини дерева."""
     key = _key(normalize_section(path))

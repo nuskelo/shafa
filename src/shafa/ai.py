@@ -325,21 +325,6 @@ def _parse_size(text: str) -> float | None:
         return None
 
 
-def expected_kinds(size: float) -> set[Kind]:
-    """Підказка `docs/rules.md` §6: які розділи пасують до розміру."""
-    if size <= 22:
-        return {Kind.BABIES}
-    if size < 35:
-        return {Kind.KIDS}
-    if size < 37:
-        return {Kind.KIDS, Kind.WOMEN}
-    if size < 41:
-        return {Kind.WOMEN}
-    if size < 43:
-        return {Kind.WOMEN, Kind.MEN}
-    return {Kind.MEN}
-
-
 def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, float | None]:
     """Розміри за списком Шафи для розділу (D6) і правилом ярлика (rules.md §7, D4)."""
     sizes = _strings(value)
@@ -384,15 +369,90 @@ def check_sizes_any(
     return field, first
 
 
-def check_size_hint(section: Field, kind: Kind | None, size: float | None) -> Field:
-    """Розділ жовтіє, якщо розмір підказує іншу групу (малюки / дитяче / жіноче / чоловіче)."""
-    if kind is None or size is None or kind in expected_kinds(size):
+_GROUPS = {
+    rules.WOMEN: catalog.WOMEN,
+    rules.MEN: catalog.MEN,
+    rules.GIRLS: catalog.GIRLS,
+    rules.BOYS: catalog.BOYS,
+}
+_GROUP_NAMES = {
+    catalog.WOMEN: "жіноче",
+    catalog.MEN: "чоловіче",
+    catalog.GIRLS: "для дівчаток",
+    catalog.BOYS: "для хлопчиків",
+}
+NO_KID_GENDER = "у тексті не сказано, для дівчинки чи хлопчика — перевір"
+
+
+def _target(kind: Kind, size: float, text: str) -> tuple[str | None, str | None]:
+    """Група розділу за текстом і розміром (`docs/rules.md` §6, v1.4): (група, причина жовтого).
+
+    (None, None) — лишається вибір ШІ (40–42 без слова в тексті, жіноче 35–36).
+    """
+    said = rules.said_gender(text)
+    if size <= 22:
+        return None, (None if kind is Kind.BABIES else "до 22 розміру включно — «Для малюків»")
+    if kind is Kind.BABIES:  # 23 і більше — ніколи не малюки
+        if said in (rules.GIRLS, rules.BOYS):
+            return _GROUPS[said], None
+        return None, "«Для малюків» лише до 22 розміру; " + NO_KID_GENDER
+    if said is not None:  # «жіночі», «чоловічі», «для дівчинки» важливіші за розмір
+        return _GROUPS[said], None
+    if size < 35:
+        return None, (NO_KID_GENDER if kind is Kind.KIDS else f"розмір {_number(size)} — дитячий")
+    if size < 37:
+        if kind is Kind.KIDS:
+            return (catalog.WOMEN, None) if rules.adult_signs(text) else (None, NO_KID_GENDER)
+        return (catalog.WOMEN, None) if kind is Kind.MEN else (None, None)
+    if kind is Kind.KIDS:
+        return None, f"розмір {_number(size)} зазвичай дорослий"
+    if size < 40:
+        return catalog.WOMEN, None
+    if size < 43:
+        return None, None
+    return catalog.MEN, None
+
+
+def check_group(
+    section: Field, kind: Kind | None, size: float | None, text: str
+) -> tuple[Field, bool]:
+    """Розділ у потрібній групі. Друге — групу вирішив код (сумнів ШІ про стать не рахується)."""
+    if kind in (None, Kind.ACCESSORY) or size is None or section.yellow:
+        return section, False
+    group, reason = _target(kind, size, text)
+    if reason:
+        return Field("section", section.value, True, reason), False
+    if group is None:
+        return section, False
+    path = catalog.moved(section.value, group)
+    if path is None:
+        name = section.value.rsplit(catalog.SEP, 1)[1]
+        why = f"має бути {_GROUP_NAMES[group]}, але типу «{name}» там немає — вибери розділ"
+        return Field("section", section.value, True, why), False
+    return Field("section", path), True
+
+
+BOOTS = "Чоботи"
+_SAPOZHKY = re.compile(r"сапожк|сапог", re.IGNORECASE)
+_DUTYKY = re.compile(r"дутик", re.IGNORECASE)
+
+
+def check_shoe_type(section: Field, text: str) -> Field:
+    """Тип розділу за словом поста: «сапожки» → Чоботи; «Дутики» — лише якщо так у тексті."""
+    if section.yellow or not section.value:
         return section
-    if kind is Kind.BABIES:
-        reason = "Для малюків лише до 22 розміру"
-    else:
-        reason = f"розмір {_number(size)} зазвичай з іншого розділу"
-    return Field("section", section.value, True, _join(section.reason, reason))
+    name = section.value.rsplit(catalog.SEP, 1)[1]
+    if (
+        _SAPOZHKY.search(text)
+        and name != BOOTS
+        and (path := catalog.moved(section.value, None, BOOTS))
+    ):
+        return Field("section", path)
+    if name == "Дутики" and not _DUTYKY.search(text):
+        return Field(
+            "section", section.value, True, "«Дутики» — лише коли так у тексті; перевір тип"
+        )
+    return section
 
 
 def _join(*reasons: str | None) -> str:
@@ -416,9 +476,7 @@ def check_colors(value: Any) -> Field:
     known = [f for f in found if f]
     if unknown:
         return Field("colors", known, True, "кольору немає в довіднику: " + ", ".join(unknown))
-    if len(known) > 2:
-        return Field("colors", known, True, "більше двох кольорів")
-    return Field("colors", known)
+    return Field("colors", known[:2])  # головний — колір верху, перший; дрібні деталі не рахуємо
 
 
 def _as_list(value: Any) -> list[str] | None:
@@ -474,11 +532,55 @@ def check_material(value: Any, path: str | None, post_text: str) -> Field:
     return field
 
 
+# Синоніми підкладки: у різних типів Шафи різні назви одного матеріалу.
+_LINING_ALIASES = {
+    "Хутро": ("Натуральне хутро",),
+    "Натуральне хутро": ("Хутро",),
+    "Штучне хутро": ("Екохутро",),
+    "Екохутро": ("Штучне хутро",),
+}
+
+
+def _lining_in_text(choice: str, text: str) -> bool:
+    if choice == "Натуральне хутро":
+        choice = "Хутро"
+    if choice == "Екохутро":
+        return in_text("Екохутро", text) or (in_text("Штучне", text) and in_text("Хутро", text))
+    return all(in_text(word, text) for word in choice.split())
+
+
 def check_lining(value: Any, path: str | None, post_text: str) -> Field:
-    field = check_values("material_lining", value, path)
-    absent = [v for v in field.value if not in_text(v, post_text)]
-    if absent and not field.yellow:
-        return Field(field.name, field.value, True, "немає в тексті: " + ", ".join(absent))
+    """Підкладка — лише названа в тексті і лише з довідника розділу; інакше порожньо, не жовте."""
+    values = _as_list(value) or []
+    if path is None:
+        return Field("material_lining", values)
+    spec = catalog.characteristic(path, "material_lining")
+    if spec is None:
+        return Field("material_lining", [])
+    kept: list[str] = []
+    for v in values:
+        for candidate in (
+            v,
+            *_LINING_ALIASES.get(catalog.canonical(v, tuple(_LINING_ALIASES)) or "", ()),
+        ):
+            choice = catalog.canonical(candidate, spec["choices"])
+            if choice:
+                break
+        if choice and _lining_in_text(choice, post_text):
+            kept.append(choice)
+    return Field("material_lining", list(dict.fromkeys(kept))[: spec["max"]])
+
+
+def check_season(value: Any, path: str | None, post_text: str) -> Field:
+    """Сезон: ознаки в тексті вирішує код (зима, мембрана → демісезон); жовте — лише суперечність."""
+    code, doubt = rules.season(post_text)
+    if code is None:
+        return check_values("season", value, path)
+    if path is not None and catalog.characteristic(path, "season") is None:
+        return Field("season", [])
+    field = check_values("season", code, path)
+    if doubt:
+        return Field(field.name, field.value, True, _join(field.reason, doubt))
     return field
 
 
@@ -500,6 +602,8 @@ def check_keywords(value: Any) -> Field:
 
 
 def check_photo_order(value: Any, names: list[str]) -> Field:
+    if len(names) == 1:  # старі пости — одне фото (CORE-005): переставляти нічого
+        return Field("photo_order", names)
     order = _strings(value)
     if order is None or sorted(order) != sorted(names):
         return Field("photo_order", names, True, "порядок фото від ШІ не збігається з папкою")
@@ -508,13 +612,28 @@ def check_photo_order(value: Any, names: list[str]) -> Field:
     return Field("photo_order", names)
 
 
-def _with_doubts(fields: list[Field], doubts: Any) -> list[Field]:
-    """Сумніви ШІ: поле жовтіє, причина додається до причини коду."""
+# Сумнів ШІ про стать / групу — коли групу вирішив код, він не рахується.
+_GENDER_DOUBT = re.compile(r"жіноч|чоловіч|стат|унісекс|дитяч|дівч|хлопч|доросл", re.IGNORECASE)
+# Поля, де сумнів ШІ не робить жовтим (CORE-007): сезон і підкладку вирішує текст, колір —
+# найближчий з довідника.
+NO_DOUBT = frozenset({"season", "material_lining", "colors"})
+
+
+def _with_doubts(fields: list[Field], doubts: Any, decided: set[str]) -> list[Field]:
+    """Сумніви ШІ: поле жовтіє, причина додається до причини коду.
+
+    `decided` — поля, які вирішив код за текстом; «section» там — лише щодо статі й групи.
+    """
     reasons: dict[str, list[str]] = {}
     for doubt in doubts if isinstance(doubts, list) else []:
         if isinstance(doubt, dict) and isinstance(doubt.get("field"), str):
             reason = _text(doubt.get("reason")) or "без причини"
-            reasons.setdefault(doubt["field"], []).append(reason)
+            name = doubt["field"]
+            if name in NO_DOUBT or (name in decided and name != "section"):
+                continue
+            if name == "section" and name in decided and _GENDER_DOUBT.search(reason):
+                continue
+            reasons.setdefault(name, []).append(reason)
     result = []
     for field in fields:
         if field.name not in reasons:
@@ -525,12 +644,38 @@ def _with_doubts(fields: list[Field], doubts: Any) -> list[Field]:
     return result
 
 
+def _code_sizes(
+    answer: dict[str, Any], sizes: Field, path: str | None, post_text: str
+) -> tuple[Field, bool]:
+    """Розмір за текстом: «вказаний X, ідуть на Y» кодом (§7); один розмір у тексті, і ШІ дало
+    його ж — сумнів ШІ не рахується. Розпаровка й US/UK — як було."""
+    if answer.get("size_system") in (sizes_mod.US, sizes_mod.UK) or rules.unpaired(post_text):
+        return sizes, False
+    label = rules.label_sizes(post_text, rules.condition(post_text))
+    if label is not None:
+        return check_sizes(label, path, post_text)[0], True
+    found = rules.text_sizes(post_text)
+    one = len(found) == 1 and sizes.value == [_number(found[0])]
+    return sizes, one and not sizes.yellow
+
+
 def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str) -> list[Field]:
     """Відповідь ШІ → поля бланка в порядку FIELDS, з жовтими позначками й причинами."""
     section, kind = check_section(answer.get("section"))
     path = catalog.find_section(section.value) if section.value else None  # None — розділу немає
     sizes, first_size = check_sizes_any(answer, path, kind, post_text)
-    section = check_size_hint(section, kind, first_size)
+    section, group_decided = check_group(section, kind, first_size, post_text)
+    section = check_shoe_type(section, post_text)
+    moved = catalog.find_section(section.value) if section.value else None
+    if moved != path:  # код переніс у іншу групу чи тип — розміри за списком нового розділу
+        path, kind = moved, catalog.section_kind(moved) if moved else None
+        sizes, first_size = check_sizes_any(answer, path, kind, post_text)
+    sizes, sizes_decided = _code_sizes(answer, sizes, path, post_text)
+    decided = {"section"} if group_decided else set()
+    if sizes_decided:
+        decided.add("sizes")
+    if len(photo_names) == 1:
+        decided.add("photo_order")
     fields = [
         check_title(answer.get("title")),
         section,
@@ -539,7 +684,7 @@ def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str)
         Field("brand", _text(answer.get("brand"))),
         check_material(answer.get("material_upper"), path, post_text),
         check_lining(answer.get("material_lining"), path, post_text),
-        check_values("season", answer.get("season"), path),
+        check_season(answer.get("season"), path, post_text),
         check_values("type", answer.get("type"), path, single=True),
         check_values("style", answer.get("style"), path, single=True),
         check_teen(answer.get("teen"), path),
@@ -547,7 +692,7 @@ def check_answer(answer: dict[str, Any], photo_names: list[str], post_text: str)
         check_keywords(answer.get("keywords")),
         check_photo_order(answer.get("photo_order"), photo_names),
     ]
-    return _with_doubts(fields, answer.get("doubts"))
+    return _with_doubts(fields, answer.get("doubts"), decided)
 
 
 def make_client(api_key: str) -> anthropic.Anthropic:

@@ -33,6 +33,7 @@ from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
 from shafa.robot import browser, control, lock, publish
+from shafa.robot import listings as listings_mod
 from shafa.scan import STICKY, rescan_folder, scan
 
 COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
@@ -78,6 +79,7 @@ MESSAGES = {
     "no_sizes": "Схвалити не можна: немає розміру",
     "no_colors": "Схвалити не можна: немає кольору",
     "no_gender": "Схвалити не можна: для малюків Шафа вимагає «Стать»",
+    "babies_size": "Схвалити не можна: «Для малюків» — лише до 22 розміру, оберіть «Для дівчаток» чи «Для хлопчиків»",
     "bad": "Не збережено поля, позначені червоним",
     "stale": "Картку вже змінено — сторінку оновлено",
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
@@ -151,6 +153,7 @@ SECURITY_HEADERS = {
 _ITEM = re.compile(r"/item/(\d+)")
 _SESSION = re.compile(r"/session/(\d+)")
 _PHOTO = re.compile(r"/(photo|thumb)/(\d+)/(\d+)")
+_DUPLICATE_PHOTO = re.compile(r"/duplicate/(\d+)\.jpg")
 _STATIC = re.compile(r"/static/([\w.-]+)")
 
 
@@ -324,6 +327,10 @@ class App:
             return self.settings_post(request)
         if path == "/export" and request.method == "POST":
             return self.export_post(request)
+        if path == "/listings/reread" and request.method == "POST":
+            return self.reread_post(request)
+        if (match := _DUPLICATE_PHOTO.fullmatch(path)) and get:
+            return self.duplicate_photo(int(match[1]))
         if path == "/quit" and request.method == "POST" and self.on_quit is not None:
             done = self.on_quit()
             return self.page("quit.html", done=done)
@@ -382,6 +389,7 @@ class App:
                 current="settings",
                 options=options.OPTIONS,
                 values=values or options.current(),
+                snapshot=listings_mod.snapshot_info(conn),
                 errors=errors or {},
                 warnings=warnings or [],
                 message=message or MESSAGES.get(request.arg("msg")),
@@ -399,6 +407,27 @@ class App:
         self.root = Path(form[options.ROOT_SETTING].strip().strip('"'))  # екран — одразу
         message = "Збережено. Робот і бот візьмуть нові значення з наступного запуску."
         return self.settings_page(request, warnings=warnings, message=message)
+
+    def reread_post(self, request: Request) -> Response:
+        """«Перечитати зараз»: знімок «Мої речі» застарів — робот прочитає кабінет на старті."""
+        conn = self.connect()
+        try:
+            listings_mod.reset(conn)
+        finally:
+            conn.close()
+        message = "Добре: робот перечитає «Мої речі» на Шафі під час наступного запуску (5–10 хв)."
+        return self.settings_page(request, message=message)
+
+    def _duplicate_file(self, item_id: int) -> Path:
+        return self.cache_dir.parent / listings_mod.PHOTOS_DIR / f"{item_id}.jpg"
+
+    def duplicate_photo(self, item_id: int) -> Response:
+        """Фото схожого оголошення, яке зберіг робот (шлях — з номера Картки, не із запиту)."""
+        try:
+            body = self._duplicate_file(item_id).read_bytes()
+        except OSError:
+            return text(404, "Фото не знайдено")
+        return Response(200, body, "image/jpeg")
 
     def export_post(self, request: Request) -> Response:
         """«Завантажити експорт каналу» (TD-021): `result.json` → пости в базу і зіставлення папок."""
@@ -658,12 +687,15 @@ class App:
                 return text(404, "Картку не знайдено")
             bad = {name for name in request.query.get("bad", []) if name in review.SPEC}
             row = conn.execute(
-                "SELECT duplicate_url, shafa_url FROM items WHERE id = ?", (item_id,)
+                "SELECT duplicate_url, duplicate_name, shafa_url FROM items WHERE id = ?",
+                (item_id,),
             ).fetchone()
             return self.page(
                 "card.html",
                 **self._chrome(conn, request),
                 duplicate_url=shafa_link(row["duplicate_url"]),
+                duplicate_name=row["duplicate_name"],
+                duplicate_photo=self._duplicate_file(item_id).is_file(),
                 shafa_url=shafa_link(row["shafa_url"]),
                 my_items=MY_ITEMS,
                 sticky=STICKY,

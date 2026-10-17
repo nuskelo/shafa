@@ -260,6 +260,8 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
                 publish.Run(
                     conn, root, session, form.PageDriver,
                     lambda s: listings.load(s, log=log), form.screens_dir(), held, log=log,
+                    fetch_photo=lambda url: listings.fetch_photo(session, url),
+                    photos_dir=duplicates_dir(args.db),
                 ).start(limit, day_limit)  # fmt: skip
             except KeyboardInterrupt:  # звіт сесії вже надруковано
                 return 130
@@ -293,6 +295,13 @@ def _fake_publish(p, args, held, root, limit: int, day_limit: int, log) -> int:
         session.close()
         server.close()
     return 0
+
+
+def duplicates_dir(db_path: Path) -> Path:
+    """Фото схожих оголошень (CORE-007) — у теці даних поруч із базою, для екрана Проблем."""
+    from shafa.robot.listings import PHOTOS_DIR
+
+    return db_path.resolve().parent / PHOTOS_DIR
 
 
 def thumbs_dir(db_path: Path) -> Path:
@@ -362,7 +371,7 @@ def format_estimate(plan: batch.Plan, spent: int, lim: batch.Limits) -> str:
         f"лишиться в черзі {plan.left}{' (ліміт грошей)' if plan.over_budget else ''}"
     )
     lines.append(
-        f"Чекають 7 днів: {plan.young} · чекають відповіді ШІ: {plan.pending} · "
+        f"Нові чекають 7 днів: {plan.young} · чекають відповіді ШІ: {plan.pending} · "
         f"сьогодні {batch.dollars(spent)} з {batch.dollars(lim.daily_micro_usd)} · нічого не надіслано"
     )
     return "\n".join(lines)

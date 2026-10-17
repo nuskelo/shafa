@@ -1,7 +1,8 @@
 """ШІ пакетом (Batch API: усе вдвічі дешевше) з кешем інструкції на годину (D1).
 
 Черга — Картки `new` з постом, старшим за 7 днів (рішення 11.4: що продасться в Telegram, за те ШІ
-не платимо), які не чекають результату іншого пакета (D3). Дата поста — місцевий час без поясу, як
+не платимо), які не чекають результату іншого пакета (D3). Старі (`borh-…`, CORE-005) — без чекання,
+одразу за чергою `queue_pos` (CORE-007, рішення Власника 17.10): 7 днів — лише для нових. Дата поста — місцевий час без поясу, як
 в Експорті; порівнюється з місцевим часом ноутбука (D4, точність до доби).
 
 Гроші (D5): до відправки — оцінка найгіршого випадку (кеш не спрацював) + уже витрачене сьогодні за
@@ -115,7 +116,7 @@ def post_is_old(date: str, today: datetime, wait_days: int) -> bool:
 @dataclass(frozen=True)
 class Queue:
     ready: list[sqlite3.Row]  # можна відправляти, найстаріші пости першими
-    young: int  # пост ще молодший за `wait_days`
+    young: int  # новий пост ще молодший за `wait_days` (старі не чекають)
     pending: int  # чекають результату пакета
 
 
@@ -130,7 +131,11 @@ def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
         """,
         (Status.NEW,),
     ).fetchall()
-    ready = [r for r in rows if post_is_old(r["date"], today, wait_days)]
+    ready = [
+        r
+        for r in rows
+        if r["folder_name"].startswith(OLD_PREFIX) or post_is_old(r["date"], today, wait_days)
+    ]
     pending = conn.execute(
         "SELECT count(DISTINCT item_id) FROM ai_batch_items WHERE state = 'pending'"
     ).fetchone()[0]

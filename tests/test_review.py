@@ -487,6 +487,11 @@ def test_manual_keywords_not_touched(conn, root):
              ai.Field("sizes", ["18"]), READY[2]],
             "no_gender",
         ),
+        (
+            [ai.Field("section", "Дитячий одяг / Для малюків / Взуття / Кросівки"),
+             ai.Field("sizes", ["23"]), READY[2], ai.Field("gender", "Унісекс")],
+            "babies_size",
+        ),
     ],
 )  # fmt: skip
 def test_approve_blocked_until_shafa_required_fields(conn, root, blank, block):

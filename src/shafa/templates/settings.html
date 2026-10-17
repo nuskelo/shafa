@@ -21,6 +21,12 @@
   {% endfor %}
   <div class="actions"><button class="approve">Зберегти</button></div>
 </form>
+<h2>«Мої речі» на Шафі (перевірка дублів)</h2>
+<form method="post" action="/listings/reread" class="export">
+  <input type="hidden" name="token" value="{{ token }}">
+  <p>Її товарів у знімку: {{ snapshot[0] }}{% if snapshot[1] %}, прочитано {{ local(snapshot[1]) }}{% else %}, перечитається на наступному запуску робота{% endif %}.</p>
+  <button>Перечитати зараз</button>
+</form>
 <h2>Експорт каналу</h2>
 <form method="post" action="/export" enctype="multipart/form-data" class="export">
   <input type="hidden" name="token" value="{{ token }}">

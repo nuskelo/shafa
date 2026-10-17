@@ -10,6 +10,7 @@ from pathlib import Path
 
 from shafa import config, places, site
 from shafa.batch import BATCH_SETTING, DAILY_USD, MONEY_SETTING, WAIT_DAYS, WAIT_SETTING
+from shafa.robot import listings
 from shafa.robot.publish import (
     DAILY_LIMIT,
     DAILY_LIMIT_SETTING,
@@ -56,6 +57,13 @@ OPTIONS = (
         WAIT_SETTING, "ШІ — через скільки днів після посту", "від 0 до 60", str(WAIT_DAYS), "int"
     ),
     Option(BATCH_SETTING, "Товарів в одному пакеті ШІ", "від 1 до 500", "50", "int"),
+    Option(
+        listings.DAYS_SETTING,
+        "Перечитувати «Мої речі» кожні N днів",
+        "від 1 до 30; опубліковане роботом дописується одразу",
+        str(listings.DAYS_DEFAULT),
+        "int",
+    ),
     Option(ROOT_SETTING, "Головна папка з фото", "папка має існувати", "", "path"),
     Option(DELETE_SETTING, "Видаляти папки з «Опубліковано» через 3 дні", "", "", "flag"),
     Option(
@@ -72,6 +80,7 @@ _LIMITS = {
     DAILY_LIMIT_SETTING: (1, 100),
     WAIT_SETTING: (0, 60),
     BATCH_SETTING: (1, 500),
+    listings.DAYS_SETTING: listings.DAYS_RANGE,
 }
 
 

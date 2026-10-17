@@ -200,7 +200,24 @@ def card_duplicate(
     return listings_mod.find_duplicate(
         f["title"], listings_mod.group_slugs(card.path),
         [catalog.shafa_size(s) for s in f["sizes"] or []], brand or f["brand"], listings,
+        f["colors"] or [], f["price"],
     )  # fmt: skip
+
+
+def card_listing(card: review.Card, product_id: int, url: str) -> listings_mod.Listing:
+    """Щойно опублікована Картка — так, як її покаже кабінет «Мої речі» (для знімка)."""
+    f = {name: view.value for name, view in card.fields.items()}
+    brand = catalog.canonical(f["brand"], catalog.brands()) if f["brand"] else None
+    return listings_mod.Listing(
+        id=product_id,
+        name=f["title"] or "",
+        brand=brand or f["brand"],
+        slug=(catalog.section(card.path) or {}).get("slug", ""),
+        sizes=tuple(catalog.shafa_size(s) for s in f["sizes"] or []),
+        url=url,
+        colors=tuple(f["colors"] or []),
+        price=f["price"],
+    )
 
 
 def _problem(conn: sqlite3.Connection, item_id: int, source: str, code: str, text: str) -> bool:
@@ -298,6 +315,8 @@ class Run:
         screens: Path,
         held: lock.Held,
         log: Callable[[str], None] = print,
+        fetch_photo: Callable[[str], bytes | None] = lambda url: None,
+        photos_dir: Path | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
         rand: Callable[[float, float], float] = random.uniform,
@@ -306,6 +325,7 @@ class Run:
         self.conn, self.root, self.session = conn, root, session
         self.make_driver, self.load_listings = make_driver, load_listings
         self.screens, self.held, self.log = screens, held, log
+        self.fetch_photo, self.photos_dir = fetch_photo, photos_dir
         self.sleep, self.clock, self.rand, self.today = sleep, clock, rand, today
 
     def start(self, limit: int, day_limit: int) -> Report:
@@ -360,10 +380,11 @@ class Run:
         if (stop := self._open_form(None)) is not None:
             return stop
         try:
-            listings = self.load_listings(self.session)
+            listings = self._listings()
         except listings_mod.ListingsError as error:
             return Stop("error", f"не прочитано її товари на Шафі ({error}) — дублі не перевірити")
-        self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)}")
+        except listings_mod.SetupError as error:
+            return Stop("error", str(error))
 
         driver = self.make_driver(self.session)
         done, previous, held_back = 0, None, False
@@ -392,6 +413,35 @@ class Run:
             started = started_groups(self.conn, self.today())
             return Stop("limit", f"на сьогодні все: {started.text(limits)}")
         return Stop("done", "черга закінчилась")
+
+    def _listings(self) -> list[listings_mod.Listing]:
+        """Знімок «Мої речі» з бази, якщо свіжий; старий чи порожній — читати кабінет (5–10 хв)."""
+        days = listings_mod.refresh_days()
+        listings = listings_mod.stored(self.conn, days)
+        if listings is not None:
+            self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)} (знімок)")
+            return listings
+        listings = self.load_listings(self.session)
+        listings_mod.store(self.conn, listings)
+        self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)}")
+        return listings
+
+    def _duplicate(self, report: Report, card: review.Card, found: listings_mod.Listing) -> None:
+        """Схоже оголошення — у Проблеми з назвою, посиланням і (якщо вдалося) фото для екрана."""
+        self._problem(report, card, Status.APPROVED, "possible_duplicate",
+                      f"На Шафі вже є схоже оголошення: «{found.name}» — {found.url}")  # fmt: skip
+        with self.conn:
+            self.conn.execute(
+                "UPDATE items SET duplicate_url = ?, duplicate_name = ? WHERE id = ?",
+                (found.url, found.name, card.id),
+            )
+        if self.photos_dir is None:
+            return
+        target = self.photos_dir / f"{card.id}.jpg"
+        target.unlink(missing_ok=True)  # старе фото іншого схожого — геть
+        if found.photo and (body := self.fetch_photo(found.photo)):
+            self.photos_dir.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
 
     def _wait_command(self, session_id: int) -> Stop | None:
         """Стоп → причина; Пауза → чекати, доки не скасують."""
@@ -462,12 +512,7 @@ class Run:
             "SELECT duplicate_ok_at FROM items WHERE id = ?", (card.id,)
         ).fetchone()[0]  # «Це інший товар» — Продавчиня вже перевірила
         if not checked and (duplicate := card_duplicate(card, listings)):
-            self._problem(report, card, ok, "possible_duplicate",
-                          f"На Шафі вже є схоже оголошення: «{duplicate.name}» — {duplicate.url}")  # fmt: skip
-            with self.conn:
-                self.conn.execute(
-                    "UPDATE items SET duplicate_url = ? WHERE id = ?", (duplicate.url, card.id)
-                )
+            self._duplicate(report, card, duplicate)
             return None
 
         with self.conn:  # для екрана: «чекаю, поки допишеться поточний товар (~N хв)»
@@ -496,9 +541,11 @@ class Run:
         if attempts := self.session.publish_attempts():
             raise RuntimeError(f"Заблоковано спроби публікації до кліку: {attempts}")
 
-        return self._submit(report, card, driver, notes)
+        return self._submit(report, card, driver, notes, listings)
 
-    def _submit(self, report: Report, card: review.Card, driver: Driver, notes: list[str]):
+    def _submit(
+        self, report: Report, card: review.Card, driver: Driver, notes: list[str], listings: list
+    ):
         stamp = now()
         with self.conn:  # запис ДО кліку: після обриву Картка не повториться
             cursor = self.conn.execute(
@@ -535,6 +582,9 @@ class Run:
                 )
             report.published.append((card.post_id, url))
             self.log(f"Пост {card.post_id}: опубліковано {url}")
+            listing = card_listing(card, result.product_id, url)  # дубль не пройде до перечитування
+            listings.append(listing)
+            listings_mod.add(self.conn, listing)
             self._shot(card, "опубліковано")
             report.notes += [f"Пост {card.post_id}: {note}" for note in notes]
             if result.errors:

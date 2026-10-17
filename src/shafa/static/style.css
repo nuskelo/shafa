@@ -195,3 +195,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .quit { margin: 0 1.5rem 0 auto; align-self: center; }
 .closed { max-width: 40rem; margin: 4rem auto; padding: 0 1.5rem; }
+
+/* CORE-007: схоже оголошення в картці Проблеми — фото й назва поруч */
+.duplicate { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0; }
+.duplicate img { width: 160px; max-width: 40%; height: auto; border-radius: 6px; }

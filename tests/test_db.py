@@ -4,17 +4,24 @@ import pytest
 
 from shafa import db
 
+# CORE-007 (версія 10): прибрати, щоб база стала старшою версією
+LISTINGS_DROP = (
+    "DROP TABLE my_listings; DROP TABLE my_listings_read; "
+    "ALTER TABLE items DROP COLUMN duplicate_name;"
+)
+
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 9
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 10
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
-        "bot_summaries", "site_jobs", "site_cache",
+        "bot_summaries", "site_jobs", "site_cache", "my_listings", "my_listings_read",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
-            "published_at", "session_id", "duplicate_ok_at", "duplicate_url"} <= columns(
+            "published_at", "session_id", "duplicate_ok_at", "duplicate_url",
+            "duplicate_name"} <= columns(
         conn, "items"
     )  # fmt: skip
     assert {"stop_code", "item_started_at", "command"} <= columns(conn, "sessions")
@@ -170,6 +177,7 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
             "ALTER TABLE items DROP COLUMN queue_pos;"
             "DROP TABLE site_jobs; DROP TABLE site_cache;"
         )
+        conn.executescript(LISTINGS_DROP)
         conn.execute("PRAGMA user_version = 5")
     sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0]
     conn.close()
@@ -183,7 +191,7 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
     )  # fmt: skip
     assert row["batch_id"] is None
     assert conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0] == (
-        sql[:-1] + ", queue_pos INTEGER)"  # лише нова колонка, таблиця не перебудована
+        sql[:-1] + ", queue_pos INTEGER, duplicate_name TEXT)"  # лише нові колонки, без перебудови
     )
     with conn, pytest.raises(sqlite3.IntegrityError):
         conn.execute("INSERT INTO ai_batches (status, created_at) VALUES ('waiting', 'x')")
@@ -203,6 +211,7 @@ def test_version_6_migrated_adds_bot_tables(tmp_path):
             "ALTER TABLE items DROP COLUMN queue_pos;"
             "DROP TABLE site_jobs; DROP TABLE site_cache;"
         )
+        conn.executescript(LISTINGS_DROP)
         conn.execute("PRAGMA user_version = 6")
     conn.close()
 
@@ -235,6 +244,7 @@ def test_version_7_migrated_adds_queue_pos_and_keeps_cards(tmp_path):
         )
         conn.execute("ALTER TABLE items DROP COLUMN queue_pos")
         conn.executescript("DROP TABLE site_jobs; DROP TABLE site_cache;")
+        conn.executescript(LISTINGS_DROP)
         conn.execute("PRAGMA user_version = 7")
     conn.close()
 
@@ -254,6 +264,7 @@ def test_version_8_migrated_adds_site_queue_and_keeps_posts(tmp_path):
             "INSERT INTO posts (post_id, date, text, source, added_at) VALUES (5, 'x', 't', 'bot', 'x')"
         )
         conn.executescript("DROP TABLE site_jobs; DROP TABLE site_cache;")
+        conn.executescript(LISTINGS_DROP)
         conn.execute("PRAGMA user_version = 8")
     conn.close()
 
@@ -262,4 +273,27 @@ def test_version_8_migrated_adds_site_queue_and_keeps_posts(tmp_path):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert conn.execute("SELECT count(*) FROM site_jobs").fetchone()[0] == 0
     assert conn.execute("SELECT post_id FROM posts").fetchone()[0] == 5
+    conn.close()
+
+
+def test_version_9_migrated_adds_listings_snapshot(tmp_path):
+    path = tmp_path / "база.sqlite"
+    conn = db.connect(path)
+    with conn:
+        conn.execute(
+            "INSERT INTO items (folder_name, post_id, status, created_at, updated_at) "
+            "VALUES ('7', 7, 'new', 'x', 'x')"
+        )
+        conn.executescript(LISTINGS_DROP)
+        conn.execute("PRAGMA user_version = 9")
+    conn.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    assert conn.execute("SELECT count(*) FROM my_listings").fetchone()[0] == 0
+    assert tuple(conn.execute("SELECT folder_name, duplicate_name FROM items").fetchone()) == (
+        "7",
+        None,
+    )
     conn.close()

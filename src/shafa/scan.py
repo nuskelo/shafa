@@ -8,7 +8,7 @@ from shafa.bot.hashtag import item_kind
 from shafa.db import Status, now
 from shafa.export import Post
 from shafa.folders import Folder, is_old, natural_key
-from shafa.rules import many_items, price_from_text
+from shafa.rules import many_items, many_sizes, price_from_text
 
 MAX_PHOTOS = 10
 
@@ -88,6 +88,8 @@ def find_problem(
         return "no_price", f"У поста {post_id} немає ціни"
     if many_items(texts[post_id]):
         return "many_items", "У пості кілька товарів з різними цінами"
+    if many_sizes(texts[post_id]):  # «43 і 45» — два товари (CORE-007)
+        return "many_items", "У пості кілька розмірів — схоже, кілька товарів"
     if item_kind(texts[post_id]) == "other":  # рукавички, шарфи, шапки — у знімку Шафи їх немає
         return "no_section", NO_SECTION_TEXT
     if not folder.photos:

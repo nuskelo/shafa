@@ -200,12 +200,26 @@ class Card:
             return "section_yellow"
         if catalog.sizes(path) and not self.fields["sizes"].value:
             return "no_sizes"
+        if catalog.section_kind(path) is Kind.BABIES and any(
+            _size(s) > BABIES_MAX for s in self.fields["sizes"].value or []
+        ):  # CORE-007: 23 і більше — ніколи не «малюки»
+            return "babies_size"
         if catalog.section(path)["color_required"] and not self.fields["colors"].value:
             return "no_colors"
         gender = catalog.characteristic(path, "gender")
         if gender and gender["required"] and not self.fields["gender"].value:
             return "no_gender"
         return None
+
+
+BABIES_MAX = 22
+
+
+def _size(text: str) -> float:
+    try:
+        return float(str(text).replace(",", "."))
+    except ValueError:
+        return 0.0
 
 
 # Ключові слова під розділ: слова статі й групи («чоловічі», «для жінок», «дитячі»…) міняються
