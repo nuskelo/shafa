@@ -4,6 +4,7 @@ import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
 
+from shafa.bot.hashtag import item_kind
 from shafa.db import Status, now
 from shafa.export import Post
 from shafa.folders import Folder, is_old, natural_key
@@ -65,6 +66,9 @@ def _join(names: list[str]) -> str:
     return ", ".join(names[:-1]) + " і " + names[-1]
 
 
+NO_SECTION_TEXT = "Немає підходящого розділу на Шафі (рукавички, шарфи, шапки тощо)"
+
+
 def find_problem(
     folder: Folder, texts: dict[int, str], twins: dict[int, list[str]]
 ) -> tuple[str, str] | None:
@@ -84,6 +88,8 @@ def find_problem(
         return "no_price", f"У поста {post_id} немає ціни"
     if many_items(texts[post_id]):
         return "many_items", "У пості кілька товарів з різними цінами"
+    if item_kind(texts[post_id]) == "other":  # рукавички, шарфи, шапки — у знімку Шафи їх немає
+        return "no_section", NO_SECTION_TEXT
     if not folder.photos:
         return "no_photos", "У папці немає фото .jpg"
     if len(folder.photos) > MAX_PHOTOS:

@@ -75,6 +75,18 @@ def test_success_saves_blank_cost_and_moves_to_review(conn, root):
     assert request["error"] is None
 
 
+def test_no_section_from_ai_is_problem_not_similar_section(conn, root):
+    """FIX-002: рукавички — розділу на Шафі немає; ШІ повертає порожній розділ → «Проблеми»."""
+    item_id = add_item(conn, root)
+    good = {**GOOD, "photo_order": ["IMG_1.JPG", "IMG_2.JPG"], "section": ""}
+
+    fill.fill(conn, FakeClient(message(good)), planned_for(conn, root))
+
+    row = item(conn, item_id)
+    assert (row["status"], row["problem_code"]) == (Status.PROBLEM, "no_section")
+    assert row["problem_text"].startswith("Немає підходящого розділу на Шафі")
+
+
 def test_api_error_moves_to_problem_without_blank(conn, root):
     item_id = add_item(conn, root)
     error = anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x.test"))

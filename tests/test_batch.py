@@ -343,6 +343,19 @@ def test_partly_failed_batch(conn, root):
     assert {r["id"] for r in batch.queue(conn, TODAY, 7).ready} == {expired, canceled, missing}
 
 
+def test_collected_answer_without_section_is_problem(conn, root):
+    client = FakeClient()
+    (only,), bid = sent_batch(conn, root, client, 1)
+    client.batches.status["msgbatch_1"] = "ended"
+    reply = message({**ok_answer(), "section": ""}, usage=(9500, 370))
+    client.batches.lines["msgbatch_1"] = [line(f"b{bid}-i{only}", reply=reply)]
+
+    batch.collect(conn, client, TODAY)
+
+    row = item(conn, only)
+    assert (row["status"], row["problem_code"]) == (Status.PROBLEM, "no_section")
+
+
 def test_collect_twice_changes_nothing(conn, root):
     client = FakeClient()
     ids, bid = sent_batch(conn, root, client)

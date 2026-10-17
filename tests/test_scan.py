@@ -3,8 +3,8 @@ import pytest
 from conftest import CHANNEL_ID, make_folder
 from shafa.db import Status
 from shafa.export import read_export
-from shafa.folders import list_folders
-from shafa.scan import rescan_folder, scan
+from shafa.folders import Folder, list_folders
+from shafa.scan import find_problem, rescan_folder, scan
 
 
 @pytest.fixture
@@ -286,3 +286,18 @@ def test_scan_never_resets_publication_or_robot_problem(conn, posts, root, code)
     assert rescan(conn, root, "10") is None
 
     assert items(conn)["10"] == ("problem", code, "т")
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [
+        ("Шкіряні рукавички, розмір 7. 500 грн", "no_section"),
+        ("Новий шарф кашемір. Ціна 400 грн", "no_section"),
+        ("Черевики шкіряні 38 розмір. 1200 грн", None),
+        ("Сумка шкіряна. 900 грн", None),
+    ],
+)
+def test_thing_without_section_on_shafa_is_problem(text, code):
+    """FIX-002: рукавички, шарфи тощо — розділу в знімку Шафи немає, схожий не підставляємо."""
+    problem = find_problem(Folder("7", 7, ("1.jpg",)), {7: text}, {7: ["7"]})
+    assert (problem[0] if problem else None) == code
