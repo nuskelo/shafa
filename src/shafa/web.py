@@ -88,6 +88,8 @@ MESSAGES = {
     "sticky": "Спершу перевірте Шафу і скористайтеся кнопками нижче",
     "on_shafa": "Картку перенесено в Опубліковані",
     "bad_link": "Це не посилання на Шафу. Вставте посилання на товар з shafa.ua або його номер",
+    "listing_found": "У «Мої речі» вже є товар із такою назвою — відкрийте його (посилання в "
+    "картці): якщо це він, натисніть «На Шафі є». Повтор публікації дасть дубль",
     "not_on_shafa": "Картку повернуто в Схвалені — робот опублікує її при наступному запуску",
     "other_item": "Картку повернуто в Схвалені — на схожість її більше не перевірятимемо",
     "duplicate_archived": "Картку перенесено в Архів",
@@ -807,7 +809,7 @@ class App:
             }
             if action in decisions:
                 message = decisions[action]()
-                if message in ("stale", "bad_link"):
+                if message in ("stale", "bad_link", "listing_found"):
                     return redirect(f"{back}?msg={message}")
                 return redirect(f"/{Status.PROBLEM}?msg={message}")
             if action == "refill":

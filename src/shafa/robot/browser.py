@@ -23,6 +23,7 @@ from shafa.db import Status
 from shafa.robot import guard
 
 NEW_URL = "https://shafa.ua/uk/new"
+LEAVE_WAIT = 15  # с: піти зі сторінки реклами; не вийшло — не чекаємо
 LOGIN_PATH = "/login"
 FORM_FIELD = "input[name=titleUk]"
 FORM_WAIT = 30.0  # с: на слабкому ноутбуці форма з'являється не одразу (FIX-002)
@@ -283,6 +284,13 @@ class Session:
         if opened.ok:
             pause(1.0, 2.0)  # форма ще дорисовує списки
         return opened
+
+    def leave_result_page(self) -> None:
+        """Після публікації Шафа показує сторінку реклами чи підняття оголошення. Іти звідти лише
+        безкоштовною дією — переходом на форму нового товару (як людина); на самій сторінці нічого
+        не натискаємо ніколи. Помилка не страшна: наступна Картка відкриє форму сама."""
+        with contextlib.suppress(Exception):
+            self.page.goto(NEW_URL, wait_until="commit", timeout=LEAVE_WAIT * 1000)
 
     def close(self) -> None:
         self.context.close()

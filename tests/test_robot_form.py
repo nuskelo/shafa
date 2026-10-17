@@ -47,7 +47,7 @@ class FakePage:
     def __init__(self):
         self.shots = []
 
-    def screenshot(self, path, full_page):
+    def screenshot(self, path, full_page, timeout=None):
         self.shots.append(path)
 
 
