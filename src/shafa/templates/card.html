@@ -95,7 +95,13 @@
         <button name="action" value="not_on_shafa">На Шафі немає → у Схвалені</button>
       </form>
       {% elif card.problem_code == "possible_duplicate" %}
-      {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
+      <div class="duplicate">
+        {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
+        <div>
+          {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
+          {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
+        </div>
+      </div>
       <form method="post" action="/item/{{ card.id }}" class="decide">
         <input type="hidden" name="token" value="{{ token }}">
         <button name="action" value="other_item" class="approve">Це інший товар → у Схвалені</button>

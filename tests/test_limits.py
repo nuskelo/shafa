@@ -39,16 +39,19 @@ def app(conn, tmp_path, root):
 
 
 def add_new(env, n, date="2025-03-01T10:00:00"):
-    from test_robot_publish import add
+    from test_robot_publish import add, other_item
 
-    return add(env, str(n), n, date)
+    item = add(env, str(n), n, date)
+    other_item(env, item)  # однакові тестові Картки — не дублі одна одної
+    return item
 
 
 def add_old(env, n, date="2024-03-01T10:00:00"):
     """Схвалена Картка старого поста: фото — у теці даних, як після `import-old`."""
-    from test_robot_publish import add
+    from test_robot_publish import add, other_item
 
     item = add(env, f"borh-{n}", n, date)
+    other_item(env, item)
     target = old_root() / str(n)
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(env.root / f"borh-{n}", target)

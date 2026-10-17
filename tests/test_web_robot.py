@@ -299,3 +299,34 @@ def test_robot_problem_keeps_recheck(conn, root, app):
     item = problem(conn, root, "robot_field_missing")
     page = html(get(app, f"/item/{item}"))
     assert 'value="recheck"' in page and 'value="on_shafa"' not in page
+
+
+def test_duplicate_shows_name_and_photo_of_similar(conn, root, app, tmp_path):
+    """CORE-007: у картці Проблеми — фото й назва схожого оголошення, не лише посилання."""
+    item = problem(conn, root, "possible_duplicate", duplicate_name="Тапочки UGG 40 розміру",
+                   duplicate_url="https://shafa.ua/uk/women/x/5-x")  # fmt: skip
+    page = html(get(app, f"/item/{item}"))
+    assert "Тапочки UGG 40 розміру" in page
+    assert f'src="/duplicate/{item}.jpg"' not in page  # фото ще немає
+    assert get(app, f"/duplicate/{item}.jpg").status == 404
+    photos = tmp_path / "duplicates"
+    photos.mkdir()
+    (photos / f"{item}.jpg").write_bytes(b"jpeg")
+    page = html(get(app, f"/item/{item}"))
+    assert f'src="/duplicate/{item}.jpg"' in page
+    response = get(app, f"/duplicate/{item}.jpg")
+    assert (response.status, response.body, response.content_type) == (200, b"jpeg", "image/jpeg")
+    assert get(app, "/duplicate/..%2F..%2Fetc.jpg").status == 404
+
+
+def test_reread_listings_button(conn, app):
+    from shafa.robot import listings
+
+    listings.store(conn, [listings.Listing(1, "Кеди", None, "s", ("38",), "https://shafa.ua/1")])
+    page = html(get(app, "/settings"))
+    assert "Її товарів у знімку: 1, прочитано" in page
+    assert "Перечитувати «Мої речі» кожні N днів" in page
+    response = post(app, "/listings/reread")
+    assert "робот перечитає «Мої речі»" in html(response)
+    assert listings.stored(conn, 7) is None
+    assert "перечитається на наступному запуску" in html(get(app, "/settings"))

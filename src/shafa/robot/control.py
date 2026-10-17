@@ -166,6 +166,8 @@ def state(
     last_text = ""
     if last is not None:
         last_text = LAST.get(last["stop_code"] or "", "") or (last["stop_reason"] or "")
+        if last["stop_code"] == "done" and last["problems"]:  # не всі Схвалені опубліковано
+            last_text = f"Опубліковано {last['published']}, у Проблемах {last['problems']}"
     return State(code, text, today, day_limit, approved, can_start, why_not, wait, last_text,
                  buttons, started, limits or publish.Groups(0, 0))  # fmt: skip
 

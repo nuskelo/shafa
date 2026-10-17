@@ -171,3 +171,18 @@ def test_spawned_robot_survives_ctrl_c_of_screen(monkeypatch, tmp_path):
 
 def test_command_for_bot():
     assert control.command(["--db", "x"], "bot")[3:] == ["bot", "--db", "x"]
+
+
+def test_done_with_problems_says_how_many(conn, root, lock_file):
+    """CORE-007: усі Схвалені пішли в Проблеми — не «Усі Схвалені опубліковано»."""
+    approved(conn, root)
+    session(conn, ended_at="2026-10-13T11:30:00+00:00", stop_code="done", stop_reason="x",
+            published=0, problems=3)  # fmt: skip
+    assert state(conn, lock_file).last == "Опубліковано 0, у Проблемах 3"
+
+
+def test_done_without_problems(conn, root, lock_file):
+    approved(conn, root)
+    session(conn, ended_at="2026-10-13T11:30:00+00:00", stop_code="done", stop_reason="x",
+            published=2, problems=0)  # fmt: skip
+    assert state(conn, lock_file).last == "Усі Схвалені опубліковано"

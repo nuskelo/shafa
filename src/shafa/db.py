@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class Status(StrEnum):
@@ -280,8 +280,35 @@ CREATE TABLE site_cache (
 );
 """
 
+# Версія 10 (CORE-007): знімок її товарів з кабінету «Мої речі» для перевірки дублів —
+# перечитується раз на N днів, опубліковане роботом дописується одразу. `my_listings_read` — один
+# рядок: коли кабінет прочитано (немає рядка — знімок застарів, «Перечитати зараз»).
+# `items.duplicate_name` — назва схожого оголошення для картки Проблеми (фото — у теці даних).
+LISTINGS = """
+CREATE TABLE my_listings (
+    id       INTEGER PRIMARY KEY,  -- id товару на Шафі
+    name     TEXT NOT NULL,
+    brand    TEXT,
+    slug     TEXT NOT NULL,        -- розділ Шафи
+    sizes    TEXT NOT NULL,        -- JSON
+    url      TEXT NOT NULL,
+    colors   TEXT NOT NULL,        -- JSON
+    price    INTEGER,
+    photo    TEXT,                 -- адреса фото на Шафі
+    added_at TEXT NOT NULL
+);
+
+CREATE TABLE my_listings_read (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    read_at TEXT NOT NULL
+);
+
+ALTER TABLE items ADD COLUMN duplicate_name TEXT;
+"""
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
+    9: LISTINGS,
 }  # fmt: skip
 
 

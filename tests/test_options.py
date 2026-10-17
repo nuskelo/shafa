@@ -1,7 +1,7 @@
 import pytest
 
 from shafa import batch, config, options, site, web
-from shafa.robot import publish
+from shafa.robot import listings, publish
 from test_web import PORT, TOKEN, get, html, post
 
 
@@ -14,7 +14,7 @@ def form(root, **changes):
     values = {
         "SHAFA_DAILY_LIMIT": "25", "SHAFA_AI_DAILY_USD": "2,5", "SHAFA_AI_WAIT_DAYS": "5",
         "SHAFA_AI_BATCH_LIMIT": "40", "SHAFA_ROOT_DIR": str(root), "SHAFA_DELETE_PUBLISHED": "1",
-        "SHAFA_DAILY_OLD": "10", "SHAFA_DAILY_NEW": "5",
+        "SHAFA_DAILY_OLD": "10", "SHAFA_DAILY_NEW": "5", "SHAFA_LISTINGS_DAYS": "3",
     }  # fmt: skip
     values.update(changes)
     return {k: v for k, v in values.items() if v is not None}
@@ -26,6 +26,7 @@ def test_page_shows_defaults_and_no_secrets(app, monkeypatch):
     assert 'name="SHAFA_DAILY_LIMIT" value="30"' in page
     assert 'name="SHAFA_AI_DAILY_USD" value="3"' in page
     assert 'name="SHAFA_AI_WAIT_DAYS" value="7"' in page
+    assert 'name="SHAFA_LISTINGS_DAYS" value="7"' in page
     assert 'name="SHAFA_DELETE_PUBLISHED" value="1">' in page  # типово вимкнено
     assert "sk-секрет" not in page and "ANTHROPIC" not in page
     assert ">Налаштування</a>" in html(get(app, "/review"))
@@ -38,6 +39,7 @@ def test_save_is_used_by_robot_and_ai(app, root):
     assert publish.delete_enabled()
     assert batch.limits() == batch.Limits(5, 40, 2_500_000)
     assert config.setting("SHAFA_ROOT_DIR") == str(root)
+    assert listings.refresh_days() == 3
 
 
 @pytest.mark.parametrize(
@@ -46,6 +48,7 @@ def test_save_is_used_by_robot_and_ai(app, root):
         ("SHAFA_DAILY_LIMIT", "0"), ("SHAFA_DAILY_LIMIT", "101"), ("SHAFA_DAILY_LIMIT", "багато"),
         ("SHAFA_AI_DAILY_USD", "0"), ("SHAFA_AI_DAILY_USD", "nan"), ("SHAFA_AI_WAIT_DAYS", "-1"),
         ("SHAFA_AI_BATCH_LIMIT", "1000"), ("SHAFA_ROOT_DIR", "Z:/немає/такої"),
+        ("SHAFA_LISTINGS_DAYS", "0"), ("SHAFA_LISTINGS_DAYS", "31"),
     ],
 )  # fmt: skip
 def test_bad_value_saves_nothing(app, root, name, value):
