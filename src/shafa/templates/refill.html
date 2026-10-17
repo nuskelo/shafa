@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Перезаповнити · Шафа-помічник{% endblock %}
+{% block main %}
+<section class="refill">
+  {% if count %}
+  <p>Перезаповнити не перевірені картки: <strong>≈ {{ count }} карток, ≈ {{ cost }}</strong> (пакетом; ліміт на добу {{ budget }}).</p>
+  <p>Ваші ручні правки збережуться, схвалені й опубліковані картки не чіпаємо.{% if skipped %} Не вийде підготувати (фото не відкривається): {{ skipped }}.{% endif %}</p>
+  <form method="post" action="/refill">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button>Перезаповнити</button>
+    <a href="/review">Скасувати</a>
+  </form>
+  {% else %}
+  <p class="empty">Немає карток для перезаповнення.</p>
+  <p><a href="/review">Назад</a></p>
+  {% endif %}
+</section>
+{% endblock %}

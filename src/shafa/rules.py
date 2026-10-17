@@ -205,6 +205,21 @@ def season(text: str) -> tuple[list[str] | None, str | None]:
     return None, None
 
 
+# Версія правил, за якими заповнено бланк: зростає, коли правила змінюються так, що старий бланк
+# варто перезаповнити (CORE-008 A4). 1 — до CORE-007 (у базі NULL), 2 — CORE-007.
+RULES_VERSION = 2
+
+# Поля, які Продавчиня виправляє руками і які правила читають разом із текстом поста (CORE-008 B).
+EDIT_TEXT_FIELDS = ("title", "description")
+
+
+def edit_text(edits: dict[str, object]) -> str:
+    """Її відредаговані назва й опис одним текстом — правила сезону, статі, підкладки й типу
+    дивляться в нього поруч із текстом поста. Ціна, розмір, стан беруться лише з поста."""
+    parts = [edits.get(name) for name in EDIT_TEXT_FIELDS]
+    return "\n".join(p.strip() for p in parts if isinstance(p, str) and p.strip())
+
+
 WOMEN = "women"
 MEN = "men"
 GIRLS = "girls"

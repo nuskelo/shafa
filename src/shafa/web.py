@@ -104,6 +104,8 @@ MESSAGES = {
     "robot_fake_login": "У підставному режимі вхід на Шафу не потрібен",
     "ai_started": "Оновлюю: шукаю нові папки й відправляю на ШІ — результат з'явиться на панелі",
     "ai_busy": "ШІ вже працює — зачекайте хвилину",
+    "refill_started": "Перезаповнюю: картки пішли на ШІ пакетом — результати зазвичай до години, "
+    "ваші правки збережуться",
     "ai_retry_done": "ШІ заповнило бланк заново — ваші правки збережено",
     "ai_retry_failed": "ШІ не вдалося — старий бланк лишився (подробиці на панелі)",
     "ai_budget": "Ліміт витрат на ШІ за добу вичерпано — спробуйте завтра",
@@ -196,6 +198,7 @@ class AiState:
     wait_days: int = batch.WAIT_DAYS
     busy: str | None = None
     note: str | None = None
+    refillable: int = 0  # Карток, які можна перезаповнити (CORE-008)
 
 
 @dataclass
@@ -319,6 +322,10 @@ class App:
             return self.robot_post(request)
         if path == "/ai" and request.method == "POST":
             return self.ai_post(request)
+        if path == "/refill" and get:
+            return self.refill_page(request)
+        if path == "/refill" and request.method == "POST":
+            return self.refill_post(request)
         if path == "/bot" and request.method == "POST":
             return self.bot_post(request)
         if path == "/settings" and get:
@@ -500,7 +507,10 @@ class App:
         except batch.SetupError as error:
             return AiState(busy=self.ai_busy, note=str(error))
         q = batch.queue(conn, self.today(), wait_days)
-        return AiState(len(q.ready), q.young, q.pending, wait_days, self.ai_busy, self.ai_note)
+        return AiState(
+            len(q.ready), q.young, q.pending, wait_days, self.ai_busy, self.ai_note,
+            len(fill.refill_candidates(conn)),
+        )  # fmt: skip
 
     def _maybe_collect(self, conn) -> None:
         if not batch.open_batches(conn):
@@ -564,6 +574,55 @@ class App:
             return text(400, "Невідома дія")
         started = self._start(self._update, "оновлюю й відправляю на ШІ…")
         return redirect(f"{back}{sep}msg={'ai_started' if started else 'ai_busy'}")
+
+    def _send_refill(self) -> str | None:
+        """Відправити позначені для перезаповнення (нові папки не шукаємо) — пакетом."""
+        self.collected_at = self.clock()
+        lim = batch.limits()
+        conn = self.connect()
+        try:
+            client = self.ai_client()
+            collected = batch.collected_text(batch.collect(conn, client, self.today()))
+            sent = batch.send(conn, client, self.root, self.today(), lim)
+            return "; ".join(t for t in (collected, batch.sent_text(sent, lim)) if t)
+        finally:
+            conn.close()
+
+    def refill_page(self, request: Request) -> Response:
+        """«Перезаповнити не перевірені»: спершу — скільки карток і скільки це коштує."""
+        conn = self.connect()
+        try:
+            count, cost, skipped = batch.refill_estimate(conn, self.root)
+            return self.page(
+                "refill.html",
+                **self._chrome(conn, request),
+                current=None,
+                message=None,
+                count=count,
+                skipped=skipped,
+                cost=batch.dollars(cost),
+                budget=batch.dollars(batch.limits().daily_micro_usd),
+            )
+        except batch.SetupError as error:
+            return self.page("error.html", 400, message=str(error))
+        finally:
+            conn.close()
+
+    def refill_post(self, request: Request) -> Response:
+        """Позначити Картки (усі не перевірені чи одну) й відправити їх на ШІ пакетом."""
+        item = (request.form.get("item") or [""])[0]
+        conn = self.connect()
+        try:
+            if item:
+                ids = [int(item)] if item.isdigit() else []
+            else:
+                ids = [r["id"] for r in fill.refill_candidates(conn)]
+            if not ids or not fill.mark_refill(conn, ids):
+                return redirect(f"/{Status.REVIEW}?msg=stale")
+        finally:
+            conn.close()
+        started = self._start(self._send_refill, "перезаповнюю: відправляю на ШІ…")
+        return redirect(f"/{Status.REVIEW}?msg={'refill_started' if started else 'ai_busy'}")
 
     def ai_retry(self, conn, item_id: int) -> str:
         """«ШІ, спробуй ще раз»: одразу, звичайним запитом без кешу (D2). Повертає код повідомлення."""
@@ -751,6 +810,13 @@ class App:
                 if message in ("stale", "bad_link"):
                     return redirect(f"{back}?msg={message}")
                 return redirect(f"/{Status.PROBLEM}?msg={message}")
+            if action == "refill":
+                if not fill.mark_refill(conn, [item_id]):
+                    return redirect(f"{back}?msg=stale")
+                started = self._start(self._send_refill, "перезаповнюю: відправляю на ШІ…")
+                return redirect(
+                    f"/{Status.REVIEW}?msg={'refill_started' if started else 'ai_busy'}"
+                )
             if action == "ai_retry":
                 message = self.ai_retry(conn, item_id)
                 return redirect(f"{back}?msg={message}")

@@ -154,6 +154,7 @@ class Card:
     fields: dict[str, FieldView]
     photos: list[Photo]
     queue_pos: int | None = None  # місце старої Картки у списку імпорту
+    old_rules: bool = False  # бланк заповнено за старішими правилами (CORE-008 A4)
 
     @property
     def kind(self) -> Kind | None:
@@ -318,6 +319,27 @@ def _check_against_shafa(fields: dict[str, FieldView], post_text: str) -> None:
 _OK = ai.Field("", None)
 
 
+def _apply_edited_text(fields: dict[str, FieldView], edits: dict[str, Any], post_text: str) -> None:
+    """Її правка назви чи опису одразу діє на сезон (CORE-008 B): «зимові» → Зима кодом, не жовте.
+
+    Сезон, який вона виправила сама, не чіпаємо.
+    """
+    extra = rules.edit_text(edits)
+    season = fields["season"]
+    if not extra or season.edited:
+        return
+    section = fields["section"].value
+    path = catalog.find_section(section) if section else None
+    code, _ = rules.season(f"{post_text}\n{extra}")
+    if code is None:
+        return
+    checked = ai.check_season(season.value, path, f"{post_text}\n{extra}")
+    fields["season"] = FieldView(
+        season.spec, checked.value, as_form(season.spec, checked.value), checked.yellow,
+        checked.reason, False, season.options,
+    )  # fmt: skip
+
+
 def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
     """Картка з усіма полями або None (немає або архів уже очищено)."""
     row = conn.execute(
@@ -369,6 +391,7 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         )
 
     _check_against_shafa(fields, row["post_text"] or "")
+    _apply_edited_text(fields, edits, row["post_text"] or "")
 
     photos = [
         Photo(r["position"], r["file_name"])
@@ -393,6 +416,7 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         fields,
         photos,
         row["queue_pos"],
+        bool(blanks) and (row["rules_version"] or 0) < rules.RULES_VERSION,
     )
 
 
