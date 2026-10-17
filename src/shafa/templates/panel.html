@@ -25,7 +25,7 @@
 <section class="ai{% if ai.busy %} ai-busy{% endif %}" aria-live="polite">
   <div class="robot-state">
     <strong>ШІ{% if ai.busy %}: {{ ai.busy }}{% endif %}</strong>
-    <span class="robot-counts">Готові до ШІ {{ ai.ready }} · Чекають відповіді ШІ {{ ai.pending }} · Чекають {{ ai.wait_days }} днів після посту {{ ai.young }}</span>
+    <span class="robot-counts">Готові до ШІ {{ ai.ready }} · Чекають відповіді ШІ {{ ai.pending }} · Нові чекають {{ ai.wait_days }} днів після посту {{ ai.young }}</span>
     {% if ai.note %}<span class="ai-note">{{ ai.note }}</span>{% endif %}
   </div>
   <form method="post" action="/ai" class="robot-buttons">

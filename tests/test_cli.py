@@ -195,7 +195,7 @@ def test_fill_estimate_sends_nothing(conn, db_path, root, no_client, capsys):
     assert out[0].startswith("1342 (пост 1342): фото 2, ≈ ")
     assert out[1].startswith("У пакет: 1 · ≈ ")
     assert out[2] == (
-        "Чекають 7 днів: 0 · чекають відповіді ШІ: 0 · сьогодні $0,00 з $3,00 · нічого не надіслано"
+        "Нові чекають 7 днів: 0 · чекають відповіді ШІ: 0 · сьогодні $0,00 з $3,00 · нічого не надіслано"
     )
     assert conn.execute("SELECT count(*) FROM ai_batches").fetchone()[0] == 0
 

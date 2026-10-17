@@ -582,3 +582,17 @@ def test_waiting_old_cards_in_batch_count_ahead(conn, root, tmp_path):
     )  # наперед 3, 2 вже в дорозі
 
     assert len(plan.planned) == 1
+
+
+def test_seven_days_only_for_new_posts(conn, root, tmp_path):
+    """CORE-007 (рішення Власника 17.10): старий пост віком 2 дні — готовий; новий — чекає."""
+    (old,) = old_cards(conn, root, 1, tmp_path)
+    new = add_item(conn, root, folder="7", post_id=7)
+    set_post_date(conn, 1, "2026-10-11T10:00:00")  # обидва — 2 дні тому
+    set_post_date(conn, 7, "2026-10-11T10:00:00")
+
+    q = batch.queue(conn, TODAY, 7)
+
+    assert [r["id"] for r in q.ready] == [old]
+    assert q.young == 1  # «Нові чекають 7 днів» — лише новий
+    assert new not in [r["id"] for r in q.ready]

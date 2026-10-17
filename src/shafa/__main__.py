@@ -371,7 +371,7 @@ def format_estimate(plan: batch.Plan, spent: int, lim: batch.Limits) -> str:
         f"лишиться в черзі {plan.left}{' (ліміт грошей)' if plan.over_budget else ''}"
     )
     lines.append(
-        f"Чекають 7 днів: {plan.young} · чекають відповіді ШІ: {plan.pending} · "
+        f"Нові чекають 7 днів: {plan.young} · чекають відповіді ШІ: {plan.pending} · "
         f"сьогодні {batch.dollars(spent)} з {batch.dollars(lim.daily_micro_usd)} · нічого не надіслано"
     )
     return "\n".join(lines)

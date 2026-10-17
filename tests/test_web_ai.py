@@ -81,7 +81,7 @@ def test_panel_counts(conn, app, root):
     new_card(conn, root)
     new_card(conn, root, folder="1349", post_id=1349, date="2026-10-12T10:00:00")
     page = html(get(app, "/review"))
-    assert "Готові до ШІ 1 · Чекають відповіді ШІ 0 · Чекають 7 днів після посту 1" in page
+    assert "Готові до ШІ 1 · Чекають відповіді ШІ 0 · Нові чекають 7 днів після посту 1" in page
     assert 'action="/ai"' in page and ">Оновити</button>" in page
     assert "Готові до ШІ 1" in html(get(app, "/robot/panel?back=/review"))
 
