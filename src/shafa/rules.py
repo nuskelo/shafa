@@ -109,16 +109,32 @@ def _halves(whole: str, fraction: str | None) -> list[int]:
     return [low] if rest == 0 else [low, low + 1]
 
 
-def insole_lengths(text: str) -> list[float]:
-    """Довжина устілки для Шафи: усі заміри, сусіди сітки 0,5 і все між мін і макс, крок 0,5."""
-    halves: set[int] = set()
+def _insole_numbers(text: str) -> list[tuple[str, str]]:
+    """Заміри довжини устілки в тексті: (ціла частина, дробова або "") у порядку появи."""
+    numbers: list[tuple[str, str]] = []
     for match in INSOLE.finditer(text):
         if WIDTH_BEFORE.search(text[: match.start()]):
             continue
         rest = text[match.end() :]
         end = INSOLE_END.search(rest)
-        for whole, fraction in LENGTH.findall(rest[: end.start()] if end else rest):
-            halves.update(_halves(whole, fraction))
+        numbers += LENGTH.findall(rest[: end.start()] if end else rest)
+    return numbers
+
+
+def insole_measured(text: str) -> str | None:
+    """Перший замір устілки, як у тексті, з крапкою: «24,5см» → «24.5» (для сайту, SITE-001)."""
+    numbers = _insole_numbers(text)
+    if not numbers:
+        return None
+    whole, fraction = numbers[0]
+    return f"{whole}.{fraction}" if fraction else whole
+
+
+def insole_lengths(text: str) -> list[float]:
+    """Довжина устілки для Шафи: усі заміри, сусіди сітки 0,5 і все між мін і макс, крок 0,5."""
+    halves: set[int] = set()
+    for whole, fraction in _insole_numbers(text):
+        halves.update(_halves(whole, fraction))
     if not halves:
         return []
     if len(halves) == 1 and min(halves) % 2:
