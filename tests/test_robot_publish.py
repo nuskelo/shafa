@@ -14,6 +14,7 @@ from shafa.robot.listings import (
     find_duplicate,
     group_slugs,
     parse_feed,
+    similar,
     sizes_close,
 )
 from test_robot_form import FakeDriver, FakeLocator, FakePage
@@ -932,3 +933,11 @@ def test_refresh_days_setting(monkeypatch):
     monkeypatch.setenv(listings.DAYS_SETTING, "31")
     with pytest.raises(listings.SetupError):
         listings.refresh_days()
+
+
+def test_template_words_do_not_make_titles_similar():
+    """Шаблон «оригінал 40 розміру в ідеальному стані» однаковий — порівнюється лише суть."""
+    a = "Черевики Ecco шкіряні високі оригінал 40 розміру в ідеальному стані"
+    b = "Черевики Ecco лакові низькі оригінал 40 розміру в ідеальному стані"
+    assert not similar(a, b, "Ecco")
+    assert similar(a, "Високі шкіряні черевики Ecco 40 розмір", "Ecco")
