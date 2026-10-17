@@ -468,8 +468,12 @@ def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         run.set_status(conn, started=True)
         bot = Bot(conn, tg, settings)
         bot.recover()
+        stop_site = run.start_site(args.db, root, token, settings)
         print("Бот працює. Зупинити — Ctrl+C")
-        run.poll(bot, tg, conn, stop=lambda: False)
+        try:
+            run.poll(bot, tg, conn, stop=lambda: False)
+        finally:
+            stop_site.set()
     except run.SetupError as error:
         print(f"Бот зупинився: {error}")
         run.set_status(conn, error=str(error))

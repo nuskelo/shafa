@@ -5,11 +5,12 @@
 """
 
 import sqlite3
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 
-from shafa import config
+from shafa import config, site
 from shafa.bot.core import Bot, Settings
 from shafa.bot.telegram import Telegram, TelegramError
 from shafa.db import now
@@ -143,3 +144,26 @@ def poll(
                 offset = update["update_id"] + 1  # підтверджуємо оброблене
         bot.tick()
         set_status(conn)
+
+
+def start_site(db_path: Path, root: Path, token: str, settings: Settings) -> threading.Event:
+    """Потік сайту (SITE-001) поруч із ботом. Повідомлення людям — своїм клієнтом Telegram (потік
+    не ділить з'єднання з опитуванням); не дійшло — лише рядок у журналі."""
+    tg = Telegram(token)
+
+    def say(chat: int | None) -> Callable[[str], None]:
+        def send(text: str) -> None:
+            if chat is None:
+                return
+            try:
+                tg.send_message(chat, text)
+            except TelegramError as error:
+                print(f"Сайт: повідомлення не надіслано ({error})")
+
+        return send
+
+    if site.key() is None:
+        print(f"Сайт: немає {site.KEY} — інтеграція вимкнена")
+    return site.start(
+        db_path, root, site.Notify(say(settings.owner_chat), say(settings.seller_chat))
+    )
