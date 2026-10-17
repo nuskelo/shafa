@@ -238,9 +238,10 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
         if args.fake_shafa:
             return _fake_publish(p, args, held, root, limit, day_limit, log)
         if args.login:
-            print("Увійдіть на Шафу у відкритому вікні й закрийте його.")
-            browser.wait_for_manual_login(p)
-            print("Вікно закрито.")
+            print("Увійдіть на Шафу у відкритому вікні й закрийте його.", flush=True)
+            why = browser.wait_for_manual_login(p)
+            print({"closed": "Вікно закрито.", "done": "Вікно закрито кнопкою «Я увійшов».",
+                   "timeout": "15 хв минуло — вікно закрито."}[why], flush=True)  # fmt: skip
             return 0
         session = browser.Session(p, allow_upload=args.dry_fill, publish=args.publish)
         try:

@@ -96,9 +96,18 @@ def test_login_needed_after_logout_stop(conn, root, lock_file):
     assert s.last == "Робот вийшов із Шафи"
 
 
+def test_no_form_is_not_login(conn, root, lock_file):
+    approved(conn, root)
+    session(conn, ended_at="2026-10-13T11:30:00+00:00", stop_code="no_form", stop_reason="x")
+    s = state(conn, lock_file)
+    assert s.code == "stopped" and "login" not in s.buttons and s.can_start
+    assert "не показала форму" in s.last and s.last != control.LAST["login"]
+
+
 def test_login_window_and_other_busy_modes(conn, lock_file):
     with lock.hold("login", lock_file):
-        assert state(conn, lock_file).code == "login_open"
+        s = state(conn, lock_file)
+        assert (s.code, s.buttons) == ("login_open", ["login_done"])
     with lock.hold("dry-fill", lock_file):
         s = state(conn, lock_file)
         assert (s.code, s.buttons) == ("busy", [])

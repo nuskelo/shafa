@@ -156,10 +156,13 @@ def crawl(session: browser.Session, cache: Path, log=print) -> dict:
         page.expect_response(_batch_op(page, TREE_OP), timeout=30000) as tree_info,
         page.expect_response(_batch_op(page, CONDITIONS_OP), timeout=30000) as cond_info,
     ):
-        if not session.open_form():
+        opened = session.open_form()
+        if opened.state == browser.NO_LOGIN:
             raise RuntimeError(
                 "Немає входу на Шафу в профілі робота: python -m shafa robot --login"
             )
+        if not opened.ok:
+            raise RuntimeError(f"Шафа не показала форму: {opened.detail()}")
     tree = _from_batch(tree_info.value, TREE_OP)
     conditions = _from_batch(cond_info.value, CONDITIONS_OP)
     root, _ = parse_tree(tree)

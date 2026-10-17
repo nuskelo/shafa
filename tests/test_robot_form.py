@@ -60,7 +60,8 @@ class FakeSession:
 
     def open_form(self):
         self.opened += 1
-        return self.logged_in
+        state = browser.FORM if self.logged_in else browser.NO_LOGIN
+        return browser.Opened(state, browser.NEW_URL)
 
     def publish_attempts(self):
         return self.attempts

@@ -16,6 +16,7 @@
     {% if "resume" in robot.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
     {% if "stop" in robot.buttons %}<button name="action" value="stop" class="reject">Стоп</button>{% endif %}
     {% if "login" in robot.buttons %}<button name="action" value="login">Увійти на Шафу</button>{% endif %}
+    {% if "login_done" in robot.buttons %}<button name="action" value="login_done">Я увійшов — закрити вікно</button>{% endif %}
   </form>
   {% if robot.code == "login_needed" %}
   <p class="robot-help">Робот вийшов із Шафи. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».</p>

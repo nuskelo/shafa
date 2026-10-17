@@ -29,6 +29,13 @@ def new_cards_allowed(monkeypatch):
 OK = Submitted(sent=True, product_id=555)
 
 
+def opened(state):
+    """True — форма є, False — Шафа веде на вхід, або стан `browser.*` як є."""
+    state = {True: browser.FORM, False: browser.NO_LOGIN}.get(state, state)
+    url = "https://shafa.ua/uk/login?next=/uk/new" if state == browser.NO_LOGIN else browser.NEW_URL
+    return browser.Opened(state, url, 30.0 if state == browser.NO_FORM else 1.0)
+
+
 class PubSession(browser.Session):
     """Справжні квитки захисту (`arm_publish`, `click_publish`), підробна сторінка."""
 
@@ -41,7 +48,7 @@ class PubSession(browser.Session):
 
     def open_form(self):
         self.opened += 1
-        return self.logins[min(self.opened, len(self.logins)) - 1]
+        return opened(self.logins[min(self.opened, len(self.logins)) - 1])
 
     def publish_attempts(self):
         return super().publish_attempts() + self.extra
@@ -486,6 +493,35 @@ def test_logged_out_mid_run_is_problem_and_stop(env):
     assert report.reason == "немає входу на Шафу"
 
 
+def test_login_stop_logs_address_without_parameters(env):
+    add(env)
+    env.session.logins = [False]
+    env.run()
+    assert any("Шафа веде на вхід: адреса https://shafa.ua/uk/login," in line for line in env.lines)
+    assert not any("next=" in line for line in env.lines)
+
+
+def test_no_form_is_own_reason_with_screenshot_and_card_untouched(env):
+    item = add(env)
+    env.session.logins = [browser.NO_FORM]
+    report = env.run()
+    assert report.code == "no_form" and "немає входу" not in report.reason
+    assert report.reason == f"Шафа не показала форму (адреса {browser.NEW_URL}, чекали 30 с)"
+    assert state(env.conn, item) == (Status.APPROVED, None)
+    (shot,) = env.session.page.shots
+    assert shot.startswith(str(env.tmp / "екрани")) and shot.endswith("-нема-форми.png")
+    assert any("чекали 30 с" in line and "Екран:" in line for line in env.lines)
+
+
+def test_no_form_mid_run_leaves_card_approved(env):
+    first = add(env, "1342", 1342)
+    env.session.logins = [True, browser.NO_FORM]
+    report = env.run()
+    assert report.code == "no_form"
+    assert state(env.conn, first) == (Status.APPROVED, None)  # Картка не винна
+    assert env.session.page.shots[0].endswith("-1342-нема-форми.png")
+
+
 @pytest.mark.parametrize(
     ("missing", "code", "reason"),
     [
@@ -693,6 +729,7 @@ def test_other_item_decision_skips_listing_check_but_not_same_post(env):
         ("limit", "limit"),
         ("stop", "stop"),
         ("login", "login"),
+        ("no_form", "no_form"),
         ("site", "site"),
         ("uncertain", "error"),
         ("sleep", "sleep"),
@@ -709,6 +746,8 @@ def test_session_stop_code_for_screen(env, monkeypatch, setup, code):
             env.on_submit = lambda: publish.request(env.conn, "stop")
         if setup == "login":
             env.session.logins = [False]
+        if setup == "no_form":
+            env.session.logins = [browser.NO_FORM]
         if setup == "site":
             monkeypatch.setattr(
                 publish, "execute", lambda *a, **k: (_ for _ in ()).throw(FieldMissing("Сезон"))
