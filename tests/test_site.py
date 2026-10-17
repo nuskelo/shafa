@@ -52,6 +52,7 @@ class FakeSite:
         self.products = {}
         self.photos = {}
         self.warnings = []
+        self.forget = False  # пара «зникає» одразу після створення (404 на фото завжди)
 
     def fail(self, method, path, outcome):
         self.plan.append((method, path, outcome))
@@ -72,6 +73,8 @@ class FakeSite:
         if len(parts) == 4:
             created = post not in self.products
             self.products.setdefault(post, json.loads(request.content))
+            if self.forget:
+                del self.products[post]
             body = {"id": "x", "postId": post, "status": "Hidden", "created": created,
                     "warnings": self.warnings}  # fmt: skip
             return httpx2.Response(201 if created else 200, json=body)
@@ -606,3 +609,28 @@ def test_only_bot_puts_posts_in_site_queue(conn, root, on, export_path):
         if "site.enqueue(" in p.read_text(encoding="utf-8")
     )  # fmt: skip
     assert callers == ["bot/core.py"]
+
+
+def test_404_on_photo_forever_stops_after_one_resend(conn, root, on, worker, fake, said):
+    fake.forget = True
+    add_post(conn, root, photos=1)
+
+    for _ in range(10):
+        worker.step()
+
+    assert fake.paths().count("PUT /products/by-post/1401") == 2  # поля ще раз — лише один раз
+    assert fake.paths().count("PUT /products/by-post/1401/photos/0") == 2
+    assert len(said["owner"]) == 1 and "404" in said["owner"][0]
+
+
+def test_429_pauses_whole_queue_not_just_one_post(conn, root, on, worker, fake, clock):
+    add_post(conn, root, 1401, photos=1)
+    add_post(conn, root, 1402, photos=1)
+    fake.fail("PUT", "/products/by-post/1401", httpx2.Response(429, headers={"Retry-After": "45"}))
+
+    assert worker.step() == 45
+    before = len(fake.requests)
+    for _ in range(3):
+        worker.step()  # пост 1402 готовий, але ліміт спільний — чекаємо всі
+
+    assert len(fake.requests) == before

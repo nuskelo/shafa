@@ -513,13 +513,7 @@ class Worker:
 
     def _send_fields(self, site: Site, job: sqlite3.Row) -> None:
         post_id = job["post_id"]
-        fields = self._fields(site, job)
-        try:
-            answer = site.put_fields(post_id, fields)
-        except SiteError as error:
-            if error.status == 404:
-                raise Halt("інтеграцію на сайті вимкнено (404) — скажи команді сайту") from None
-            raise
+        answer = site.put_fields(post_id, self._fields(site, job))  # 404 — `_failed_request`
         self._set(
             post_id, state="photos", next_photo=0, attempts=0, next_at=None,
             error=MISSING if job["error"] == MISSING else None,
@@ -610,7 +604,7 @@ class Worker:
                 "стоїть; нічого не загублено."
             )
             return IDLE
-        if status == 404:  # підкатегорії: інтеграцію вимкнено
+        if status == 404:  # поля чи підкатегорії: інтеграцію вимкнено
             self._halted_key = self._site_key
             self.log("Сайт: 404 — інтеграцію на сайті вимкнено, черга зупинена")
             self.notify.owner(
