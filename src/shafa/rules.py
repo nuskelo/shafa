@@ -1,6 +1,7 @@
 """Поля Картки, які заповнює код за `docs/rules.md`: ціна, стан, опис, устілка, мембрана."""
 
 import re
+from itertools import pairwise
 
 # «1800грн», «600 грн», «1100грн.», «950гр», «9см.1300грн». Дробову частину («26,5 гр») не беремо.
 PRICE = re.compile(r"(?<!\d)(?<!\d[.,])(\d+)\s*гр(?:н)?\.?(?!\w)", re.IGNORECASE)
@@ -161,3 +162,139 @@ def many_items(text: str) -> bool:
     Закреслена стара ціна стоїть у тому самому рядку, що й нова, тож окремим товаром не рахується.
     """
     return sum(1 for line in text.splitlines() if PRICE.search(line)) >= 2
+
+
+# --- CORE-007: рішення за текстом, де ШІ вагалося (`docs/rules.md` v1.4) ---
+
+WINTER = "Зима"
+DEMI = "Демісезон"
+# Ознаки зими: «термо», «на хутрі» (не «без хутра»), «утеплені», «зимові», «уги/угги», «дутики»,
+# «на флісі». Мембрана й «не промокають» без них — демісезон.
+_WINTER_SIGN = re.compile(
+    r"термо|(?<!без )хутр|утепл|зимов|(?<![\w'’ʼ])у[гґ]{1,2}(?:и|і|ів|ах)?(?![\w'’ʼ])|"
+    r"(?<!\w)ugg|дутик|(?:на|з)\s+фліс",
+    re.IGNORECASE,
+)
+_WET = re.compile(
+    r"мембран|gore[\s-]?tex|(?<!\w)gtx(?!\w)|не\s+промока|водонепроникн", re.IGNORECASE
+)
+# Сезон, названий прямо (зимові — ознака зими, вона й так дає «Зима»).
+_SEASON_NAMED = (
+    ("Літо", re.compile(r"(?<!\w)літн|(?<!\w)на\s+літо", re.IGNORECASE)),
+    (DEMI, re.compile(r"демісезон|міжсезон", re.IGNORECASE)),
+    ("Весна", re.compile(r"(?<!\w)весн(?:а|ою|у|яні|яне|яний)?(?!\w)", re.IGNORECASE)),
+    ("Осінь", re.compile(r"(?<!\w)осін(?:ь|ні|нє|ній)|(?<!\w)осен", re.IGNORECASE)),
+)
+
+
+def season(text: str) -> tuple[list[str] | None, str | None]:
+    """Сезон за текстом: (значення, причина жовтого). (None, None) — текст мовчить, вирішує ШІ.
+
+    Названо прямо — як у тексті; «літні» разом з ознаками зими — текст суперечить сам собі.
+    """
+    winter = bool(_WINTER_SIGN.search(text))
+    named = [name for name, pattern in _SEASON_NAMED if pattern.search(text)]
+    if named:
+        if winter and "Літо" in named:
+            return named, "у тексті і літо, і ознаки зими — перевір сезон"
+        return named + ([WINTER] if winter and DEMI not in named else []), None
+    if winter:
+        return [WINTER], None
+    if _WET.search(text):
+        return [DEMI], None
+    return None, None
+
+
+WOMEN = "women"
+MEN = "men"
+GIRLS = "girls"
+BOYS = "boys"
+_SAID = (
+    (GIRLS, re.compile(r"для\s+дівчин(?:ки|очки|ок)|дівчач|(?<!\w)дівчинк", re.IGNORECASE)),
+    (BOYS, re.compile(r"для\s+хлопч|хлопчач|(?<!\w)хлопчик", re.IGNORECASE)),
+    (WOMEN, re.compile(r"жіноч|для\s+жін(?:ок|ки)", re.IGNORECASE)),
+    (MEN, re.compile(r"чоловіч|для\s+чоловік", re.IGNORECASE)),
+)
+UNISEX = re.compile(r"унісекс|unisex", re.IGNORECASE)
+_ADULT = re.compile(r"каблук|підбор|шпильк", re.IGNORECASE)
+
+
+def said_gender(text: str) -> str | None:
+    """Для кого річ за текстом: «girls» / «boys» / «women» / «men» або None.
+
+    Сказано двоє («і на жіночу, і на чоловічу ногу») чи «унісекс» — None: вирішує розмір.
+    """
+    found = [who for who, pattern in _SAID if pattern.search(text)]
+    if len(found) != 1 or UNISEX.search(text):
+        return None
+    return found[0]
+
+
+def adult_signs(text: str) -> bool:
+    """Ознаки дорослого жіночого взуття для 35–36: каблук, «жіночі»."""
+    return bool(_ADULT.search(text)) or said_gender(text) == WOMEN
+
+
+_SIZE = r"(\d{2}(?:[.,]5)?)"
+# «Вказаний 39 розмір, ідуть на 38»; «на ярлику 39, ідуть на 38»; «розмір вказаний 39».
+_LABEL = re.compile(
+    rf"(?:вказан\w*|на\s+ярлик\w*|на\s+бирц\w*)\s*(?:розмір\w*)?\s*[:-]?\s*{_SIZE}|"
+    rf"розмір\w*\s+вказан\w*\s*[:-]?\s*{_SIZE}",
+    re.IGNORECASE,
+)
+_GOES = re.compile(rf"(?<!\w)[іий]?дуть\s*(?:на\s*)?{_SIZE}(?!\s*[-–/]\s*\d)", re.IGNORECASE)
+_GOES_ANY = re.compile(r"(?<!\w)[іий]?дуть\s*(?:на\s*)?\d", re.IGNORECASE)
+# Розмір у тексті: «43 розмір», «розмір 43», «43 і 45 розміри», «розміри 37 та 38».
+_SIZE_LIST = rf"{_SIZE}((?:\s*(?:,|і|й|та)\s*\d{{2}}(?:[.,]5)?)*)"
+_SIZES_BEFORE = re.compile(rf"(?<![\d.,]){_SIZE_LIST}\s*(?:-?(?:го|й|ий))?\s*розм", re.IGNORECASE)
+_SIZES_AFTER = re.compile(
+    rf"розмір\w*\s*[:-]?\s*{_SIZE_LIST}(?![\d.,]\d)(?!\s*(?:см|мм|\*|[xх×]\s*\d))", re.IGNORECASE
+)
+_RANGE_AFTER = re.compile(r"^\s*[-–/]\s*\d")
+# Розпаровка: лівий і правий різні — це не два товари, лишається жовтим.
+_UNPAIRED = re.compile(r"(?<!\w)лів\w*|(?<!\w)прав\w*|розпаров", re.IGNORECASE)
+
+
+def _value(text: str) -> float:
+    return float(text.replace(",", "."))
+
+
+def _shown(value: float) -> str:
+    return f"{value:g}".replace(".", ",")
+
+
+def label_sizes(text: str, state: str) -> list[str] | None:
+    """§7 «вказаний X, ідуть на Y» кодом: вживане — [X, Y], нове — [X]. None — правила немає."""
+    label, goes = _LABEL.search(text), _GOES.search(text)
+    if not label or not goes:
+        return None
+    x, y = _value(label[1] or label[2]), _value(goes[1])
+    if state == NEW or x == y:
+        return [_shown(x)]
+    return [_shown(x), _shown(y)]
+
+
+def text_sizes(text: str) -> list[float]:
+    """Розміри, названі в тексті поруч зі словом «розмір» (без діапазонів «38-39»), по порядку."""
+    found: list[float] = []
+    for pattern in (_SIZES_BEFORE, _SIZES_AFTER):
+        for match in pattern.finditer(text):
+            if not match[2] and _RANGE_AFTER.match(text[match.end(1) :]):
+                continue  # «38-39 розмір» — один товар на два розміри
+            found += [_value(n) for n in re.findall(_SIZE, match[1] + match[2])]
+    return list(dict.fromkeys(found))
+
+
+def many_sizes(text: str) -> bool:
+    """Два й більше різних розміри в пості (43 і 45; 37 і 38) — кілька товарів.
+
+    «Вказаний X, ідуть на Y» і розпаровка (лівий/правий) — один товар. Розміри ближче 0,5 — теж.
+    """
+    if _GOES_ANY.search(text) or _UNPAIRED.search(text):
+        return False
+    sizes = sorted(text_sizes(text))
+    return any(b - a > 0.5 for a, b in pairwise(sizes))
+
+
+def unpaired(text: str) -> bool:
+    return bool(_UNPAIRED.search(text))

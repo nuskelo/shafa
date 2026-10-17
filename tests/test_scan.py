@@ -301,3 +301,26 @@ def test_thing_without_section_on_shafa_is_problem(text, code):
     """FIX-002: рукавички, шарфи тощо — розділу в знімку Шафи немає, схожий не підставляємо."""
     problem = find_problem(Folder("7", 7, ("1.jpg",)), {7: text}, {7: ["7"]})
     assert (problem[0] if problem else None) == code
+
+
+@pytest.mark.parametrize(
+    ("text", "problem"),
+    [
+        ("Кросівки Nike 43 і 45 розміри, ціна за пару 900грн", True),
+        ("Кеди Converse, розміри 37 та 38. 700грн", True),
+        ("Черевики 38 розмір. Є ще такі самі 40 розмір. 800грн", True),
+        ("Черевики 38-39 розмір. 800грн", False),  # один товар на два розміри
+        ("Черевики. Вказаний 39 розмір, ідуть на 38. 800грн", False),  # правило ярлика
+        ("Черевики 38 розмір, лівий 38,5 розмір. 800грн", False),  # розпаровка — жовте, не тут
+        ("Черевики 38 розміру, устілка 25см. 38 розмір. 800грн", False),
+    ],
+)
+def test_two_sizes_in_post_are_many_items(text, problem):
+    from shafa.folders import Folder
+    from shafa.scan import find_problem
+
+    found = find_problem(Folder("31", 31, ("1.jpg",)), {31: text}, {31: ["31"]})
+    if problem:
+        assert found == ("many_items", "У пості кілька розмірів — схоже, кілька товарів")
+    else:
+        assert found is None

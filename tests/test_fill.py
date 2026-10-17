@@ -50,7 +50,7 @@ def test_success_saves_blank_cost_and_moves_to_review(conn, root):
     good = {
         **GOOD,
         "photo_order": ["IMG_1.JPG", "IMG_2.JPG"],
-        "colors": ["Чорний", "Синій", "Сірий"],
+        "keywords": ["черевики", "черевики жіночі", "черевики pavers"],
     }
     client = FakeClient(message(good, usage=(9000, 500)))
 
@@ -63,8 +63,8 @@ def test_success_saves_blank_cost_and_moves_to_review(conn, root):
     }
     assert set(blanks) == set(ai.FIELDS)
     assert json.loads(blanks["title"]["value"]) == GOOD["title"]
-    assert blanks["colors"]["yellow"] == 1
-    assert blanks["colors"]["reason"] == "більше двох кольорів"
+    assert blanks["keywords"]["yellow"] == 1
+    assert blanks["keywords"]["reason"] == "ключових слів не 4–6"
     request = conn.execute("SELECT * FROM ai_requests").fetchone()
     assert (request["item_id"], request["input_tokens"], request["output_tokens"]) == (
         item_id,
@@ -161,16 +161,16 @@ def test_status_changes_only_from_new(conn, root, status):
 
 
 @pytest.mark.parametrize(
-    ("lining", "row"), [("Текстиль", (1, "немає в тексті: Текстиль")), ("Шкіра", (0, None))]
+    ("lining", "row"), [("Текстиль", (0, None, "[]")), ("Шкіра", (0, None, '["Шкіра"]'))]
 )
 def test_lining_checked_against_post_text(conn, root, lining, row):
-    item_id = add_item(conn, root)  # текст поста: «Шкіряні черевики Pavers…»
+    item_id = add_item(conn, root)  # текст поста: «Шкіряні черевики Pavers…»; не з тексту — геть
     good = {**GOOD, "photo_order": ["IMG_1.JPG", "IMG_2.JPG"], "material_lining": lining}
 
     fill.fill(conn, FakeClient(message(good)), planned_for(conn, root))
 
     saved = conn.execute(
-        "SELECT yellow, reason FROM blanks WHERE item_id = ? AND field = 'material_lining'",
+        "SELECT yellow, reason, value FROM blanks WHERE item_id = ? AND field = 'material_lining'",
         (item_id,),
     ).fetchone()
     assert tuple(saved) == row

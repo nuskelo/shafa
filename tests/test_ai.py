@@ -310,11 +310,13 @@ def test_section_from_snapshot_is_not_yellow():
     )
 
 
-def test_size_hint_contradicts_section():
-    fields = check(sizes=["44"])
-    assert fields["section"].yellow
-    assert fields["section"].reason == "розмір 44 зазвичай з іншого розділу"
-    assert not fields["sizes"].yellow  # 44 є у жіночому списку форми (34–46)
+def test_adult_size_44_moves_to_men_without_yellow():
+    fields = check(sizes=["44"])  # ШІ поставило жіноче; у тексті стать не сказано
+    assert (fields["section"].value, fields["section"].yellow) == (
+        "Чоловічий одяг / Взуття / Черевики",
+        False,
+    )
+    assert not fields["sizes"].yellow
 
 
 def test_size_41_fits_women_and_men():
@@ -323,11 +325,13 @@ def test_size_41_fits_women_and_men():
 
 
 def test_kids_section_with_kids_size():
-    fields = check(
-        section="Дитячий одяг / Для дівчаток / Взуття / Кросівки", sizes=["31"], teen=False
-    )
-    assert not fields["section"].yellow
+    girls = "Дитячий одяг / Для дівчаток / Взуття / Кросівки"
+    fields = check(section=girls, sizes=["31"], teen=False)
+    assert (fields["section"].yellow, fields["section"].reason) == (True, ai.NO_KID_GENDER)
     assert fields["teen"].value is False
+    text = "Кросівки для дівчинки 31 розміру. 500грн"
+    fields = by_name(ai.check_answer(answer(section=girls, sizes=["31"], teen=False), NAMES, text))
+    assert not fields["section"].yellow
 
 
 @pytest.mark.parametrize(
@@ -338,7 +342,7 @@ def test_kids_section_with_kids_size():
         (["38.5"], ["38,5"], None),
         (["тридцять"], ["тридцять"], "розмір не число"),
         (["38,3"], ["38,3"], "розміру немає у списку Шафи для розділу"),
-        (["46,5"], ["46,5"], "розміру немає у списку Шафи для розділу"),
+        (["30"], ["30"], "розміру немає у списку Шафи для розділу"),
         (["41", "42"], ["41", "42"], None),  # вживане: ярлик і на який іде
         ("38", [], "немає у відповіді ШІ"),
     ],
@@ -402,7 +406,7 @@ def test_type_style_and_limits_from_section():
     [
         (["чорний", "Білий"], ["Чорний", "Білий"], None),
         (["Ультрамарин"], [], "кольору немає в довіднику: Ультрамарин"),
-        (["Чорний", "Білий", "Сірий"], ["Чорний", "Білий", "Сірий"], "більше двох кольорів"),
+        (["Чорний", "Білий", "Сірий"], ["Чорний", "Білий"], None),  # головний перший, до двох
         ([], [], "немає кольору"),
     ],
 )
@@ -500,14 +504,14 @@ def test_prompt_rules_from_text_only():
         (
             "Дитячий одяг / Для малюків / Взуття / Кросівки",
             ["24"],
-            "Для малюків лише до 22 розміру",
+            "«Для малюків» лише до 22 розміру; " + ai.NO_KID_GENDER,
         ),
         (
             "Дитячий одяг / Для дівчаток / Взуття / Кросівки",
             ["22"],
-            "розмір 22 зазвичай з іншого розділу",
+            "до 22 розміру включно — «Для малюків»",
         ),
-        ("Чоловічий одяг / Взуття / Кросівки", ["38"], "розмір 38 зазвичай з іншого розділу"),
+        ("Жіночий одяг / Взуття / Кросівки", ["30"], "розмір 30 — дитячий"),
     ],
 )
 def test_size_hint_reasons(section, sizes, reason):
@@ -516,20 +520,18 @@ def test_size_hint_reasons(section, sizes, reason):
 
 
 @pytest.mark.parametrize(
-    ("lining", "text", "yellow"),
+    ("lining", "text", "kept"),
     [
-        ("Текстиль", "Шкіряні кросівки. Верх - натуральна шкіра. 990грн", True),
-        ("Шкіра", "Кросівки. Верх і всередині - натуральна шкіра. 1500грн", False),
-        ("Хутро", "Зимові черевики на хутрі. 1200грн", False),
-        ("Фліс", "Черевики з флісом всередині. 900грн", False),
-        (None, "Кросівки. 990грн", False),
+        ("Текстиль", "Шкіряні кросівки. Верх - натуральна шкіра. 990грн", []),  # не з тексту
+        ("Шкіра", "Кросівки. Верх і всередині - натуральна шкіра. 1500грн", ["Шкіра"]),
+        ("Хутро", "Зимові черевики на хутрі. 1200грн", ["Хутро"]),
+        ("Фліс", "Черевики з флісом всередині. 900грн", ["Фліс"]),
+        (None, "Кросівки. 990грн", []),
     ],
 )
-def test_lining_must_be_in_text(lining, text, yellow):
+def test_lining_must_be_in_text(lining, text, kept):
     field = by_name(ai.check_answer(answer(material_lining=lining), NAMES, text))["material_lining"]
-    assert field.value == ([lining] if lining else [])
-    assert field.yellow is yellow
-    assert field.reason == (f"немає в тексті: {lining}" if yellow else None)
+    assert (field.value, field.yellow) == (kept, False)
 
 
 @pytest.mark.parametrize(
@@ -545,3 +547,205 @@ def test_lining_must_be_in_text(lining, text, yellow):
 )
 def test_in_text(word, text, found):
     assert ai.in_text(word, text) is found
+
+
+# --- CORE-007: менше жовтих — рішення за текстом (формулювання перефразовані) ---
+
+WOMEN_BOOTS = "Жіночий одяг / Взуття / Черевики"
+MEN_BOOTS = "Чоловічий одяг / Взуття / Черевики"
+
+
+def check_text(text, names=NAMES, **changes):
+    return by_name(ai.check_answer(answer(**changes), names, text))
+
+
+def doubt(field, reason):
+    return {"field": field, "reason": reason}
+
+
+@pytest.mark.parametrize(
+    ("text", "season"),
+    [
+        ("Термо черевики Columbia 38 розміру. 1100грн", ["Зима"]),
+        ("Черевики на натуральному хутрі, 38 розмір. 1400грн", ["Зима"]),
+        ("Утеплені черевики Ecco 38 розмір. 900грн", ["Зима"]),
+        ("Уги замшеві оригінал 38 розміру. 1800грн", ["Зима"]),
+        ("Черевики Geox на флісі 38 розмір. 800грн", ["Зима"]),
+        ("Черевики з мембраною, не промокають, 38 розмір. 1300грн", ["Демісезон"]),
+        ("Черевики Lowa gore-tex 38 розміру. 2000грн", ["Демісезон"]),
+        ("Демісезонні черевики на флісі 38 розмір. 700грн", ["Демісезон"]),
+        ("Зимові черевики Salomon gore-tex 38 розміру. 2100грн", ["Зима"]),
+    ],
+)
+def test_season_from_text_is_not_yellow(text, season):
+    fields = check_text(text, season=["Літо"], doubts=[doubt("season", "не видно з фото")])
+    assert (fields["season"].value, fields["season"].yellow) == (season, False)
+
+
+def test_season_yellow_only_when_text_contradicts_itself():
+    fields = check_text("Літні черевики на хутрі 38 розмір. 600грн", season=[])
+    assert fields["season"].yellow
+    assert fields["season"].reason == "у тексті і літо, і ознаки зими — перевір сезон"
+
+
+def test_season_when_text_is_silent_is_ai_without_yellow():
+    fields = check_text(POST, season=[], doubts=[doubt("season", "з тексту не зрозуміло")])
+    assert (fields["season"].value, fields["season"].yellow) == ([], False)
+
+
+@pytest.mark.parametrize(
+    ("section", "size", "text", "wanted"),
+    [
+        (MEN_BOOTS, "38", POST, WOMEN_BOOTS),  # ≤ 39 — жіноче
+        (MEN_BOOTS, "39,5", POST, WOMEN_BOOTS),
+        (WOMEN_BOOTS, "43", POST, MEN_BOOTS),  # ≥ 43 — чоловіче
+        (WOMEN_BOOTS, "39", "Чоловічі черевики Pavers 39 розміру. 900грн", MEN_BOOTS),  # текст
+        (MEN_BOOTS, "44", "Жіночі черевики великого 44 розміру. 900грн", WOMEN_BOOTS),
+        (MEN_BOOTS, "38", "Черевики унісекс 38 розміру. 900грн", WOMEN_BOOTS),
+    ],
+)
+def test_adult_gender_by_text_then_size(section, size, text, wanted):
+    fields = check_text(
+        text,
+        section=section,
+        sizes=[size],
+        doubts=[doubt("section", "не видно, жіночі чи чоловічі")],
+    )
+    assert (fields["section"].value, fields["section"].yellow) == (wanted, False)
+
+
+def test_sizes_40_to_42_left_to_ai():
+    fields = check_text(POST, section=MEN_BOOTS, sizes=["41"])
+    assert (fields["section"].value, fields["section"].yellow) == (MEN_BOOTS, False)
+    fields = check_text(
+        POST, section=MEN_BOOTS, sizes=["41"], doubts=[doubt("section", "не видно, чиї")]
+    )
+    assert (fields["section"].value, fields["section"].yellow) == (MEN_BOOTS, True)
+
+
+def test_code_decided_group_keeps_ai_doubt_about_type():
+    fields = check_text(POST, sizes=["38"], doubts=[doubt("section", "може, це ботильйони")])
+    assert fields["section"].yellow
+    assert fields["section"].reason == "ШІ не впевнене: може, це ботильйони"
+
+
+BABIES = "Дитячий одяг / Для малюків / Взуття / Кросівки"
+GIRLS = "Дитячий одяг / Для дівчаток / Взуття / Кросівки"
+
+
+def test_babies_never_from_23():
+    text = "Кросівки дитячі 23 розміру. 400грн"
+    fields = check_text(text, section=BABIES, sizes=["23"], material_upper=[], gender="Унісекс")
+    assert fields["section"].yellow
+    assert fields["section"].reason.startswith("«Для малюків» лише до 22 розміру")
+    text = "Кросівки для дівчинки 24 розміру. 400грн"
+    fields = check_text(text, section=BABIES, sizes=["24"], material_upper=[], gender="Унісекс")
+    assert (fields["section"].value, fields["section"].yellow) == (GIRLS, False)
+
+
+def test_babies_up_to_22():
+    text = "Кросівки 21 розміру. 300грн"
+    fields = check_text(text, section=BABIES, sizes=["21"], material_upper=[], gender="Унісекс")
+    assert not fields["section"].yellow
+
+
+def test_kids_35_36_with_adult_signs_are_women():
+    text = "Кросівки на невеликому каблуку 36 розміру. 600грн"
+    fields = check_text(text, section=GIRLS, sizes=["36"], material_upper=[], season=[])
+    assert fields["section"].value == "Жіночий одяг / Взуття / Кросівки"
+    assert not fields["section"].yellow
+    fields = check_text(POST, section=GIRLS, sizes=["36"], material_upper=[], season=[])
+    assert (fields["section"].value, fields["section"].reason) == (GIRLS, ai.NO_KID_GENDER)
+
+
+@pytest.mark.parametrize(
+    ("text", "ai_sizes", "sizes"),
+    [
+        ("Черевики. Вказаний 39 розмір, ідуть на 38. 900грн", ["38"], ["39", "38"]),
+        ("Черевики. На ярлику 40, ідуть на 39,5. 900грн", ["39,5"], ["40", "39,5"]),
+        ("Нові черевики. Вказаний 39 розмір, ідуть на 38. 900грн", ["39", "38"], ["39"]),
+    ],
+)
+def test_label_rule_applied_by_code(text, ai_sizes, sizes):
+    fields = check_text(text, sizes=ai_sizes, doubts=[doubt("sizes", "ярлик і реальний різні")])
+    assert (fields["sizes"].value, fields["sizes"].yellow) == (sizes, False)
+
+
+def test_single_size_in_text_ignores_ai_size_doubt():
+    fields = check_text(POST, sizes=["38"], doubts=[doubt("sizes", "ярлика на фото не видно")])
+    assert not fields["sizes"].yellow
+    fields = check_text(POST, sizes=["38,5"], doubts=[doubt("sizes", "ярлик 38,5")])
+    assert fields["sizes"].yellow  # ШІ дало інший, ніж у тексті, — справжній сумнів
+
+
+def test_unpaired_stays_yellow():
+    text = "Черевики 38 розмір, правий трохи більший. 600грн"
+    fields = check_text(text, sizes=["38"], doubts=[doubt("sizes", "розпаровка")])
+    assert fields["sizes"].yellow
+
+
+@pytest.mark.parametrize(
+    ("section", "lining", "text", "kept"),
+    [
+        (WOMEN_BOOTS, ["натуральне хутро"], "Черевики на натуральному хутрі. 900грн", ["Хутро"]),
+        (WOMEN_BOOTS, ["хутро"], "Черевики, всередині хутро. 900грн", ["Хутро"]),
+        (WOMEN_BOOTS, ["Фліс"], "Черевики на флісі. 900грн", ["Фліс"]),
+        (WOMEN_BOOTS, ["Текстиль"], "Черевики, всередині текстиль. 900грн", ["Текстиль"]),
+        (WOMEN_BOOTS, ["Шкіра"], "Черевики, всередині шкіра. 900грн", ["Шкіра"]),
+        (WOMEN_BOOTS, ["Мембрана"], "Черевики з мембраною. 900грн", []),  # немає в довіднику
+    ],
+)
+def test_lining_synonyms_to_catalog(section, lining, text, kept):
+    fields = check_text(
+        text, section=section, material_lining=lining, doubts=[doubt("material_lining", "?")]
+    )
+    assert (fields["material_lining"].value, fields["material_lining"].yellow) == (kept, False)
+
+
+def test_lining_fur_names_differ_by_section():
+    girls_uggs = "Дитячий одяг / Для дівчаток / Взуття / Уггі"
+    spec = ai.catalog.characteristic(girls_uggs, "material_lining")
+    assert "Натуральне хутро" in spec["choices"] and "Хутро" not in spec["choices"]
+    text = "Уги для дівчинки 30 розміру, хутро. 900грн"
+    fields = check_text(text, section=girls_uggs, material_lining=["Хутро"], material_upper=[])
+    assert fields["material_lining"].value == ["Натуральне хутро"]
+
+
+def test_colors_doubt_is_not_yellow():
+    fields = check_text(POST, colors=["Сірий"], doubts=[doubt("colors", "графітовий чи сірий")])
+    assert (fields["colors"].value, fields["colors"].yellow) == (["Сірий"], False)
+
+
+def test_one_photo_is_never_yellow():
+    fields = check_text(
+        POST, names=["1.jpg"], photo_order=["2.jpg"], doubts=[doubt("photo_order", "збоку?")]
+    )
+    assert (fields["photo_order"].value, fields["photo_order"].yellow) == (["1.jpg"], False)
+
+
+def test_sapozhky_are_boots():
+    text = "Замшеві сапожки 38 розміру. 900грн"
+    fields = check_text(text, material_upper=["Замша"])
+    assert (fields["section"].value, fields["section"].yellow) == (
+        "Жіночий одяг / Взуття / Чоботи",
+        False,
+    )
+
+
+def test_dutyky_only_when_text_says():
+    dutyky = "Жіночий одяг / Взуття / Дутики"
+    fields = check_text("Зимові чоботи 38 розміру. 900грн", section=dutyky)
+    assert fields["section"].yellow
+    assert not check_text("Дутики 38 розміру. 900грн", section=dutyky)["section"].yellow
+
+
+def test_prompt_has_core_007_rules():
+    prompt = ai.system_prompt()
+    for phrase in (
+        "«на флісі»",
+        "≤ 39 — жіноче",
+        "23 і більше — ніколи",
+        "сапожки",
+        "Різнокольоровий",
+    ):
+        assert phrase in prompt, phrase
