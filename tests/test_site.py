@@ -605,7 +605,7 @@ def test_only_bot_puts_posts_in_site_queue(conn, root, on, export_path):
     assert conn.execute("SELECT count(*) FROM site_jobs").fetchone()[0] == 0
     src = Path(site.__file__).parent
     callers = sorted(
-        str(p.relative_to(src)) for p in src.rglob("*.py")
+        p.relative_to(src).as_posix() for p in src.rglob("*.py")
         if "site.enqueue(" in p.read_text(encoding="utf-8")
     )  # fmt: skip
     assert callers == ["bot/core.py"]
