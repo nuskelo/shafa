@@ -32,7 +32,7 @@ from shafa import ai, batch, catalog, config, db, fill, options, photos, review
 from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
-from shafa.robot import control, lock, publish
+from shafa.robot import browser, control, lock, publish
 from shafa.scan import STICKY, rescan_folder, scan
 
 COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
@@ -97,6 +97,8 @@ MESSAGES = {
     "robot_not_running": "Робот зараз не публікує",
     "robot_login": "Відкриваю вікно входу на Шафу — увійдіть і закрийте вікно",
     "robot_busy": "Робот уже працює",
+    "robot_login_done": "Закриваю вікно входу — за кілька секунд можна натискати «Старт»",
+    "robot_no_login_window": "Вікно входу вже закрито",
     "robot_fake_login": "У підставному режимі вхід на Шафу не потрібен",
     "ai_started": "Оновлюю: шукаю нові папки й відправляю на ШІ — результат з'явиться на панелі",
     "ai_busy": "ШІ вже працює — зачекайте хвилину",
@@ -607,6 +609,12 @@ class App:
                     return redirect(f"{back}{sep}msg=robot_busy")
                 self._spawn(["--login"])
                 return redirect(f"{back}{sep}msg=robot_login")
+            if action == "login_done":  # запасне: вікно входу не закривається хрестиком
+                busy = lock.busy(self.lock_file)
+                if not busy or busy.get("mode") != "login":
+                    return redirect(f"{back}{sep}msg=robot_no_login_window")
+                browser.login_done_flag().touch()
+                return redirect(f"{back}{sep}msg=robot_login_done")
             commands = {"pause": "pause", "resume": None, "stop": "stop"}
             if action in commands:
                 done = publish.request(conn, commands[action])

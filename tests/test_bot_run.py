@@ -98,6 +98,11 @@ def test_no_rights(member, error, text):
         run.check_rights(RightsTelegram(member, error), CHANNEL)
 
 
+def test_no_group_says_wait_after_linking():
+    with pytest.raises(run.SetupError, match="якщо щойно прив'язала — зачекай 5 хв"):
+        run.check_rights(RightsTelegram(group=None), CHANNEL)
+
+
 @pytest.mark.parametrize(
     ("changes", "text"),
     [

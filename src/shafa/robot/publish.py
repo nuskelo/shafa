@@ -30,6 +30,7 @@ from shafa.db import Status, now
 from shafa.folders import PUBLISHED_DIR, is_old
 from shafa.robot import listings as listings_mod
 from shafa.robot import lock
+from shafa.robot.browser import NO_LOGIN
 from shafa.robot.form import (
     BrandMissing,
     Driver,
@@ -60,8 +61,8 @@ UNCERTAIN = (
 
 @dataclass(frozen=True)
 class Stop:
-    """Чому сесія закінчилась. `code` — для екрана: done, limit, stop, login, sleep, site, error,
-    interrupted (і crash — сесію закрив recover після падіння)."""
+    """Чому сесія закінчилась. `code` — для екрана: done, limit, stop, login, no_form, sleep, site,
+    error, interrupted (і crash — сесію закрив recover після падіння)."""
 
     code: str
     text: str
@@ -356,8 +357,8 @@ class Run:
         limits, started = group_limits(), started_groups(self.conn, today)
         if not any(group_open(r["folder_name"], started, limits) for r in rows):
             return Stop("limit", f"на сьогодні все: {started.text(limits)}")
-        if not self.session.open_form():
-            return Stop("login", "немає входу на Шафу")
+        if (stop := self._open_form(None)) is not None:
+            return stop
         try:
             listings = self.load_listings(self.session)
         except listings_mod.ListingsError as error:
@@ -417,15 +418,28 @@ class Run:
             report.problems.append((card.post_id, code, text))
             self.log(f"Пост {card.post_id}: {text}")
 
-    def _shot(self, card: review.Card, suffix: str) -> Path:
+    def _shot(self, card: review.Card | None, suffix: str) -> Path:
         self.screens.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-        shot = self.screens / f"{stamp}-{card.post_id}-{suffix}.png"
+        post = f"-{card.post_id}" if card is not None else ""
+        shot = self.screens / f"{stamp}{post}-{suffix}.png"
         try:
             self.session.page.screenshot(path=str(shot), full_page=True)
         except Exception:  # noqa: BLE001 — екран лише для звіту; не ховати справжню причину
             return shot
         return shot
+
+    def _open_form(self, card: review.Card | None) -> Stop | None:
+        """Форма «Додати товар» є → None; немає входу чи форми → причина зупинки з деталями."""
+        opened = self.session.open_form()
+        if opened.ok:
+            return None
+        if opened.state == NO_LOGIN:
+            self.log(f"Шафа веде на вхід: {opened.detail()}")
+            return Stop("login", "немає входу на Шафу")
+        shot = self._shot(card, "нема-форми")
+        self.log(f"Шафа не показала форму «Додати товар»: {opened.detail()}. Екран: {shot}")
+        return Stop("no_form", f"Шафа не показала форму ({opened.detail()})")
 
     def _one(
         self, report: Report, item_id: int, driver: Driver, listings: list
@@ -461,9 +475,10 @@ class Run:
                 "UPDATE sessions SET item_started_at = ? WHERE id = ?", (now(), report.session_id)
             )
 
-        if not self.session.open_form():
-            self._problem(report, card, ok, "robot_logged_out", "Робот не увійшов на Шафу")
-            return Stop("login", "немає входу на Шафу")
+        if (stop := self._open_form(card)) is not None:
+            if stop.code == "login":
+                self._problem(report, card, ok, "robot_logged_out", "Робот не увійшов на Шафу")
+            return stop  # «немає форми» — Картка не винна, лишається у Схвалених
         try:
             notes += execute(steps, driver, strict=True)
         except FieldMissing as error:

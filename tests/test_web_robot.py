@@ -4,7 +4,7 @@ import pytest
 
 from shafa import web
 from shafa.db import Status
-from shafa.robot import lock
+from shafa.robot import browser, lock
 from test_review import add_card
 from test_web import PORT, TOKEN, get, html, location, post
 
@@ -151,6 +151,27 @@ def test_login_button_after_logout(conn, root, app, spawner):
     assert "Увійти на Шафу" in page and "увійдіть, як завжди" in page
     assert location(post(app, "/robot", action="login", back="/review")).endswith("msg=robot_login")
     assert spawner.calls == [["--login"]]
+
+
+def test_login_done_button_closes_login_window(conn, app, lock_file):
+    flag = browser.login_done_flag()
+    with lock.hold("login", lock_file):
+        assert "Я увійшов — закрити вікно" in html(get(app, "/robot/panel?back=/review"))
+        assert location(post(app, "/robot", action="login_done", back="/review")).endswith(
+            "msg=robot_login_done"
+        )
+    assert flag.exists()  # процес входу побачить і закриє Chrome штатно
+
+
+def test_login_done_without_login_window(conn, app, lock_file):
+    for mode in (None, "publish"):
+        if mode:
+            with lock.hold(mode, lock_file):
+                answer = post(app, "/robot", action="login_done", back="/review")
+        else:
+            answer = post(app, "/robot", action="login_done", back="/review")
+        assert location(answer).endswith("msg=robot_no_login_window")
+    assert not browser.login_done_flag().exists()
 
 
 def test_login_refused_while_robot_busy(conn, app, spawner, lock_file):

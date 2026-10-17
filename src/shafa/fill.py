@@ -15,6 +15,7 @@ from shafa import ai
 from shafa.db import Status, now
 from shafa.folders import item_folder
 from shafa.photos import PreparedPhoto, prepare
+from shafa.scan import NO_SECTION_TEXT
 
 # Захист від випадкових витрат: більше запитів за один запуск не буває.
 MAX_PER_RUN = 10
@@ -136,9 +137,18 @@ def log_request(
     )
 
 
-def set_status(conn: sqlite3.Connection, item_id: int, error: str | None) -> bool:
+def no_section(fields: list[ai.Field]) -> bool:
+    """ШІ не знайшло розділу для речі (інструкція: схожий не підставляти) — у «Проблеми»."""
+    return any(f.name == "section" and not f.value for f in fields)
+
+
+def set_status(
+    conn: sqlite3.Connection, item_id: int, error: str | None, fields: list[ai.Field] = ()
+) -> bool:
     """Новий статус лише для Картки, що досі `new`. Повертає, чи змінено."""
     status, code = (Status.PROBLEM, "ai_error") if error else (Status.REVIEW, None)
+    if not error and no_section(fields):
+        status, code, error = Status.PROBLEM, "no_section", NO_SECTION_TEXT
     cursor = conn.execute(
         """
         UPDATE items SET status = ?, problem_code = ?, problem_text = ?, updated_at = ?
@@ -161,7 +171,7 @@ def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
     fields = ai.check_answer(answer, [p.file_name for p in planned.photos], planned.post_text)
     with conn:
         log_request(conn, planned.item_id, usage, None)
-        if set_status(conn, planned.item_id, None):  # Картку вже взяли в роботу — бланк не чіпаємо
+        if set_status(conn, planned.item_id, None, fields):  # Картку вже взяли — бланк не чіпаємо
             save_blank(conn, planned.item_id, fields)
     return Filled(planned.folder_name, usage, yellow=sum(f.yellow for f in fields))
 

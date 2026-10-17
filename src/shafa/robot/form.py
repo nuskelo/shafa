@@ -341,8 +341,16 @@ def dry_fill(
         except PlanError as error:
             log(f"Пост {post_id}: {error}")
             continue
-        if not session.open_form():
-            log("Немає входу на Шафу в профілі робота. Запустіть: python -m shafa robot --login")
+        opened = session.open_form()
+        if not opened.ok:
+            if opened.state == browser.NO_LOGIN:
+                log(
+                    "Немає входу на Шафу в профілі робота. Запустіть: python -m shafa robot --login"
+                )
+            else:
+                shot = screens / f"{datetime.now().astimezone():%Y%m%d-%H%M%S}-нема-форми.png"
+                session.page.screenshot(path=str(shot), full_page=True)
+                log(f"Шафа не показала форму: {opened.detail()}. Екран: {shot}")
             break
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
         try:

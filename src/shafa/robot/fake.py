@@ -111,9 +111,9 @@ class FakeSession(browser.Session):
             self.creates += 1
         route.continue_()
 
-    def open_form(self) -> bool:
+    def open_form(self) -> browser.Opened:
         self.page.goto(self.base + "/new", wait_until="load")
-        return True
+        return browser.Opened(browser.FORM, self.page.url)
 
     def outside(self) -> list[str]:
         """Запити, що намагались піти не на підставну Шафу (заблоковані)."""

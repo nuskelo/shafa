@@ -9,6 +9,7 @@
 
 import getpass
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -31,6 +32,25 @@ IDS = (
     ("TELEGRAM_OWNER_CHAT_ID", "Твій chat id"),
 )
 YES = ("так", "т", "yes", "y", "1")
+PASTE = "вставка — правою кнопкою миші, один раз"
+# Ctrl+V у cmd вставляє символ \x16; копія з месенджера — пробіли, переноси, невидимі символи.
+JUNK = re.compile(r"[\s\x00-\x1f\x7f\u200b-\u200f\u2060\ufeff]")
+FORMATS = {"TELEGRAM_BOT_TOKEN": re.compile(r"\d+:[A-Za-z0-9_-]+")}  # 123456:ABC-… (BotFather)
+SECRET = re.compile(r"[\x21-\x7e]+")  # ключі — латиниця, цифри, знаки
+CHAT_ID = re.compile(r"-?\d+")
+
+
+def clean(value: str) -> str:
+    """Прибрати керівні символи й пробіли, які потрапляють у вставлене значення."""
+    return JUNK.sub("", value)
+
+
+def valid_secret(name: str, value: str) -> bool:
+    """Схоже на справжній ключ/токен: дозволені символи й не вставлено двічі поспіль."""
+    if not (FORMATS.get(name) or SECRET).fullmatch(value):
+        return False
+    half = len(value) // 2
+    return not (len(value) % 2 == 0 and value[:half] == value[half:])
 
 
 def check_ai(key: str) -> str:
@@ -173,9 +193,11 @@ def _yes(answer: str) -> bool:
 
 def choose_root(act: Actions) -> Path:
     default = places.default_root()
+    current = config.setting("SHAFA_ROOT_DIR")
+    offered = Path(current) if current else default  # повторний запуск: Enter — та сама папка
     while True:
-        answer = act.ask(f"Головна папка з фото товарів [Enter — {default}]: ").strip()
-        root = Path(answer.strip('"')) if answer else default
+        answer = act.ask(f"Головна папка з фото товарів [Enter — {offered}]: ").strip()
+        root = Path(answer.strip('"')) if answer else offered
         if not places.in_onedrive(root):
             return root
         act.say(
@@ -185,6 +207,46 @@ def choose_root(act: Actions) -> Path:
         act.say(f"    Краще: {default}")
         if _yes(act.ask("Все одно взяти цю папку? (так/ні): ")):
             return root
+
+
+def ask_secret(act: Actions, name: str, title: str, values: dict[str, str]) -> None:
+    """Секрет: прибрати сміття вставки; погане значення — пояснити й питати ще раз."""
+    current = config.setting(name)
+    kept = clean(current) if current else ""
+    if current and not valid_secret(name, kept):
+        act.say(f"{title}: збережене значення зіпсоване — встав ще раз")
+        kept = ""
+    hint = " (вже є; Enter — лишити)" if kept else ""
+    while True:
+        raw = act.ask_secret(f"{title}{hint} ({PASTE}): ")
+        if not raw.strip():  # Enter
+            if kept != (current or ""):
+                values[name] = kept  # почищене збережене або порожнє замість зіпсованого
+            return
+        secret = clean(raw)
+        if valid_secret(name, secret):
+            values[name] = secret
+            return
+        act.say(f"Ключ/токен вставлено з помилкою — встав ще раз ({PASTE})")
+
+
+def ask_id(act: Actions, name: str, title: str, values: dict[str, str]) -> None:
+    current = config.setting(name)
+    kept = clean(current) if current else ""
+    if current and not CHAT_ID.fullmatch(kept):
+        act.say(f"{title}: збережене значення зіпсоване — введи ще раз")
+        kept = ""
+    while True:
+        raw = act.ask(f"{title}{f' [Enter — {kept}]' if kept else ''}: ")
+        if not raw.strip():
+            if kept != (current or ""):
+                values[name] = kept
+            return
+        answer = clean(raw)
+        if CHAT_ID.fullmatch(answer):
+            values[name] = answer
+            return
+        act.say("Id — лише цифри (можна з мінусом на початку). Введи ще раз")
 
 
 def run(act: Actions | None = None) -> int:
@@ -197,16 +259,9 @@ def run(act: Actions | None = None) -> int:
     values: dict[str, str] = {"SHAFA_ROOT_DIR": str(root)}
 
     for name, title in SECRETS:
-        has = config.setting(name) is not None
-        hint = " (вже є; Enter — лишити)" if has else ""
-        secret = act.ask_secret(f"{title}{hint}: ").strip()
-        if secret:
-            values[name] = secret
+        ask_secret(act, name, title, values)
     for name, title in IDS:
-        current = config.setting(name)
-        answer = act.ask(f"{title}{f' [Enter — {current}]' if current else ''}: ").strip()
-        if answer:
-            values[name] = answer
+        ask_id(act, name, title, values)
     config.save_settings(values)
     act.say("Збережено (лише для її користувача Windows).")
 

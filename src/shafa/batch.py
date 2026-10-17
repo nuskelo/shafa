@@ -381,7 +381,9 @@ def apply_result(conn: sqlite3.Connection, batch_id: int, line: Any, report: Col
                 names, text = _card_inputs(conn, item_id)
                 fields = ai.check_answer(answer, names, text)
                 fill.log_request(conn, item_id, usage, None, batch_id)
-                if fill.set_status(conn, item_id, None):  # Картку тим часом змінили — не чіпаємо
+                if fill.set_status(
+                    conn, item_id, None, fields
+                ):  # Картку тим часом змінили — не чіпаємо
                     fill.save_blank(conn, item_id, fields)
                 state = "done"
                 report.filled += 1
