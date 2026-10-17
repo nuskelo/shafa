@@ -27,10 +27,13 @@ import anthropic
 
 from shafa import ai, config, fill
 from shafa.db import Status, now
+from shafa.folders import OLD_PREFIX, is_old
+from shafa.robot import publish
 
 WAIT_DAYS = 7
 BATCH_LIMIT = 50
 DAILY_USD = 3
+AHEAD_DAYS = 3  # на скільки днів публікації наперед ШІ заповнює старі Картки
 WAIT_SETTING = "SHAFA_AI_WAIT_DAYS"
 BATCH_SETTING = "SHAFA_AI_BATCH_LIMIT"
 MONEY_SETTING = "SHAFA_AI_DAILY_USD"
@@ -52,6 +55,9 @@ class Limits:
     wait_days: int = WAIT_DAYS
     batch_limit: int = BATCH_LIMIT
     daily_micro_usd: int = DAILY_USD * 1_000_000
+    old_per_day: int = (
+        10  # «Старих на день» (робот): ШІ готує старі не більше ніж на AHEAD_DAYS днів
+    )
 
 
 def _int_setting(name: str, default: int, low: int, high: int) -> int:
@@ -75,10 +81,15 @@ def limits() -> Limits:
         if not value.is_finite() or not 0 < value <= 100:
             raise SetupError(f"{MONEY_SETTING} — сума в доларах від 0 до 100, наприклад 3")
         money = int(value * 1_000_000)
+    try:
+        old_per_day = publish.group_limits().old
+    except publish.SetupError as error:
+        raise SetupError(str(error)) from None
     return Limits(
         _int_setting(WAIT_SETTING, WAIT_DAYS, 0, 60),
         _int_setting(BATCH_SETTING, BATCH_LIMIT, 1, 500),
         money,
+        old_per_day,
     )
 
 
@@ -114,7 +125,8 @@ def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
         SELECT items.id, items.folder_name, items.post_id, posts.date
         FROM items JOIN posts USING (post_id)
         WHERE items.status = ? AND items.id NOT IN ({fill.IN_BATCH})
-        ORDER BY posts.date, items.id
+        ORDER BY items.folder_name LIKE '{OLD_PREFIX}%', items.queue_pos IS NULL, items.queue_pos,
+                 posts.date, items.id
         """,
         (Status.NEW,),
     ).fetchall()
@@ -123,6 +135,24 @@ def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
         "SELECT count(DISTINCT item_id) FROM ai_batch_items WHERE state = 'pending'"
     ).fetchone()[0]
     return Queue(ready, len(rows) - len(ready), pending)
+
+
+def old_ahead(conn: sqlite3.Connection) -> int:
+    """Старі Картки з готовим бланком, ще не опубліковані (чекають перевірки чи публікації)."""
+    return conn.execute(
+        "SELECT count(*) FROM items WHERE folder_name LIKE ? AND status IN (?, ?) "
+        "AND purged_at IS NULL",
+        (f"{OLD_PREFIX}%", Status.REVIEW, Status.APPROVED),
+    ).fetchone()[0]
+
+
+def old_in_flight(conn: sqlite3.Connection) -> int:
+    """Старі Картки, що чекають результату пакета: бланк буде, тож рахуються наперед."""
+    return conn.execute(
+        "SELECT count(DISTINCT i.id) FROM items i JOIN ai_batch_items b ON b.item_id = i.id "
+        "WHERE b.state = 'pending' AND i.folder_name LIKE ?",
+        (f"{OLD_PREFIX}%",),
+    ).fetchone()[0]
 
 
 # --- Гроші ---
@@ -188,9 +218,15 @@ def prepare(
     cap = min(lim.batch_limit, limit or lim.batch_limit)
     budget = budget_left(conn, today, lim)
     plan = Plan(young=q.young, pending=q.pending)
+    # старі — лише наперед (CORE-006): бланки на ≤ AHEAD_DAYS днів публікації, щоб не платити за всі
+    old_room = AHEAD_DAYS * lim.old_per_day - old_ahead(conn) - old_in_flight(conn)
     for row in q.ready:
         if len(plan.planned) >= cap:
             break
+        if is_old(row["folder_name"]):
+            if old_room <= 0:
+                continue
+            old_room -= 1
         result = fill.plan(conn, root, row, batch=True)
         if isinstance(result, fill.Skipped):
             plan.skipped.append(result)

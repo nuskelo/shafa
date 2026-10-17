@@ -498,3 +498,74 @@ def test_texts():
         "ШІ заповнило бланків: 3; у «Проблеми»: 2; повернуто в чергу: 2"
     )
     assert json.dumps(batch.cents(12345), ensure_ascii=False) == '"1,23 ¢"'
+
+
+# --- Старі за списком і лише наперед (CORE-006) ---
+
+
+def old_cards(conn, root, count, tmp_path):
+    """Старі Картки `borh-N`: фото в теці даних. Позиція у списку — навпаки до дати поста."""
+    import shutil
+
+    from shafa.folders import old_root
+
+    ids = []
+    for n in range(1, count + 1):
+        item_id = add_item(conn, root, folder=f"borh-{n}", post_id=n, photos=("1.jpg",))
+        target = old_root() / str(n)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(root / f"borh-{n}", target)
+        with conn:
+            conn.execute("UPDATE items SET queue_pos = ? WHERE id = ?", (count - n + 1, item_id))
+            conn.execute(
+                "UPDATE posts SET date = ? WHERE post_id = ?", (f"2024-01-{n:02d}T10:00:00", n)
+            )
+        ids.append(item_id)
+    return ids
+
+
+def test_old_cards_queue_by_list_after_new(conn, root, tmp_path):
+    old = old_cards(conn, root, 3, tmp_path)
+    (new,) = [add_item(conn, root, folder="77", post_id=77)]
+    set_post_date(conn, 77, "2026-01-01T10:00:00")
+
+    q = batch.queue(conn, TODAY, 7)
+
+    assert [r["id"] for r in q.ready] == [new, *reversed(old)]
+
+
+def test_old_cards_filled_at_most_3_days_ahead(conn, root, tmp_path):
+    old = old_cards(conn, root, 8, tmp_path)
+    lim = batch.Limits(old_per_day=2)  # 3 × 2 = 6 наперед
+    with conn:  # одна вже з готовим бланком — місце займає
+        conn.execute("UPDATE items SET status = 'review' WHERE id = ?", (old[0],))
+
+    plan = batch.prepare(conn, root, TODAY, lim)
+
+    assert [p.item_id for p in plan.planned] == [old[7], old[6], old[5], old[4], old[3]]
+
+
+def test_new_cards_not_limited_by_old_room(conn, root, tmp_path):
+    old_cards(conn, root, 3, tmp_path)
+    new = add_item(conn, root, folder="77", post_id=77)
+    set_post_date(conn, 77, "2026-01-01T10:00:00")
+
+    plan = batch.prepare(conn, root, TODAY, batch.Limits(old_per_day=0))
+
+    assert [p.item_id for p in plan.planned] == [new]  # старих на день 0 — наперед нічого
+
+
+def test_waiting_old_cards_in_batch_count_ahead(conn, root, tmp_path):
+    old = old_cards(conn, root, 5, tmp_path)
+    with conn:
+        conn.execute(
+            "INSERT INTO ai_batches (id, status, created_at) VALUES (9, 'in_progress', 'x')"
+        )
+        conn.execute("INSERT INTO ai_batch_items VALUES (9, ?, 1, 'pending')", (old[0],))
+        conn.execute("INSERT INTO ai_batch_items VALUES (9, ?, 1, 'pending')", (old[1],))
+
+    plan = batch.prepare(
+        conn, root, TODAY, batch.Limits(old_per_day=1)
+    )  # наперед 3, 2 вже в дорозі
+
+    assert len(plan.planned) == 1
