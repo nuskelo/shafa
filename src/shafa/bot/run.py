@@ -85,7 +85,7 @@ def check_rights(tg: Telegram, channel: int) -> tuple[str, int]:
         if not isinstance(group, int):
             raise SetupError(
                 "У каналу немає групи для коментарів: Керування каналом → Обговорення → "
-                "прив'яжи групу"
+                "прив'яжи групу; якщо щойно прив'язала — зачекай 5 хв і запусти ще раз"
             )
         if not _is_admin(tg.get_chat_member(group, me["id"])):
             raise SetupError("Бот не адміністратор групи коментарів — зроби його адміном групи")
