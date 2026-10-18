@@ -261,7 +261,7 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
                     conn, root, session, form.PageDriver,
                     lambda s: listings.load(s, log=log), form.screens_dir(), held, log=log,
                     fetch_photo=lambda url: listings.fetch_photo(session, url),
-                    photos_dir=duplicates_dir(args.db),
+                    photos_dir=duplicates_dir(args.db), presence=channel_presence(root, log),
                 ).start(limit, day_limit)  # fmt: skip
             except KeyboardInterrupt:  # звіт сесії вже надруковано
                 return 130
@@ -295,6 +295,23 @@ def _fake_publish(p, args, held, root, limit: int, day_limit: int, log) -> int:
         session.close()
         server.close()
     return 0
+
+
+def channel_presence(root: Path, log):
+    """Перевірка «пост ще є в каналі» для робота (SITE-002) або None — бот не налаштований."""
+    from shafa.bot import presence, run
+    from shafa.bot.telegram import Telegram
+
+    try:
+        settings = run.settings(root)
+        token = run.token()
+    except run.SetupError as error:
+        log(f"Канал не перевіряю перед публікацією: {error}")
+        return None
+    chat = presence.service_chat(settings.owner_chat, settings.seller_chat)
+    if chat is None:
+        return None
+    return presence.Presence(Telegram(token), settings.channel_id, chat, log=log).check
 
 
 def duplicates_dir(db_path: Path) -> Path:

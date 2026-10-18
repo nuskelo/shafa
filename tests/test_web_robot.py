@@ -330,3 +330,16 @@ def test_reread_listings_button(conn, app):
     assert "робот перечитає «Мої речі»" in html(response)
     assert listings.stored(conn, 7) is None
     assert "перечитається на наступному запуску" in html(get(app, "/settings"))
+
+
+def test_deleted_post_reason_shown_in_archive(conn, root, app):
+    """SITE-002: робот поклав Картку в Архів — пост видалено з каналу; причина видна в списку."""
+    item = card(conn, root)
+    with conn:
+        conn.execute(
+            "UPDATE items SET status = 'archived', archived_at = '2026-10-18T00:00:00+00:00', "
+            "problem_code = 'post_deleted', problem_text = 'Пост видалено з каналу — продано' "
+            "WHERE id = ?",
+            (item,),
+        )
+    assert "Пост видалено з каналу — продано" in html(get(app, "/archived"))
