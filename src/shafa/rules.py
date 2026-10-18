@@ -207,8 +207,10 @@ def season(text: str) -> tuple[list[str] | None, str | None]:
 
 # Версія правил, за якими заповнено бланк: зростає, коли правила змінюються так, що старий бланк
 # варто перезаповнити (CORE-008 A4). 1 — до CORE-007 (у базі NULL), 2 — CORE-007,
-# 3 — SITE-003 (35+ без дитячих слів — доросле).
-RULES_VERSION = 3
+# 3 — SITE-003 (35+ без дитячих слів — доросле), 4 — CORE-009 (v1.7). Нова версія — програма на
+# старті перераховує бланки правилами без ШІ (CORE-009 B); зміна інструкції ШІ — ще й
+# `ai.PROMPT_VERSION`.
+RULES_VERSION = 4
 
 # Поля, які Продавчиня виправляє руками і які правила читають разом із текстом поста (CORE-008 B).
 EDIT_TEXT_FIELDS = ("title", "description")
@@ -257,6 +259,16 @@ def kid_words(text: str) -> bool:
     return bool(_KID.search(text))
 
 
+# Дитяча лінійка моделі (CORE-009 A3): «Kids», «Junior», «Jr», «J» після моделі («Speedcross J»).
+_KID_MODEL = re.compile(r"(?<![\w])(?:kids?|junior|jr|джуніор)(?![\w])", re.IGNORECASE)
+_J_AFTER_MODEL = re.compile(r"(?<=[A-Za-z0-9])\s+J(?![\w'’ʼ])")
+
+
+def kid_model(text: str) -> bool:
+    """У назві моделі ознака дитячої лінійки: Kids, Junior, Jr, «J» після моделі."""
+    return bool(_KID_MODEL.search(text) or _J_AFTER_MODEL.search(text))
+
+
 def adult_signs(text: str) -> bool:
     """Ознаки дорослого жіночого взуття для 35–36: каблук, «жіночі»."""
     return bool(_ADULT.search(text)) or said_gender(text) == WOMEN
@@ -285,7 +297,8 @@ _RANGE_AFTER = re.compile(r"^\s*[-–/]\s*\d")
 # «В наявності декілька розмірів» — кілька товарів (QA-001: пости-списки з «*» на кожен розмір).
 _SEVERAL = re.compile(r"(?<!\w)(?:де)?кілька\s+розмір|(?<!\w)різн\w*\s+розмір", re.IGNORECASE)
 # Розпаровка: лівий і правий різні — це не два товари, лишається жовтим.
-_UNPAIRED = re.compile(r"(?<!\w)лів\w*|(?<!\w)прав\w*|розпаров", re.IGNORECASE)
+# «Правий 37, лівий 38» — не «правильну підтримку» (CORE-009: хибна розпаровка в пілоті).
+_UNPAIRED = re.compile(r"(?<!\w)(?:лів|прав)(?:ий|а|е|ого|ому|ої|у)(?!\w)|розпаров", re.IGNORECASE)
 
 
 def _value(text: str) -> float:
@@ -296,21 +309,17 @@ def _shown(value: float) -> str:
     return f"{value:g}".replace(".", ",")
 
 
-def label_sizes(text: str, state: str) -> list[str] | None:
-    """§7 «вказаний X, ідуть на Y» кодом: вживане — [X, Y], нове — [X]. None — правила немає.
+def label_sizes(text: str) -> list[str] | None:
+    """§7 «вказаний X, ідуть на Y» кодом: на Шафу — [Y] і для вживаного, і для нового (CORE-009,
+    рішення Власника: так вона ставить сама, 1405). None — правила немає.
 
-    Ярлик не європейський («вказаний розмір 5», v1.6) — [Y]: на Шафі лише європейська система,
-    а UK це чи US, з тексту не видно; так вона й ставить на Шафі.
+    Обидва не європейські («9,5 US, ідуть на 10 US») — None: переводить таблиця US/UK.
     """
     label, goes = _LABEL.search(text), _GOES.search(text)
     if not label or not goes:
         return None
-    x, y = _value(label[1] or label[2]), _value(goes[1])
-    if x < FOREIGN_LABEL:  # обидва не європейські («9,5 US, ідуть на 10 US») — таблиця US/UK
-        return [_shown(y)] if y >= FOREIGN_LABEL else None
-    if state == NEW or x == y:
-        return [_shown(x)]
-    return [_shown(x), _shown(y)]
+    y = _value(goes[1])
+    return [_shown(y)] if y >= FOREIGN_LABEL else None
 
 
 def foreign_label(text: str) -> bool:

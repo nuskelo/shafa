@@ -123,7 +123,43 @@ def plan(
     )  # fmt: skip
 
 
-def save_blank(conn: sqlite3.Connection, item_id: int, fields: list[ai.Field]) -> None:
+def save_answer(
+    conn: sqlite3.Connection,
+    item_id: int,
+    answer: dict[str, Any],
+    prompt_version: int = ai.PROMPT_VERSION,
+    rebuilt: bool = False,
+    needs_ai: bool = False,
+) -> None:
+    """Відповідь ШІ як є — нові правила коду застосовуються до неї без нового запиту (CORE-009 B)."""
+    conn.execute(
+        """
+        INSERT INTO ai_answers (item_id, answer, prompt_version, rebuilt, needs_ai, saved_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (item_id) DO UPDATE SET answer = excluded.answer,
+            prompt_version = excluded.prompt_version, rebuilt = excluded.rebuilt,
+            needs_ai = excluded.needs_ai, saved_at = excluded.saved_at
+        """,
+        (
+            item_id,
+            json.dumps(answer, ensure_ascii=False),
+            prompt_version,
+            int(rebuilt),
+            int(needs_ai),
+            now(),
+        ),
+    )
+
+
+def save_blank(
+    conn: sqlite3.Connection,
+    item_id: int,
+    fields: list[ai.Field],
+    answer: dict[str, Any] | None = None,
+) -> None:
+    """Бланк (поля після коду) і, якщо є, відповідь ШІ, з якої його зроблено."""
+    if answer is not None:
+        save_answer(conn, item_id, answer)
     conn.execute("DELETE FROM blanks WHERE item_id = ?", (item_id,))
     conn.execute(
         "UPDATE items SET rules_version = ?, refill_at = NULL WHERE id = ?",
@@ -214,17 +250,21 @@ def set_status(
 REFILL_PROBLEMS = ("ai_error", "no_section")
 
 
+# Нова інструкція ШІ могла змінити Картку (CORE-009 B: «Перезаповнити» — лише такі).
+NEEDS_AI = "EXISTS (SELECT 1 FROM ai_answers WHERE item_id = items.id AND needs_ai = 1)"
+
+
 def refill_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    """Картки, які можна перезаповнити: `review` і проблеми ШІ/правил. Схвалені й опубліковані —
-    ніколи. `no_section` — лише з бланком ШІ (без нього це проблема даних, ШІ не допоможе)."""
+    """Картки, яким варто перезаповнитись: помилка ШІ, а `review` і `no_section` з бланком ШІ —
+    лише ті, які нова інструкція ШІ могла змінити (CORE-009 B; зміни коду — «Перерахувати
+    правилами», без ШІ). Схвалені й опубліковані — ніколи."""
     return conn.execute(
         f"""
         SELECT id, folder_name, post_id FROM items
         WHERE post_id IS NOT NULL AND purged_at IS NULL AND id NOT IN ({IN_BATCH})
-          AND (status = ?
+          AND ((status = ? AND {NEEDS_AI})
                OR (status = ? AND (problem_code = 'ai_error'
-                    OR (problem_code = 'no_section'
-                        AND EXISTS (SELECT 1 FROM blanks WHERE item_id = items.id)))))
+                    OR (problem_code = 'no_section' AND {NEEDS_AI}))))
         ORDER BY id
         """,
         (Status.REVIEW, Status.PROBLEM),
@@ -263,6 +303,104 @@ def mark_refill(conn: sqlite3.Connection, item_ids: list[int]) -> int:
     return marked
 
 
+# --- Перерахувати правилами, без ШІ (CORE-009 B) ---
+
+# Проблеми, які ставлять правила над текстом і відповіддю ШІ: перерахунок може їх зняти чи поставити.
+RECHECK_PROBLEMS = ("no_section", "many_items")
+_AI_DOUBT = "ШІ не впевнене: "
+
+
+def recheck_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Картки з бланком за старшими правилами коду: `review` і проблеми правил. Схвалені,
+    опубліковані й ті, що в ШІ (`new`, пакет), — ніколи."""
+    marks = ", ".join("?" * len(RECHECK_PROBLEMS))
+    return conn.execute(
+        f"""
+        SELECT id FROM items
+        WHERE post_id IS NOT NULL AND purged_at IS NULL AND id NOT IN ({IN_BATCH})
+          AND (rules_version IS NULL OR rules_version < ?)
+          AND (status = ? OR (status = ? AND problem_code IN ({marks})))
+          AND EXISTS (SELECT 1 FROM blanks WHERE item_id = items.id)
+        ORDER BY id
+        """,
+        (rules.RULES_VERSION, Status.REVIEW, Status.PROBLEM, *RECHECK_PROBLEMS),
+    ).fetchall()
+
+
+def answer_from_blank(conn: sqlite3.Connection, item_id: int) -> dict[str, Any]:
+    """Бланк до CORE-009 (відповіді ШІ не збереглося) → відповідь ШІ, наскільки її видно з бланка:
+    значення після коду (розміри вже європейські), сумніви ШІ — з причин «ШІ не впевнене: …»."""
+    answer: dict[str, Any] = {"size_system": "EU", "doubts": []}
+    for row in conn.execute(
+        "SELECT field, value, reason FROM blanks WHERE item_id = ?", (item_id,)
+    ):
+        answer[row["field"]] = json.loads(row["value"]) if row["value"] is not None else None
+        for part in (row["reason"] or "").split(_AI_DOUBT)[1:]:
+            reason = part.strip().removesuffix(";").strip()
+            answer["doubts"].append({"field": row["field"], "reason": reason})
+    return answer
+
+
+def _stored_answer(conn: sqlite3.Connection, item_id: int) -> tuple[dict[str, Any], int, bool]:
+    row = conn.execute(
+        "SELECT answer, prompt_version, rebuilt FROM ai_answers WHERE item_id = ?", (item_id,)
+    ).fetchone()
+    if row is None:  # бланк до CORE-009: інструкція — не новіша за QA-001
+        return answer_from_blank(conn, item_id), 1, True
+    return json.loads(row["answer"]), row["prompt_version"], bool(row["rebuilt"])
+
+
+def recheck(conn: sqlite3.Connection, item_ids: list[int] | None = None) -> int:
+    """Поточні правила коду — до збереженої відповіді ШІ, тексту поста і її правок (`edits` не
+    чіпаються). ШІ не викликається. Заодно — чи потрібне Картці ШІ (нова інструкція). Повертає,
+    скільки Карток перераховано."""
+    ids = [r["id"] for r in recheck_candidates(conn)]
+    if item_ids is not None:
+        ids = [i for i in ids if i in set(item_ids)]
+    marks = ", ".join("?" * len(RECHECK_PROBLEMS))
+    done = 0
+    with conn:
+        for item_id in ids:
+            text = conn.execute(
+                "SELECT posts.text FROM items JOIN posts USING (post_id) WHERE items.id = ?",
+                (item_id,),
+            ).fetchone()
+            if text is None:
+                continue
+            names = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
+                )
+            ]
+            answer, version, rebuilt = _stored_answer(conn, item_id)
+            fields = ai.check_answer(
+                answer, names, text[0], rules.edit_text(edits_of(conn, item_id))
+            )
+            problem = scan.text_problem(text[0])
+            if problem is None and no_section(fields):
+                problem = ("no_section", NO_SECTION_TEXT)
+            status, code, why = (
+                (Status.PROBLEM, *problem) if problem else (Status.REVIEW, None, None)
+            )
+            cursor = conn.execute(
+                f"""
+                UPDATE items SET status = ?, problem_code = ?, problem_text = ?, updated_at = ?
+                WHERE id = ? AND (status = ? OR (status = ? AND problem_code IN ({marks})))
+                """,
+                (status, code, why, now(), item_id, Status.REVIEW, Status.PROBLEM,
+                 *RECHECK_PROBLEMS),
+            )  # fmt: skip
+            if cursor.rowcount != 1:
+                continue
+            # кілька товарів у пості ШІ не виправить — «Перезаповнити» їм не пропонуємо
+            needs = code != "many_items" and ai.needs_ai(version, answer, text[0])
+            save_answer(conn, item_id, answer, version, rebuilt, needs)
+            save_blank(conn, item_id, fields)
+            done += 1
+    return done
+
+
 def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
     """Надіслати запит, перевірити відповідь, зберегти бланк, вартість і новий статус."""
     try:
@@ -278,7 +416,7 @@ def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
     with conn:
         log_request(conn, planned.item_id, usage, None)
         if set_status(conn, planned.item_id, None, fields):  # Картку вже взяли — бланк не чіпаємо
-            save_blank(conn, planned.item_id, fields)
+            save_blank(conn, planned.item_id, fields, answer)
     return Filled(planned.folder_name, usage, yellow=sum(f.yellow for f in fields))
 
 
@@ -313,5 +451,5 @@ def retry(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
             (now(), planned.item_id, Status.REVIEW),
         )
         if cursor.rowcount == 1:  # Картку тим часом схвалили чи відхилили — бланк не чіпаємо
-            save_blank(conn, planned.item_id, fields)
+            save_blank(conn, planned.item_id, fields, answer)
     return Filled(planned.folder_name, usage, yellow=sum(f.yellow for f in fields))

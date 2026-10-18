@@ -330,6 +330,10 @@ def check_section(value: Any) -> tuple[Field, Kind | None]:
     return Field("section", found), catalog.section_kind(found)
 
 
+NEW_ONE_SIZE = "нове — лише один розмір"
+UNPAIRED = "розпаровка: лівий і правий різні — перевір розмір"
+
+
 def _parse_size(text: str) -> float | None:
     try:
         return float(text.replace(",", "."))
@@ -358,7 +362,7 @@ def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, fl
     if allowed and not all(s in allowed for s in shown):
         return Field("sizes", shown, True, "розміру немає у списку Шафи для розділу"), numbers[0]
     if len(shown) == 2 and rules.condition(post_text) == rules.NEW:
-        return Field("sizes", shown, True, "нове — лише розмір з ярлика"), numbers[0]
+        return Field("sizes", shown, True, NEW_ONE_SIZE), numbers[0]
     return Field("sizes", shown), numbers[0]
 
 
@@ -394,13 +398,19 @@ _GROUP_NAMES = {
     catalog.BOYS: "для хлопчиків",
 }
 NO_KID_GENDER = "у тексті не сказано, для дівчинки чи хлопчика — перевір"
+MAYBE_KID = "можливо дитяча модель — перевір"
+# ШІ бачить на фото дитячі ознаки (липучки на дитячому фасоні, дитячий принт) — пише в doubts.
+# Лише про ознаки моделі — загальне «дитяче чи доросле» за розміром не рахується (SITE-003).
+_KID_DOUBT = re.compile(r"дитяч\w*\s+(?:модел|лінійк|ознак|фасон|принт)", re.IGNORECASE)
 
 
-def _target(kind: Kind, size: float, text: str) -> tuple[str | None, str | None]:
-    """Група розділу за текстом і розміром (`docs/rules.md` §6, v1.4): (група, причина жовтого).
+def _target(
+    kind: Kind, size: float, text: str, ai_kid: bool = False
+) -> tuple[str | None, str | None]:
+    """Група розділу за текстом і розміром (`docs/rules.md` §6): (група, причина жовтого).
 
-    (None, None) — лишається вибір ШІ (40–42 без слова в тексті). 35–39 без дитячих слів —
-    жіноче (v1.5); з дитячими словами — як у v1.4.
+    (None, None) — лишається вибір ШІ (41–42 без слова в тексті; 40, коли ШІ бачить чоловіче).
+    Група й причина разом — код переносить у групу, але поле жовте (35–36 «можливо дитяча»).
     """
     said = rules.said_gender(text)
     if size < rules.FOREIGN_LABEL:  # не європейський розмір (UK/US з ярлика) — групу він не каже
@@ -415,38 +425,40 @@ def _target(kind: Kind, size: float, text: str) -> tuple[str | None, str | None]
         return _GROUPS[said], None
     if size < 35:
         return None, (NO_KID_GENDER if kind is Kind.KIDS else f"розмір {_number(size)} — дитячий")
-    if size < 40 and not rules.kid_words(text):  # SITE-003: у неї 35+ — майже завжди доросле
+    kid = rules.kid_words(text)
+    if size < 37 and not rules.adult_signs(text) and (kid or rules.kid_model(text) or ai_kid):
+        # CORE-009 A3: дитяча лінійка (Kids, Junior, «J») чи дитячі ознаки — жіноче, але перевірити
+        if kind is Kind.KIDS and kid:  # текст каже «дитячі», і ШІ згодне — лишається дитяче
+            return None, NO_KID_GENDER
+        return catalog.WOMEN, MAYBE_KID
+    if size < 37 or (size < 40 and not (kid and kind is Kind.KIDS)):  # SITE-003: 35+ — доросле
         return catalog.WOMEN, None
-    if size < 37:
-        if kind is Kind.KIDS:
-            return (catalog.WOMEN, None) if rules.adult_signs(text) else (None, NO_KID_GENDER)
-        return (catalog.WOMEN, None) if kind is Kind.MEN else (None, None)
+    if size == 40 and not kid:  # CORE-009 A1: 40 — жіноче; чоловіче — лише якщо ШІ бачить явне
+        return (None, None) if kind is Kind.MEN else (catalog.WOMEN, None)
     if kind is Kind.KIDS:
         return None, f"розмір {_number(size)} зазвичай дорослий"
-    if size < 40:
-        return catalog.WOMEN, None
     if size < 43:
         return None, None
     return catalog.MEN, None
 
 
 def check_group(
-    section: Field, kind: Kind | None, size: float | None, text: str
+    section: Field, kind: Kind | None, size: float | None, text: str, ai_kid: bool = False
 ) -> tuple[Field, bool]:
     """Розділ у потрібній групі. Друге — групу вирішив код (сумнів ШІ про стать не рахується)."""
     if kind in (None, Kind.ACCESSORY) or size is None or section.yellow:
         return section, False
-    group, reason = _target(kind, size, text)
-    if reason:
-        return Field("section", section.value, True, reason), False
+    group, reason = _target(kind, size, text, ai_kid)
     if group is None:
-        return section, False
+        return (
+            (Field("section", section.value, True, reason), False) if reason else (section, False)
+        )
     path = catalog.moved(section.value, group)
     if path is None:
         name = section.value.rsplit(catalog.SEP, 1)[1]
         why = f"має бути {_GROUP_NAMES[group]}, але типу «{name}» там немає — вибери розділ"
         return Field("section", section.value, True, why), False
-    return Field("section", path), True
+    return Field("section", path, bool(reason), reason), True
 
 
 BOOTS = "Чоботи"
@@ -666,16 +678,32 @@ def _with_doubts(fields: list[Field], doubts: Any, decided: set[str]) -> list[Fi
     return result
 
 
+def _ai_kid(answer: dict[str, Any]) -> bool:
+    """ШІ пише в сумнівах про розділ, що модель може бути дитяча (ознаки на фото, CORE-009 A3)."""
+    doubts = answer.get("doubts")
+    return any(
+        isinstance(d, dict)
+        and d.get("field") == "section"
+        and _KID_DOUBT.search(_text(d.get("reason")) or "")
+        for d in (doubts if isinstance(doubts, list) else [])
+    )
+
+
 def _code_sizes(
     answer: dict[str, Any], sizes: Field, path: str | None, post_text: str
 ) -> tuple[Field, bool]:
     """Розмір за текстом: «вказаний X, ідуть на Y» кодом (§7); один розмір у тексті, і ШІ дало
     його ж — сумнів ШІ не рахується. Розпаровка й US/UK — як було, крім ярлика UK/US з «ідуть на»
     (v1.6: тоді розмір — «ідуть на»)."""
+    if rules.unpaired(
+        post_text
+    ):  # CORE-009: одна зрозуміла причина замість «нове — …» і сумніву ШІ
+        keep = None if sizes.reason in (None, NEW_ONE_SIZE) else sizes.reason
+        return Field("sizes", sizes.value, True, _join(keep, UNPAIRED)), True
     foreign = answer.get("size_system") in (sizes_mod.US, sizes_mod.UK)
-    if (foreign and not rules.foreign_label(post_text)) or rules.unpaired(post_text):
+    if foreign and not rules.foreign_label(post_text):
         return sizes, False
-    label = rules.label_sizes(post_text, rules.condition(post_text))
+    label = rules.label_sizes(post_text)
     if label is not None:
         return check_sizes(label, path, post_text)[0], True
     found = rules.text_sizes(post_text)
@@ -695,15 +723,17 @@ def check_answer(
     section, kind = check_section(answer.get("section"))
     path = catalog.find_section(section.value) if section.value else None  # None — розділу немає
     sizes, first_size = check_sizes_any(answer, path, kind, post_text)
-    if not rules.unpaired(post_text) and (label := rules.label_sizes(post_text, rules.NEW)):
+    if not rules.unpaired(post_text) and (label := rules.label_sizes(post_text)):
         first_size = _parse_size(label[0])  # QA-001: групу каже ярлик з тексту, не відповідь ШІ
-    section, group_decided = check_group(section, kind, first_size, words)
+    section, group_decided = check_group(section, kind, first_size, words, _ai_kid(answer))
     section = check_shoe_type(section, words)
     moved = catalog.find_section(section.value) if section.value else None
     if moved != path:  # код переніс у іншу групу чи тип — розміри за списком нового розділу
         path, kind = moved, catalog.section_kind(moved) if moved else None
         sizes, first_size = check_sizes_any(answer, path, kind, post_text)
     sizes, sizes_decided = _code_sizes(answer, sizes, path, post_text)
+    if not section.value:  # розділу немає — Картка в «Проблемах»; друге жовте «немає розміру» — шум
+        sizes, sizes_decided = Field("sizes", sizes.value), True
     decided = {"section"} if group_decided else set()
     if group_decided and catalog.characteristic(path, "teen") is None:
         decided.add("teen")  # код переніс у доросле — «Категорія» (дитячий / підліток) не про нього
@@ -728,6 +758,73 @@ def check_answer(
         check_photo_order(answer.get("photo_order"), photo_names),
     ]
     return _with_doubts(fields, answer.get("doubts"), decided)
+
+
+# --- Чи потрібне ШІ після зміни інструкції (CORE-009 B) ---
+
+# Версія інструкції ШІ (`prompts/blank.md`): зростає, коли інструкція змінюється так, що ШІ може
+# відповісти інакше. 1 — до QA-001 (і всі бланки без збереженої відповіді), 2 — QA-001 (v1.6),
+# 3 — CORE-009 (v1.7: 40, «можливо дитяча модель»). Разом з нею піднімається `rules.RULES_VERSION` —
+# тоді програма на старті перерахує Картки й позначить, яким потрібне ШІ.
+PROMPT_VERSION = 3
+
+# Слова назви лише з тексту (v1.6): (слово в назві, корінь у тексті) — «замшеві» є, коли в тексті «замша».
+_TITLE_WORDS = (
+    ("оригінал", "оригінал"), ("шкірян", "шкір"), ("замшев", "замш"), ("термо", "термо"),
+    ("зимов", "зим"), ("мембран", "мембран"),
+)  # fmt: skip
+
+
+def _answer_size(answer: dict[str, Any], text: str) -> float | None:
+    label = rules.label_sizes(text)
+    sizes = label or _strings(answer.get("sizes")) or []
+    return _parse_size(sizes[0]) if sizes else None
+
+
+def _qa001_changes(answer: dict[str, Any], text: str) -> bool:
+    """v1.6: «Челсі» лише з гумками; слова назви — лише з тексту; без сумніву про мембрану; 41–42 —
+    без сумніву про стать за явними жіночими ознаками (40 тепер вирішує код, CORE-009)."""
+    if answer.get("type") == "Челсі":
+        return True
+    title, lower = (_text(answer.get("title")) or "").casefold(), text.casefold()
+    if any(word in title and stem not in lower for word, stem in _TITLE_WORDS):
+        return True
+    size = _answer_size(answer, text)
+    gender_open = size is not None and 41 <= size < 43 and rules.said_gender(text) is None
+    for doubt in answer.get("doubts") or []:
+        reason = _text(doubt.get("reason")) if isinstance(doubt, dict) else None
+        if not reason:
+            continue
+        if "мембран" in reason.casefold():
+            return True
+        if gender_open and doubt.get("field") == "section" and _GENDER_DOUBT.search(reason):
+            return True
+    return False
+
+
+def _core009_changes(answer: dict[str, Any], text: str) -> bool:
+    """v1.7: 35–36 — ШІ шукає на фото дитячі ознаки; 40 — чоловіче лише за явними ознаками."""
+    size = _answer_size(answer, text)
+    if size is None or rules.said_gender(text) is not None:
+        return False
+    if 35 <= size < 37:
+        return not rules.adult_signs(text)
+    return size == 40 and (_text(answer.get("section")) or "").startswith(catalog.MEN)
+
+
+# (версія, чи могла зміна інструкції цієї версії змінити відповідь)
+PROMPT_CHANGES = ((2, _qa001_changes), (3, _core009_changes))
+
+
+def needs_ai(prompt_version: int, answer: dict[str, Any], post_text: str) -> bool:
+    """Відповідь ШІ за старшою інструкцією, і нова могла б її змінити — варто перезаповнити.
+
+    Зміни лише коду ШІ не потребують — їх застосовує «Перерахувати правилами».
+    """
+    return any(
+        version > prompt_version and changes(answer, post_text)
+        for version, changes in PROMPT_CHANGES
+    )
 
 
 def make_client(api_key: str) -> anthropic.Anthropic:

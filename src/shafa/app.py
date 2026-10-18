@@ -14,7 +14,7 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from shafa import config, db, photos, places, review, web
+from shafa import config, db, fill, photos, places, review, web
 from shafa.robot import lock, publish
 
 LOCK_NAME = "ui.lock"
@@ -101,6 +101,7 @@ def start(
         try:
             for item_id in review.purge_archive(conn):
                 photos.drop_thumbnails(cache, item_id)
+            fill.recheck(conn)  # нова версія правил — перерахунок без ШІ (CORE-009 B)
         finally:
             conn.close()
         holder: dict[str, web.Server] = {}

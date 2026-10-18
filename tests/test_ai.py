@@ -377,7 +377,7 @@ def test_gender_and_teen_only_where_they_belong():
 def test_sizes_new_item_only_label_size():
     new_post = POST.replace("в ідеальному стані", "нові")
     fields = by_name(ai.check_answer(answer(sizes=["41", "42"]), NAMES, new_post))
-    assert (fields["sizes"].yellow, fields["sizes"].reason) == (True, "нове — лише розмір з ярлика")
+    assert (fields["sizes"].yellow, fields["sizes"].reason) == (True, "нове — лише один розмір")
 
 
 def test_babies_ukrainian_sizes_and_required_gender():
@@ -705,12 +705,13 @@ def test_23_34_without_gender_as_before():
 @pytest.mark.parametrize(
     ("text", "ai_sizes", "sizes"),
     [
-        ("Черевики. Вказаний 39 розмір, ідуть на 38. 900грн", ["38"], ["39", "38"]),
-        ("Черевики. На ярлику 40, ідуть на 39,5. 900грн", ["39,5"], ["40", "39,5"]),
-        ("Нові черевики. Вказаний 39 розмір, ідуть на 38. 900грн", ["39", "38"], ["39"]),
+        ("Черевики. Вказаний 39 розмір, ідуть на 38. 900грн", ["39", "38"], ["38"]),
+        ("Черевики. На ярлику 40, ідуть на 39,5. 900грн", ["39,5"], ["39,5"]),
+        ("Нові черевики. Вказаний 39 розмір, ідуть на 38. 900грн", ["39"], ["38"]),
     ],
 )
 def test_label_rule_applied_by_code(text, ai_sizes, sizes):
+    """CORE-009 A2: на Шафу — «ідуть на» і для вживаного, і для нового."""
     fields = check_text(text, sizes=ai_sizes, doubts=[doubt("sizes", "ярлик і реальний різні")])
     assert (fields["sizes"].value, fields["sizes"].yellow) == (sizes, False)
 

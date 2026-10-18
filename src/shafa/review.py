@@ -154,7 +154,7 @@ class Card:
     fields: dict[str, FieldView]
     photos: list[Photo]
     queue_pos: int | None = None  # місце старої Картки у списку імпорту
-    old_rules: bool = False  # бланк заповнено за старішими правилами (CORE-008 A4)
+    old_rules: bool = False  # нова інструкція ШІ могла змінити бланк — «Перезаповнити» (CORE-009 B)
 
     @property
     def kind(self) -> Kind | None:
@@ -344,8 +344,9 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
     """Картка з усіма полями або None (немає або архів уже очищено)."""
     row = conn.execute(
         """
-        SELECT items.*, posts.date AS post_date, posts.text AS post_text
-        FROM items LEFT JOIN posts USING (post_id)
+        SELECT items.*, posts.date AS post_date, posts.text AS post_text,
+               ai_answers.needs_ai AS needs_ai
+        FROM items LEFT JOIN posts USING (post_id) LEFT JOIN ai_answers ON ai_answers.item_id = items.id
         WHERE items.id = ? AND items.purged_at IS NULL
         """,
         (item_id,),
@@ -416,7 +417,7 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         fields,
         photos,
         row["queue_pos"],
-        bool(blanks) and (row["rules_version"] or 0) < rules.RULES_VERSION,
+        bool(blanks) and bool(row["needs_ai"]),
     )
 
 

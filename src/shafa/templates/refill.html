@@ -3,7 +3,7 @@
 {% block main %}
 <section class="refill">
   {% if count %}
-  <p>Перезаповнити не перевірені картки: <strong>≈ {{ count }} карток, ≈ {{ cost }}</strong> (пакетом; ліміт на добу {{ budget }}).</p>
+  <p>Перезаповнити картки, які нова інструкція ШІ могла б заповнити інакше: <strong>≈ {{ count }} карток, ≈ {{ cost }}</strong> (пакетом; ліміт на добу {{ budget }}).</p>
   <p>Ваші ручні правки збережуться, схвалені й опубліковані картки не чіпаємо.{% if skipped %} Не вийде підготувати (фото не відкривається): {{ skipped }}.{% endif %}</p>
   <form method="post" action="/refill">
     <input type="hidden" name="token" value="{{ token }}">
