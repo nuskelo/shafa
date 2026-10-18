@@ -37,7 +37,7 @@ class FakeChannel:
             raise httpx2.ConnectError("немає зв'язку", request=request)
         if self.mode == "429" and method == "forwardMessage":
             body = {"ok": False, "error_code": 429, "description": "Too Many Requests: retry",
-                    "parameters": {"retry_after": 17}}  # fmt: skip
+                    "parameters": {"retry_after": 100}}  # fmt: skip
             return httpx2.Response(429, json=body)
         if self.mode == "protected" and method == "forwardMessage":
             description = "Bad Request: message has protected content and can't be forwarded"
@@ -207,15 +207,13 @@ def test_429_pauses_checks_for_retry_after(conn, root, on, worker, clock, channe
 
     worker.step()
     channel.mode = None
+    clock.pass_(seconds=31)  # власний повтор поста (30 с) минув, а Retry-After (100 с) — ні
     worker.step()
 
-    assert channel.forwards() == [1401]  # другої спроби до кінця Retry-After немає
-    clock.pass_(seconds=18)
+    assert channel.forwards() == [1401]
+    clock.pass_(seconds=70)
     worker.step()
-    assert len(channel.forwards()) == 1  # job чекає свого next_at (повтор через 30 с)
-    clock.pass_(seconds=30)
-    worker.step()
-    assert len(channel.forwards()) == 2
+    assert channel.forwards() == [1401, 1401]
 
 
 def test_copy_in_service_chat_deleted_every_time(conn, root, on, worker, clock, channel):
@@ -412,3 +410,14 @@ def test_enqueue_keeps_posted_time_zone_independent(conn, root, on):
     add_post(conn, root)
     not_before = datetime.fromisoformat(job(conn)["not_before"])
     assert not_before == datetime.fromisoformat(POSTED) + timedelta(days=7)
+
+
+def test_server_error_with_not_found_text_is_unknown(said, channel):
+    """Лише 400 «повідомлення немає» = видалено; 5xx з будь-яким текстом — невідомо."""
+
+    def broken(request):
+        body = {"ok": False, "error_code": 500, "description": "message to forward not found"}
+        return httpx2.Response(500, json=body)
+
+    tg = Telegram("123:секрет", httpx2.Client(transport=httpx2.MockTransport(broken)))
+    assert Presence(tg, CHANNEL, OWNER, log=said["log"].append).check(1401) == UNKNOWN
