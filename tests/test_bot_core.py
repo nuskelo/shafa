@@ -1393,10 +1393,12 @@ def test_published_post_queued_for_site_with_channel_date_and_zone(
     press(upd, bot, tg)
 
     ((post_id, folder, posted_at, text, job_state),) = site_jobs(conn)
-    assert (post_id, folder, job_state) == (1401, "1401", "fields")
+    assert (post_id, folder, job_state) == (1401, "1401", "waiting")  # SITE-002: через 7 днів
     assert text == tg.channel_posts[0][1]  # текст поста як у каналі
     moment = datetime.fromisoformat(posted_at)
     assert moment.utcoffset() is not None and moment.timestamp() == 1_791_960_000
+    not_before = conn.execute("SELECT not_before FROM site_jobs").fetchone()[0]
+    assert datetime.fromisoformat(not_before).timestamp() == 1_791_960_000 + 7 * 86400
     assert state(conn) == "published"
 
 
@@ -1421,6 +1423,23 @@ def test_site_queue_failure_never_breaks_channel_publish(
 
     assert state(conn) == "published"
     assert any(t.startswith("Опубліковано:") for t in tg.texts(SELLER))
+
+
+def test_edited_channel_post_updates_waiting_site_text_only_for_our_channel(
+    conn, bot, tg, upd, clock, site_on
+):
+    """SITE-002: пара ще чекає сайту — правка поста в каналі дає новий текст; чужий канал — ні."""
+    send_post(bot, tg, upd, clock)
+    press(upd, bot, tg)
+    other = {"chat": {"id": -100555}, "message_id": 1401, "caption": "чужий"}
+    bot.handle(upd(edited_channel_post=other))
+    assert site_jobs(conn)[0][3] == tg.channel_posts[0][1]
+
+    ours = {"chat": {"id": CHANNEL}, "message_id": 1401, "caption": "Кросівки Lowa 37. 900грн"}
+    bot.handle(upd(edited_channel_post=ours))
+
+    assert site_jobs(conn)[0][3] == "Кросівки Lowa 37. 900грн"
+    assert conn.execute("SELECT count(*) FROM bot_updates").fetchone()[0] >= 2  # не повторюємо
 
 
 def test_channel_refusal_not_queued_for_site(conn, bot, tg, upd, clock, site_on):

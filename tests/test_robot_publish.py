@@ -100,6 +100,8 @@ class Env:
         self.on_submit = None
         self.clock_jump = 0.0
         self.today = datetime(2026, 10, 13, 12, 0).astimezone()
+        self.presence = None  # SITE-002: {номер поста: present/gone/unknown}
+        self.checked: list[int] = []
 
     def make_driver(self, session):
         self.driver = PubDriver(session, self.conn, self.results, self.raises, self.on_submit)
@@ -122,7 +124,12 @@ class Env:
                 self.conn, self.root, self.session, self.make_driver, self.load,
                 self.tmp / "екрани", held, log=self.lines.append, sleep=sleep, clock=lambda: t[0],
                 rand=lambda a, b: (a + b) / 2, today=lambda: self.today,
+                presence=None if self.presence is None else self.check,
             ).start(limit, day_limit)  # fmt: skip
+
+    def check(self, post_id):
+        self.checked.append(post_id)
+        return self.presence.get(post_id, "present")
 
 
 @pytest.fixture
@@ -942,3 +949,49 @@ def test_template_words_do_not_make_titles_similar():
     b = "Черевики Ecco лакові низькі оригінал 40 розміру в ідеальному стані"
     assert not similar(a, b, "Ecco")
     assert similar(a, "Високі шкіряні черевики Ecco 40 розмір", "Ecco")
+
+
+# --- SITE-002: пост видалено з каналу (продано) ---
+
+
+def bot_post(env, post_id):
+    with env.conn:
+        env.conn.execute("UPDATE posts SET source = 'bot' WHERE post_id = ?", (post_id,))
+
+
+def test_deleted_bot_post_archived_not_published(env):
+    gone = add(env, "1342", 1342, "2025-03-01T10:00:00")
+    kept = add(env, "1400", 1400, "2025-05-01T10:00:00")
+    other_item(env, kept)
+    bot_post(env, 1342)
+    bot_post(env, 1400)
+    env.presence = {1342: "gone"}
+
+    report = env.run()
+
+    assert state(env.conn, gone) == (Status.ARCHIVED, "post_deleted")
+    assert row(env.conn, gone)["problem_text"] == "Пост видалено з каналу — продано"
+    assert row(env.conn, gone)["archived_at"]
+    assert state(env.conn, kept)[0] == Status.PUBLISHED
+    assert [p for p, _ in report.published] == [1400]
+    assert env.driver.submits == [Status.PUBLISHING]
+
+
+def test_unknown_presence_is_not_sold_published_as_usual(env):
+    item = add(env)
+    bot_post(env, 1342)
+    env.presence = {1342: "unknown"}
+
+    env.run()
+
+    assert state(env.conn, item)[0] == Status.PUBLISHED
+
+
+def test_only_bot_posts_checked(env):
+    item = add(env)  # пост з Експорту — інший канал, не перевіряємо
+    env.presence = {1342: "gone"}
+
+    env.run()
+
+    assert env.checked == []
+    assert state(env.conn, item)[0] == Status.PUBLISHED

@@ -275,8 +275,26 @@ class Bot:
             self._callback(update_id, update["callback_query"])
         elif "message" in update:
             self._message(update_id, update["message"])
+        elif "edited_channel_post" in update:
+            self._channel_edit(update_id, update["edited_channel_post"])
         else:
             self._mark(update_id)
+
+    def _channel_edit(self, update_id: int, post: Any) -> None:
+        """Пост нашого каналу змінено: пара ще чекає сайту — піде новий текст (SITE-002)."""
+        self._mark(update_id)
+        if (
+            not isinstance(post, dict)
+            or (post.get("chat") or {}).get("id") != self.settings.channel_id
+        ):
+            return
+        post_id, text = post.get("message_id"), post.get("caption", post.get("text"))
+        if (
+            isinstance(post_id, int)
+            and isinstance(text, str)
+            and site.edited(self.conn, post_id, text)
+        ):
+            self.log(f"Пост {post_id} змінено в каналі — на сайт піде новий текст")
 
     def _mark(self, update_id: int) -> None:
         with self.conn:

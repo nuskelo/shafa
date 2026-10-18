@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import jinja2
 from PIL import UnidentifiedImageError
 
-from shafa import ai, batch, catalog, config, db, fill, options, photos, review
+from shafa import ai, batch, catalog, config, db, fill, options, photos, review, site
 from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
@@ -375,6 +375,7 @@ class App:
             "robot": self.robot_state(conn),
             "ai": self.ai_state(conn),
             "bot": self.bot_state(conn),
+            "site": self.site_state(conn),
             "can_quit": self.on_quit is not None,
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
@@ -657,6 +658,10 @@ class App:
 
     # --- Робот ---
 
+    def site_state(self, conn) -> tuple[int, int, int] | None:
+        """Рядок панелі «Сайт: чекає N · вийде сьогодні M · продано за тиждень K» (SITE-002)."""
+        return site.summary(conn) if site.enabled() else None
+
     def robot_state(self, conn) -> control.State:
         process = self.process
         code = process.poll() if process is not None else None
@@ -672,7 +677,7 @@ class App:
         try:
             html = self.env.get_template("panel.html").render(
                 token=self.token, robot=self.robot_state(conn), ai=self.ai_state(conn),
-                bot=self.bot_state(conn),
+                bot=self.bot_state(conn), site=self.site_state(conn),
                 back=safe_back(request.arg("back")), fake=self.fake_shafa,
             )  # fmt: skip
         finally:

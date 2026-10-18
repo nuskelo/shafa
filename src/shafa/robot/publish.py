@@ -26,6 +26,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from shafa import catalog, config, review
+from shafa.bot.presence import GONE
 from shafa.db import Status, now
 from shafa.folders import PUBLISHED_DIR, is_old
 from shafa.robot import listings as listings_mod
@@ -184,6 +185,16 @@ def queue(conn: sqlite3.Connection) -> list[int]:
     return [r[0] for r in queue_rows(conn)]
 
 
+POST_DELETED = "post_deleted"
+POST_DELETED_TEXT = "Пост видалено з каналу — продано"
+
+
+def from_bot(conn: sqlite3.Connection, post_id: int) -> bool:
+    """Пост опублікував бот (у канал `TELEGRAM_BOT_CHANNEL_ID`) — лише такі перевіряємо."""
+    row = conn.execute("SELECT source FROM posts WHERE post_id = ?", (post_id,)).fetchone()
+    return row is not None and row[0] == "bot"
+
+
 def already_published(conn: sqlite3.Connection, item_id: int, post_id: int | None) -> str | None:
     """Назва іншої папки, з якої цей пост уже публікувався (D3), або None."""
     if post_id is None:
@@ -325,8 +336,10 @@ class Run:
         clock: Callable[[], float] = time.time,
         rand: Callable[[float, float], float] = random.uniform,
         today: Callable[[], datetime] = lambda: datetime.now().astimezone(),
+        presence: Callable[[int], str] | None = None,
     ) -> None:
         self.conn, self.root, self.session = conn, root, session
+        self.presence = presence  # SITE-002: чи пост ще є в каналі (`bot.presence`)
         self.make_driver, self.load_listings = make_driver, load_listings
         self.screens, self.held, self.log = screens, held, log
         self.fetch_photo, self.photos_dir = fetch_photo, photos_dir
@@ -467,6 +480,25 @@ class Run:
                 return stop
         return None
 
+    def _post_deleted(self, report: Report, card: review.Card) -> bool:
+        """SITE-002: пост від бота видалено з каналу (вона видаляє лише продане) → Архів, не
+        публікуємо. «Невідомо» (мережа, 429) — публікуємо як завжди: це не продаж."""
+        if self.presence is None or card.post_id is None or not from_bot(self.conn, card.post_id):
+            return False
+        if self.presence(card.post_id) != GONE:
+            return False
+        with self.conn:
+            cursor = self.conn.execute(
+                "UPDATE items SET status = ?, archived_at = ?, problem_code = ?, "
+                "problem_text = ?, updated_at = ? WHERE id = ? AND status = ?",
+                (Status.ARCHIVED, now(), POST_DELETED, POST_DELETED_TEXT, now(), card.id,
+                 Status.APPROVED),
+            )  # fmt: skip
+        if cursor.rowcount == 1:
+            report.notes.append(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві")
+            self.log(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві, не публікую")
+        return True
+
     def _problem(self, report: Report, card: review.Card, source: str, code: str, text: str):
         if _problem(self.conn, card.id, source, code, text):
             report.problems.append((card.post_id, code, text))
@@ -512,6 +544,8 @@ class Run:
         if other := already_published(self.conn, card.id, card.post_id):
             self._problem(report, card, ok, "already_published",
                           f"Цей пост уже опубліковано з іншої папки ({other})")  # fmt: skip
+            return None
+        if self._post_deleted(report, card):
             return None
         try:
             steps, notes = plan(card, self.root)

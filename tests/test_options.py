@@ -15,6 +15,7 @@ def form(root, **changes):
         "SHAFA_DAILY_LIMIT": "25", "SHAFA_AI_DAILY_USD": "2,5", "SHAFA_AI_WAIT_DAYS": "5",
         "SHAFA_AI_BATCH_LIMIT": "40", "SHAFA_ROOT_DIR": str(root), "SHAFA_DELETE_PUBLISHED": "1",
         "SHAFA_DAILY_OLD": "10", "SHAFA_DAILY_NEW": "5", "SHAFA_LISTINGS_DAYS": "3",
+        "SHAFA_SITE_WAIT_DAYS": "7",
     }  # fmt: skip
     values.update(changes)
     return {k: v for k, v in values.items() if v is not None}
@@ -97,3 +98,23 @@ def test_site_switch_off_by_default_and_saved(app, root, monkeypatch):
 
     post(app, "/settings", **form(root))
     assert not site.enabled()
+
+
+def test_site_wait_days_and_sold_check_defaults_and_saved(app, root):
+    """SITE-002: «Чекати днів перед сайтом» (7) і «Перевіряти продане щоночі» (типово так)."""
+    page = html(get(app, "/settings"))
+    assert 'name="SHAFA_SITE_WAIT_DAYS" value="7"' in page
+    assert 'name="SHAFA_SOLD_CHECK" value="1" checked' in page
+    assert site.wait_days() == 7 and site.sold_check()
+
+    post(app, "/settings", **form(root, SHAFA_SITE_WAIT_DAYS="0"))  # прапорець знято
+    assert site.wait_days() == 0 and not site.sold_check()
+
+    post(app, "/settings", **form(root, SHAFA_SITE_WAIT_DAYS="3", SHAFA_SOLD_CHECK="1"))
+    assert site.wait_days() == 3 and site.sold_check()
+
+
+def test_site_wait_days_out_of_range_not_saved(app, root):
+    page = html(post(app, "/settings", **form(root, SHAFA_SITE_WAIT_DAYS="61")))
+    assert "від 0 до 60" in page
+    assert site.wait_days() == 7
