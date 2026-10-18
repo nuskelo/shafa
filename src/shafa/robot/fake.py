@@ -138,6 +138,9 @@ class FakeDriver:
         self.session = session
         self.page = session.page
 
+    def reset(self) -> None:
+        pass
+
     @staticmethod
     def _step() -> None:
         time.sleep(random.uniform(0.05, 0.2))

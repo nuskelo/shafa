@@ -15,6 +15,9 @@ class FakeDriver:
         self.brand_miss = None
         self.no_brands = {"Невідомий бренд"}  # цих брендів «на Шафі» наживо немає
 
+    def reset(self):
+        self.brand_miss = None
+
     def _call(self, *args):
         if self.missing and self.missing in map(str, args):
             raise FieldMissing(self.missing)
