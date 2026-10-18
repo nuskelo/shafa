@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 class Status(StrEnum):
@@ -379,9 +379,24 @@ ALTER TABLE post_checks ADD COLUMN sold_note TEXT;
 UPDATE post_checks SET hold = 'night' WHERE gone_at IS NOT NULL AND sold_at IS NULL;
 """
 
+# Версія 14 (CORE-009): відповідь ШІ як є (JSON) — нові правила коду перераховуються без нового
+# запиту («Перерахувати правилами»). `prompt_version` — за якою інструкцією ШІ відповіло
+# (`ai.PROMPT_VERSION`); `rebuilt` — відповіді не збереглося (бланк до CORE-009), її зібрано з
+# бланка; `needs_ai` — нова інструкція ШІ може змінити цю Картку («Перезаповнити»).
+ANSWERS = """
+CREATE TABLE ai_answers (
+    item_id        INTEGER PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+    answer         TEXT NOT NULL,
+    prompt_version INTEGER NOT NULL,
+    rebuilt        INTEGER NOT NULL DEFAULT 0 CHECK (rebuilt IN (0, 1)),
+    needs_ai       INTEGER NOT NULL DEFAULT 0 CHECK (needs_ai IN (0, 1)),
+    saved_at       TEXT NOT NULL
+);
+"""
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
-    9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD,
+    9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD, 13: ANSWERS,
 }  # fmt: skip
 
 

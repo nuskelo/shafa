@@ -411,7 +411,7 @@ def apply_result(conn: sqlite3.Connection, batch_id: int, line: Any, report: Col
                 if fill.set_status(
                     conn, item_id, None, fields
                 ):  # Картку тим часом змінили — не чіпаємо
-                    fill.save_blank(conn, item_id, fields)
+                    fill.save_blank(conn, item_id, fields, answer)
                 state = "done"
                 report.filled += 1
         else:  # errored: не оплачується

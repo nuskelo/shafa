@@ -30,7 +30,7 @@
         <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, card.post_date[:10] if card.post_date, ("видалиться " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if current == "archived" and card.archived_at] | select | join(" · ") }}</span>
       </span>
       {% if card.old_rules %}
-      <span class="badge old-rules" title="Бланк заповнено до оновлення правил — варто перезаповнити">заповнено старими правилами</span>
+      <span class="badge old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто перезаповнити">заповнено старими правилами</span>
       {% endif %}
       {% if card.yellow and current != "problem" %}
       <span class="badge">Жовтих: {{ card.yellow }}</span>

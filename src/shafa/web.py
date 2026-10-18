@@ -108,6 +108,7 @@ MESSAGES = {
     "ai_busy": "ШІ вже працює — зачекайте хвилину",
     "refill_started": "Перезаповнюю: картки пішли на ШІ пакетом — результати зазвичай до години, "
     "ваші правки збережуться",
+    "recheck_done": "Перераховано за новими правилами, без ШІ — ваші правки збережено",
     "ai_retry_done": "ШІ заповнило бланк заново — ваші правки збережено",
     "ai_retry_failed": "ШІ не вдалося — старий бланк лишився (подробиці на панелі)",
     "ai_budget": "Ліміт витрат на ШІ за добу вичерпано — спробуйте завтра",
@@ -201,6 +202,7 @@ class AiState:
     busy: str | None = None
     note: str | None = None
     refillable: int = 0  # Карток, які можна перезаповнити (CORE-008)
+    recheckable: int = 0  # Карток за старшими правилами коду — перерахувати без ШІ (CORE-009)
 
 
 @dataclass
@@ -529,7 +531,7 @@ class App:
         q = batch.queue(conn, self.today(), wait_days)
         return AiState(
             len(q.ready), q.young, q.pending, wait_days, self.ai_busy, self.ai_note,
-            len(fill.refill_candidates(conn)),
+            len(fill.refill_candidates(conn)), len(fill.recheck_candidates(conn)),
         )  # fmt: skip
 
     def _maybe_collect(self, conn) -> None:
@@ -590,10 +592,26 @@ class App:
         action = (request.form.get("action") or [""])[0]
         back = safe_back((request.form.get("back") or [""])[0])
         sep = "&" if "?" in back else "?"
+        if action == "recheck":
+            return redirect(f"{back}{sep}msg={self.recheck()}")
         if action != "update":
             return text(400, "Невідома дія")
         started = self._start(self._update, "оновлюю й відправляю на ШІ…")
         return redirect(f"{back}{sep}msg={'ai_started' if started else 'ai_busy'}")
+
+    def recheck(self) -> str:
+        """«Перерахувати правилами»: одразу, без ШІ (CORE-009 B). Повертає код повідомлення."""
+        if not self.ai_lock.acquire(blocking=False):
+            return "ai_busy"
+        try:
+            conn = self.connect()
+            try:
+                fill.recheck(conn)
+            finally:
+                conn.close()
+        finally:
+            self.ai_lock.release()
+        return "recheck_done"
 
     def _send_refill(self) -> str | None:
         """Відправити позначені для перезаповнення (нові папки не шукаємо) — пакетом."""
@@ -609,7 +627,7 @@ class App:
             conn.close()
 
     def refill_page(self, request: Request) -> Response:
-        """«Перезаповнити не перевірені»: спершу — скільки карток і скільки це коштує."""
+        """«Перезаповнити»: спершу — скільки карток і скільки це коштує."""
         conn = self.connect()
         try:
             count, cost, skipped = batch.refill_estimate(conn, self.root)

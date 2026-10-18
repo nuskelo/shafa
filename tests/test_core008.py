@@ -19,10 +19,15 @@ def blank_fields(season=("Демісезон",)):
     return [ai.Field("title", "Стара назва"), ai.Field("season", list(season))]
 
 
-def refill_card(conn, root, folder="1", post_id=1, **kwargs):
+def refill_card(conn, root, folder="1", post_id=1, needs_ai=True, **kwargs):
+    """Картка, якій нова інструкція ШІ може змінити бланк (CORE-009 B: лише такі перезаповнюються)."""
     kwargs.setdefault("date", RECENT)
     kwargs.setdefault("blank", [ai.Field("section", "Жіночий одяг / Взуття / Черевики")])
-    return add_card(conn, root, folder=folder, post_id=post_id, **kwargs)
+    item_id = add_card(conn, root, folder=folder, post_id=post_id, **kwargs)
+    if kwargs["blank"]:
+        with conn:
+            fill.save_answer(conn, item_id, GOOD, 1, needs_ai=needs_ai)
+    return item_id
 
 
 def put_edit(conn, item_id, field, value):
@@ -196,7 +201,7 @@ def test_panel_button_and_confirmation_page_show_estimate(conn, root, app):
     refill_card(conn, root, "1", 1)
     refill_card(conn, root, "2", 2)
 
-    assert "Перезаповнити не перевірені (2)" in html(get(app, "/review"))
+    assert "Перезаповнити (2)" in html(get(app, "/review"))
     page = html(get(app, "/refill"))
     assert "≈ 2 карток" in page and "$" in page
     assert status(conn, 1) == Status.REVIEW  # перегляд нічого не міняє
@@ -205,7 +210,7 @@ def test_panel_button_and_confirmation_page_show_estimate(conn, root, app):
 def test_panel_has_no_refill_button_without_candidates(conn, root, app):
     refill_card(conn, root, status=Status.APPROVED)
 
-    assert "Перезаповнити не перевірені" not in html(get(app, "/review"))
+    assert "Перезаповнити (" not in html(get(app, "/review"))
 
 
 def test_refill_post_marks_all_and_sends_batch(conn, root, app):
@@ -240,22 +245,21 @@ def test_card_refill_of_approved_is_refused(conn, root, app):
 # --- A4. «Заповнено старими правилами» ---
 
 
-def test_old_rules_label_for_blank_made_before_current_rules(conn, root):
+def test_old_rules_label_only_when_new_ai_instruction_may_change_card(conn, root):
+    """CORE-009 B: ярлик — лише якщо Картці потрібне саме ШІ, а не лише нові правила коду."""
     old = refill_card(conn, root, "1", 1)
+    code_only = refill_card(conn, root, "2", 2, needs_ai=False)
     with conn:
-        conn.execute("UPDATE items SET rules_version = NULL WHERE id = ?", (old,))
-    fresh = refill_card(conn, root, "2", 2)
+        conn.execute("UPDATE items SET rules_version = NULL WHERE id = ?", (code_only,))
     no_blank = refill_card(conn, root, "3", 3, blank=[])
 
     assert review.load_card(conn, old).old_rules
-    assert not review.load_card(conn, fresh).old_rules  # save_blank ставить поточну версію
+    assert not review.load_card(conn, code_only).old_rules  # це — «Перерахувати правилами»
     assert not review.load_card(conn, no_blank).old_rules
 
 
 def test_old_rules_label_on_list_and_card(conn, root, app):
     item_id = refill_card(conn, root)
-    with conn:
-        conn.execute("UPDATE items SET rules_version = NULL")
 
     assert "заповнено старими правилами" in html(get(app, "/review"))
     assert "заповнено старими правилами" in html(get(app, f"/item/{item_id}"))
@@ -264,8 +268,7 @@ def test_old_rules_label_on_list_and_card(conn, root, app):
 def test_refill_clears_old_rules_label(conn, root):
     item_id = refill_card(conn, root)
     with conn:
-        conn.execute("UPDATE items SET rules_version = NULL")
-    fill.save_blank(conn, item_id, blank_fields())
+        fill.save_blank(conn, item_id, blank_fields(), GOOD)  # нова відповідь ШІ
 
     assert not review.load_card(conn, item_id).old_rules
 

@@ -8,17 +8,17 @@ from shafa import db
 LISTINGS_DROP = (
     "ALTER TABLE items DROP COLUMN rules_version; ALTER TABLE items DROP COLUMN refill_at; "
     "DROP TABLE my_listings; DROP TABLE my_listings_read; "
-    "ALTER TABLE items DROP COLUMN duplicate_name; DROP TABLE post_checks;"
+    "ALTER TABLE items DROP COLUMN duplicate_name; DROP TABLE post_checks; DROP TABLE ai_answers;"
 )  # CORE-008 (версія 11): колонки rules_version і refill_at; SITE-002 (12): post_checks
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 13
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 14
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
         "bot_summaries", "site_jobs", "site_cache", "my_listings", "my_listings_read",
-        "post_checks",
+        "post_checks", "ai_answers",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
@@ -312,7 +312,7 @@ def test_version_11_migrated_site_queue_rebuilt_with_waiting_and_rows_kept(tmp_p
     conn = db.connect(path)
     with conn:
         conn.executescript(
-            "DROP TABLE site_jobs; DROP TABLE post_checks;"
+            "DROP TABLE site_jobs; DROP TABLE post_checks; DROP TABLE ai_answers;"
             + db.SITE.split("CREATE TABLE site_cache")[0]
         )
         conn.execute(
@@ -343,7 +343,7 @@ def test_version_12_migrated_sold_columns_and_unsent_gone_rechecked(tmp_path):
     with conn:
         conn.executescript(
             "ALTER TABLE post_checks DROP COLUMN hold; ALTER TABLE post_checks DROP COLUMN "
-            "off_site_at; ALTER TABLE post_checks DROP COLUMN sold_note;"
+            "off_site_at; ALTER TABLE post_checks DROP COLUMN sold_note; DROP TABLE ai_answers;"
         )
         conn.execute(
             "INSERT INTO post_checks (post_id, gone_at, sold_at) VALUES (1, 'g', NULL), "
@@ -360,4 +360,20 @@ def test_version_12_migrated_sold_columns_and_unsent_gone_rechecked(tmp_path):
                                         (3, None, None, None)]  # fmt: skip
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute("UPDATE post_checks SET hold = 'інше'")
+    conn.close()
+
+
+def test_version_13_migrated_adds_ai_answers(tmp_path):
+    """Схема 14 (CORE-009): відповідь ШІ як є — для перерахунку правилами без ШІ."""
+    path = tmp_path / "база.sqlite"
+    conn = db.connect(path)
+    with conn:
+        conn.execute("DROP TABLE ai_answers")
+        conn.execute("PRAGMA user_version = 13")
+    conn.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    assert {"answer", "prompt_version", "rebuilt", "needs_ai"} <= columns(conn, "ai_answers")
     conn.close()

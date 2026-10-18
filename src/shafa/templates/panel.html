@@ -33,8 +33,12 @@
     <input type="hidden" name="back" value="{{ back }}">
     <button name="action" value="update"{% if ai.busy %} disabled{% endif %}>Оновити</button>
     <span class="why">нові папки → ШІ пакетом; результати зазвичай до години</span>
+    {% if ai.recheckable and not ai.busy %}
+    <button name="action" value="recheck">Перерахувати правилами ({{ ai.recheckable }})</button>
+    <span class="why">нові правила — без ШІ, безкоштовно; ваші правки лишаються</span>
+    {% endif %}
     {% if ai.refillable and not ai.busy %}
-    <a class="button" href="/refill">Перезаповнити не перевірені ({{ ai.refillable }})</a>
+    <a class="button" href="/refill">Перезаповнити ({{ ai.refillable }})</a>
     {% endif %}
   </form>
 </section>

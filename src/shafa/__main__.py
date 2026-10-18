@@ -335,6 +335,8 @@ def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     try:
         for item_id in review.purge_archive(conn):
             photos.drop_thumbnails(cache_dir, item_id)
+        if count := fill.recheck(conn):  # нова версія правил — перерахунок без ШІ (CORE-009 B)
+            print(f"Перераховано за новими правилами, без ШІ: {count}")
     finally:
         conn.close()
     app = web.App(
