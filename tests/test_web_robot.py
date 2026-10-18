@@ -343,3 +343,21 @@ def test_deleted_post_reason_shown_in_archive(conn, root, app):
             (item,),
         )
     assert "Пост видалено з каналу — продано" in html(get(app, "/archived"))
+
+
+def test_site_line_on_panel_only_when_site_on(conn, root, app, monkeypatch):
+    """SITE-002: «Сайт: чекає N · вийде сьогодні M · продано за тиждень K»."""
+    assert "вийде сьогодні" not in html(get(app, "/robot/panel"))
+    monkeypatch.setenv("SITE_INTEGRATION_KEY", "sk-site-test")
+    monkeypatch.setenv("SHAFA_SITE_SEND", "1")
+    with conn:
+        conn.execute(
+            "INSERT INTO site_jobs (post_id, folder_name, posted_at, text, state, not_before, "
+            "created_at, updated_at) VALUES (1, '1', 'p', 't', 'waiting', '2999-01-01', 'c', 'u')"
+        )
+        conn.execute("INSERT INTO post_checks (post_id, gone_at) VALUES (5, '2999-01-01')")
+
+    page = html(get(app, "/robot/panel"))
+
+    assert "чекає 1 · вийде сьогодні 0 · продано за тиждень 1" in page
+    assert "чекає 1" in html(get(app, "/review"))  # і на сторінках

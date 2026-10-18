@@ -73,6 +73,20 @@ OPTIONS = (
         "",
         "flag",
     ),
+    Option(
+        site.WAIT_SETTING,
+        "Чекати днів перед сайтом",
+        "від 0 до 60; 0 — одразу; видалене з каналу за цей час на сайт не йде",
+        str(site.WAIT_DEFAULT),
+        "int",
+    ),
+    Option(
+        site.SOLD_SETTING,
+        "Перевіряти продане щоночі",
+        "зник пост з каналу — на сайті «Продано»",
+        "1",
+        "flag",
+    ),
 )
 _LIMITS = {
     OLD_SETTING: (0, GROUPS_MAX),
@@ -81,6 +95,7 @@ _LIMITS = {
     WAIT_SETTING: (0, 60),
     BATCH_SETTING: (1, 500),
     listings.DAYS_SETTING: listings.DAYS_RANGE,
+    site.WAIT_SETTING: site.WAIT_RANGE,
 }
 
 
