@@ -251,6 +251,7 @@ FIND_BLOCK = """([label, mark]) => {
     for (let i = 0; i < 6 && box; i++, box = box.parentElement) {
       if (box.querySelector('button, input[role=combobox], input[type=checkbox]')) {
         box.setAttribute('data-robot-block', mark);
+        el.setAttribute('data-robot-label', mark);
         return true;
       }
     }
@@ -283,23 +284,44 @@ LIST_FIELDS = f"""(mark) => {{
   }};
 }}"""
 
-# Чипи блоку: текст кожного; кнопка «×» чипа позначається `data-robot-chip` (номер) для кліку.
+# Чипи блоку (ROBOT-004): чип — елемент з текстом і однією кнопкою «прибрати» без тексту: «×»
+# текстом, SVG, кнопка, role=button, aria-label, клас remove|delete|clear|close|cross. Не чип:
+# кнопка очищення всього поля (клас «indicator»; спільна для кількох чипів; поруч із полем
+# введення) і значок біля підпису поля. Кнопка чипа позначається `data-robot-chip` (номер).
 CHIPS = f"""(mark) => {{
   const norm = s => (s || '').replace(/[×✕✖]/g, ' ').replace(/\\s+/g, ' ').trim();
+  const text = e => norm(e.innerText || e.textContent);
+  const cls = e => String(e.getAttribute('class') || '');
   const block = document.querySelector(`[data-robot-block='${{mark}}']`);
   if (!block) return [];
   block.querySelectorAll('[data-robot-chip]').forEach(e => e.removeAttribute('data-robot-chip'));
-  const removers = [...block.querySelectorAll("{REMOVE}")].concat([...block.querySelectorAll('*')]
-    .filter(e => !e.children.length && /^[×✕✖]$/.test((e.textContent || '').trim())));
-  const seen = new Set(), chips = [];
-  for (const r of removers) {{
-    const box = r.parentElement;
-    if (!box || box === block || seen.has(box) || box.querySelector('input')) continue;
-    const text = norm(box.innerText || box.textContent);
-    if (!text) continue;
-    seen.add(box);
-    r.setAttribute('data-robot-chip', String(chips.length));
-    chips.push(text);
+  const label = block.querySelector(`[data-robot-label='${{mark}}']`);
+  const button = e => !e.matches('input, textarea, select, option, [role=option]') && (
+    e.matches("{REMOVE}, svg, button, [role=button], [aria-label]")
+    || /remove|delete|clear|close|cross/i.test(cls(e))
+    || (!e.children.length && /^[×✕✖]$/.test((e.textContent || '').trim())));
+  const clearAll = e => /indicator/i.test(cls(e))
+    || /clear.?all|очистити все|очистить все/i.test(e.getAttribute('aria-label') || '');
+  const icons = new Set();
+  for (const e of block.querySelectorAll('*')) {{
+    if (!button(e) || text(e) || e.querySelector('input')) continue;
+    let icon = e;  // найвищий елемент без тексту навколо кнопки
+    while (icon.parentElement && icon.parentElement !== block && !text(icon.parentElement)
+           && !icon.parentElement.querySelector('input')) icon = icon.parentElement;
+    if ([icon, ...icon.querySelectorAll('*')].some(clearAll)) continue;
+    icons.add(icon);
+  }}
+  const used = new Set(), chips = [];
+  for (const icon of icons) {{
+    const box = icon.parentElement;
+    if (!box || box === block || used.has(box) || box.querySelector('input')) continue;
+    if (label && (box.contains(label) || label.contains(box))) continue;
+    if ([...icons].filter(i => box.contains(i)).length !== 1) continue;
+    const name = text(box);
+    if (!name || name.length > 80) continue;
+    used.add(box);
+    icon.setAttribute('data-robot-chip', String(chips.length));
+    chips.push(name);
   }}
   return chips;
 }}"""
