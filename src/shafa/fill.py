@@ -11,7 +11,7 @@ from typing import Any
 
 from PIL import UnidentifiedImageError
 
-from shafa import ai, review, rules
+from shafa import ai, review, rules, scan
 from shafa.db import Status, now
 from shafa.folders import item_folder
 from shafa.photos import PreparedPhoto, prepare
@@ -233,18 +233,31 @@ def refill_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 def mark_refill(conn: sqlite3.Connection, item_ids: list[int]) -> int:
     """Повернути Картки в чергу ШІ: `new` + `refill_at` (без чекання 7 днів). Бланк і правки лишаються
-    до відповіді ШІ. Повертає, скільки Карток справді позначено."""
+    до відповіді ШІ. Повертає, скільки Карток справді позначено.
+
+    QA-001: пост, у якому з тексту видно кілька товарів чи річ без розділу (правила новіші за
+    Картку), іде в «Проблеми» без ШІ — і теж рахується позначеним.
+    """
     marked = 0
     with conn:
         for item_id in item_ids:
+            row = conn.execute(
+                "SELECT posts.text FROM items JOIN posts ON posts.post_id = items.post_id "
+                "WHERE items.id = ?",
+                (item_id,),
+            ).fetchone()
+            problem = scan.text_problem(row["text"]) if row else None
+            status, code, text, refill_at = (
+                (Status.PROBLEM, *problem, None) if problem else (Status.NEW, None, None, now())
+            )
             cursor = conn.execute(
                 f"""
-                UPDATE items SET status = ?, problem_code = NULL, problem_text = NULL,
+                UPDATE items SET status = ?, problem_code = ?, problem_text = ?,
                                  refill_at = ?, updated_at = ?
                 WHERE id = ? AND post_id IS NOT NULL AND id NOT IN ({IN_BATCH})
                   AND (status = ? OR (status = ? AND problem_code IN ('ai_error', 'no_section')))
                 """,
-                (Status.NEW, now(), now(), item_id, Status.REVIEW, Status.PROBLEM),
+                (status, code, text, refill_at, now(), item_id, Status.REVIEW, Status.PROBLEM),
             )
             marked += cursor.rowcount
     return marked

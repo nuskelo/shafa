@@ -403,6 +403,8 @@ def _target(kind: Kind, size: float, text: str) -> tuple[str | None, str | None]
     жіноче (v1.5); з дитячими словами — як у v1.4.
     """
     said = rules.said_gender(text)
+    if size < rules.FOREIGN_LABEL:  # не європейський розмір (UK/US з ярлика) — групу він не каже
+        return None, None
     if size <= 22:
         return None, (None if kind is Kind.BABIES else "до 22 розміру включно — «Для малюків»")
     if kind is Kind.BABIES:  # 23 і більше — ніколи не малюки
@@ -448,21 +450,25 @@ def check_group(
 
 
 BOOTS = "Чоботи"
+UGGS = "Уггі"
 _SAPOZHKY = re.compile(r"сапожк|сапог", re.IGNORECASE)
+_UGGY = re.compile(r"(?<![\w'’ʼ])у[гґ]{1,2}[иі](?![\w'’ʼ])", re.IGNORECASE)
 _DUTYKY = re.compile(r"дутик", re.IGNORECASE)
 
 
 def check_shoe_type(section: Field, text: str) -> Field:
-    """Тип розділу за словом поста: «сапожки» → Чоботи; «Дутики» — лише якщо так у тексті."""
+    """Тип розділу за словом поста: «уги» → Уггі, «сапожки» → Чоботи; «Дутики» — лише якщо так
+    у тексті. Тип — лише з першого речення (QA-001: «Висота сапожка 13 см» у замірах угів — не тип).
+    """
     if section.yellow or not section.value:
         return section
     name = section.value.rsplit(catalog.SEP, 1)[1]
-    if (
-        _SAPOZHKY.search(text)
-        and name != BOOTS
-        and (path := catalog.moved(section.value, None, BOOTS))
-    ):
-        return Field("section", path)
+    first = text[: rules.first_sentence_end(text)]
+    for word, kind in ((_UGGY, UGGS), (_SAPOZHKY, BOOTS)):
+        if word.search(first):
+            if name != kind and (path := catalog.moved(section.value, None, kind)):
+                return Field("section", path)
+            break
     if name == "Дутики" and not _DUTYKY.search(text):
         return Field(
             "section", section.value, True, "«Дутики» — лише коли так у тексті; перевір тип"
@@ -514,9 +520,7 @@ def check_values(name: str, value: Any, path: str | None, single: bool = False) 
     if path is None:  # розділ невідомий — він сам жовтий
         return Field(name, shown(values))
     spec = catalog.characteristic(path, name)
-    if spec is None:
-        if values:
-            return Field(name, shown(values), True, "у цьому розділі Шафи такого поля немає")
+    if spec is None:  # QA-001: поля в типу немає — Шафа його не покаже, лишаємо порожнім, не жовте
         return Field(name, shown([]))
     found = [catalog.canonical(v, spec["choices"]) for v in values]
     unknown = [v for v, f in zip(values, found, strict=True) if f is None]
@@ -553,12 +557,15 @@ _LINING_ALIASES = {
     "Натуральне хутро": ("Хутро",),
     "Штучне хутро": ("Екохутро",),
     "Екохутро": ("Штучне хутро",),
+    "Шерсть": ("Вовна",),  # QA-001: у неї «всередині шерсть», на Шафі — «Вовна»
 }
 
 
 def _lining_in_text(choice: str, text: str) -> bool:
     if choice == "Натуральне хутро":
         choice = "Хутро"
+    if choice == "Вовна":
+        return in_text("Вовна", text) or in_text("Шерсть", text)
     if choice == "Екохутро":
         return in_text("Екохутро", text) or (in_text("Штучне", text) and in_text("Хутро", text))
     return all(in_text(word, text) for word in choice.split())
@@ -663,8 +670,10 @@ def _code_sizes(
     answer: dict[str, Any], sizes: Field, path: str | None, post_text: str
 ) -> tuple[Field, bool]:
     """Розмір за текстом: «вказаний X, ідуть на Y» кодом (§7); один розмір у тексті, і ШІ дало
-    його ж — сумнів ШІ не рахується. Розпаровка й US/UK — як було."""
-    if answer.get("size_system") in (sizes_mod.US, sizes_mod.UK) or rules.unpaired(post_text):
+    його ж — сумнів ШІ не рахується. Розпаровка й US/UK — як було, крім ярлика UK/US з «ідуть на»
+    (v1.6: тоді розмір — «ідуть на»)."""
+    foreign = answer.get("size_system") in (sizes_mod.US, sizes_mod.UK)
+    if (foreign and not rules.foreign_label(post_text)) or rules.unpaired(post_text):
         return sizes, False
     label = rules.label_sizes(post_text, rules.condition(post_text))
     if label is not None:
@@ -686,6 +695,8 @@ def check_answer(
     section, kind = check_section(answer.get("section"))
     path = catalog.find_section(section.value) if section.value else None  # None — розділу немає
     sizes, first_size = check_sizes_any(answer, path, kind, post_text)
+    if not rules.unpaired(post_text) and (label := rules.label_sizes(post_text, rules.NEW)):
+        first_size = _parse_size(label[0])  # QA-001: групу каже ярлик з тексту, не відповідь ШІ
     section, group_decided = check_group(section, kind, first_size, words)
     section = check_shoe_type(section, words)
     moved = catalog.find_section(section.value) if section.value else None
