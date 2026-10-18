@@ -28,11 +28,13 @@ class TelegramError(Exception):
         uncertain: bool = False,
         code: int | None = None,
         retry_after: int | None = None,
+        description: str = "",
     ) -> None:
         super().__init__(text)
         self.uncertain = uncertain
         self.code = code
         self.retry_after = retry_after
+        self.description = description  # опис від Telegram (без токена) — розпізнати причину
 
 
 # Запит точно не пішов: з'єднання не встановлено.
@@ -106,6 +108,7 @@ class Telegram:
             uncertain=code >= 500,
             code=code,
             retry_after=retry_after if isinstance(retry_after, int) else None,
+            description=description[:200],
         ) from None
 
     def download(self, file_path: str, limit: int) -> bytes:
@@ -129,7 +132,8 @@ class Telegram:
     def get_updates(self, offset: int | None, timeout: int) -> list[dict]:
         params: dict[str, Any] = {
             "timeout": timeout,
-            "allowed_updates": ["message", "callback_query"],
+            # правка поста каналу — новий текст для сайту (SITE-002)
+            "allowed_updates": ["message", "callback_query", "edited_channel_post"],
         }
         if offset is not None:
             params["offset"] = offset
@@ -184,6 +188,16 @@ class Telegram:
             "reply_markup": markup or {"inline_keyboard": []},
         }
         return self.call("editMessageText", params)
+
+    def forward_message(self, chat_id: int, from_chat_id: int, message_id: int) -> dict:
+        """Переслати повідомлення тихо (без сповіщення) — перевірка, чи пост ще є (SITE-002)."""
+        params = {
+            "chat_id": chat_id,
+            "from_chat_id": from_chat_id,
+            "message_id": message_id,
+            "disable_notification": True,
+        }
+        return self.call("forwardMessage", params)
 
     def delete_message(self, chat_id: int, message_id: int) -> None:
         self.call("deleteMessage", {"chat_id": chat_id, "message_id": message_id})

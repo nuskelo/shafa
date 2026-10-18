@@ -14,6 +14,12 @@
   Власнику й Продавчині номер поста.
 - Ключ — лише в заголовку запиту: ні в журналі, ні в помилках (помилки `httpx2` замінюються своїм
   текстом, `from None`).
+
+SITE-002: пара йде на сайт через N днів після поста (`SHAFA_SITE_WAIT_DAYS`, типово 7; 0 — одразу).
+До того — стан `waiting`; правка поста в каналі оновлює текст. У день виходу — перевірка, чи пост ще
+є (`bot.presence`): є — шлемо, видалено — `cancelled` (продано, на сайт не йде), невідомо — пізніше.
+Щоночі (`SHAFA_SOLD_CHECK`, типово так) — чи є ще пости пар, що вже на сайті: зник → «Продано».
+Адреси «Продано» і списку пар сайту в контракті немає — заглушки `no_sold_api`/`no_site_list` (TD-035).
 """
 
 import base64
@@ -34,12 +40,22 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import ai, config, fill, folders, photos, rules
 from shafa import sizes as sizes_mod
+from shafa.bot.presence import GONE, PRESENT, UNKNOWN, Presence
 from shafa.catalog import Kind
 from shafa.db import now
 
 API = "https://api.viktoriashoes.com.ua/api/integration/v1"
 KEY = "SITE_INTEGRATION_KEY"
 SEND_SETTING = "SHAFA_SITE_SEND"  # «Відправляти на сайт» (типово — ні)
+WAIT_SETTING = "SHAFA_SITE_WAIT_DAYS"  # «Чекати днів перед сайтом»
+WAIT_DEFAULT = 7
+WAIT_RANGE = (0, 60)
+SOLD_SETTING = "SHAFA_SOLD_CHECK"  # «Перевіряти продане щоночі» (типово — так)
+NIGHT_HOUR = 3  # нічна перевірка — з 03:00 місцевого часу (чи при запуску, якщо тоді не працювала)
+NIGHT_HOURS = 4  # скільки годин може тривати одна нічна перевірка
+NIGHT_MAX = 5000  # перевірок за ніч, не більше; решта — наступної
+CHECK_GAP = 1.1  # секунд між перевірками: ≈1 повідомлення за секунду в приватний чат
+UNKNOWN_TELL = timedelta(days=3)  # стільки поспіль «невідомо» — Власнику
 TIMEOUT = 30.0
 PHOTO_TIMEOUT = 120.0  # контракт: обробка фото — кілька секунд, таймаут клієнта ≥ 90 с
 PHOTO_MAX_BYTES = 5 * 1024 * 1024  # контракт: до 5 МБ і до 25 Мп
@@ -64,6 +80,19 @@ def _flag(value: str | None) -> bool:
 def enabled() -> bool:
     """Перемикач «Відправляти на сайт» у «Налаштуваннях»."""
     return _flag(config.setting(SEND_SETTING))
+
+
+def wait_days() -> int:
+    """Скільки днів чекати перед сайтом; погане значення — типове."""
+    raw = (config.setting(WAIT_SETTING) or "").strip()
+    if raw.isdigit() and WAIT_RANGE[0] <= int(raw) <= WAIT_RANGE[1]:
+        return int(raw)
+    return WAIT_DEFAULT
+
+
+def sold_check() -> bool:
+    raw = config.setting(SOLD_SETTING)
+    return True if raw is None else _flag(raw)
 
 
 def key() -> str | None:
@@ -331,14 +360,59 @@ def enqueue(
     """Пост від бота → у чергу сайту (якщо перемикач увімкнено і ключ є). Повтор не дублює."""
     if not enabled() or key() is None:
         return False
-    stamp = now()
+    stamp, days = now(), wait_days()
+    not_before = None
+    if days:  # SITE-002: на сайт — через N днів після поста (час — UTC, як `next_at`)
+        moment = datetime.fromisoformat(posted_at) + timedelta(days=days)
+        not_before = moment.astimezone(UTC).isoformat(timespec="seconds")
     with conn:
         conn.execute(
-            "INSERT INTO site_jobs (post_id, folder_name, posted_at, text, state, created_at, "
-            "updated_at) VALUES (?, ?, ?, ?, 'fields', ?, ?) ON CONFLICT (post_id) DO NOTHING",
-            (post_id, folder_name, posted_at, text, stamp, stamp),
-        )
+            "INSERT INTO site_jobs (post_id, folder_name, posted_at, text, state, not_before, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (post_id) DO NOTHING",
+            (post_id, folder_name, posted_at, text, "waiting" if days else "fields", not_before,
+             stamp, stamp),
+        )  # fmt: skip
     return True
+
+
+def _utc(moment: datetime) -> str:
+    return moment.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def edited(conn: sqlite3.Connection, post_id: int, text: str) -> bool:
+    """Пост змінили в каналі: пара ще чекає — на сайт піде новий текст (SITE-002)."""
+    with conn:
+        cursor = conn.execute(
+            "UPDATE site_jobs SET text = ?, fields = NULL, updated_at = ? "
+            "WHERE post_id = ? AND state = 'waiting'",
+            (text, now(), post_id),
+        )
+    return cursor.rowcount == 1
+
+
+def summary(conn: sqlite3.Connection, moment: datetime | None = None) -> tuple[int, int, int]:
+    """Для панелі: (чекає, вийде сьогодні, продано за тиждень)."""
+    moment = (moment or datetime.now(UTC)).astimezone()
+    end = moment.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    waiting, today = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(not_before < ?), 0) FROM site_jobs WHERE state = 'waiting'",
+        (_utc(end),),
+    ).fetchone()
+    sold = conn.execute(
+        "SELECT COUNT(*) FROM post_checks WHERE gone_at >= ?", (_utc(moment - timedelta(days=7)),)
+    ).fetchone()[0]
+    return waiting, today, sold
+
+
+def no_sold_api(site: "Site", post_id: int) -> bool:
+    """Заглушка (TD-035): у контракті сайту немає адреси «Продано» — нічого не шлемо."""
+    return False
+
+
+def no_site_list(site: "Site") -> list[int] | None:
+    """Заглушка (TD-035): у контракті сайту немає списку номерів постів усіх пар."""
+    return None
 
 
 @dataclass
@@ -353,6 +427,17 @@ class Halt(Exception):
     """401 / 404 на всьому: черга стоїть до нового ключа чи перезапуску."""
 
 
+@dataclass
+class Night:
+    """Одна нічна перевірка проданого: з якої пори, до якої, скільки встигли."""
+
+    started: str
+    deadline: datetime
+    checked: int = 0
+    gone: int = 0
+    unknown: int = 0
+
+
 class Worker:
     """Один крок — один запит до сайту (поля або одне фото). `step()` повертає, скільки чекати."""
 
@@ -365,8 +450,15 @@ class Worker:
         ai_client: Callable[[], Any] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         log: Callable[[str], None] = print,
+        presence: Presence | None = None,
+        mark_sold: Callable[["Site", int], bool] = no_sold_api,
+        site_list: Callable[["Site"], list[int] | None] = no_site_list,
+        night_max: int = NIGHT_MAX,
     ) -> None:
         self.conn, self.root, self.notify, self.clock, self.log = conn, root, notify, clock, log
+        self.presence, self._mark_sold, self._site_list = presence, mark_sold, site_list
+        self.night_max = night_max
+        self._night: Night | None = None
         self._site_for = site_for
         self._ai_client = ai_client or (lambda: ai.make_client(config.api_key()))
         self._site: Site | None = None
@@ -409,15 +501,19 @@ class Worker:
             return IDLE
         if self._pause_until is not None and self.clock() < self._pause_until:
             return (self._pause_until - self.clock()).total_seconds()
+        stamp = self._stamp()
         job = self.conn.execute(
-            "SELECT * FROM site_jobs WHERE state IN ('fields', 'photos') "
+            "SELECT * FROM site_jobs WHERE (state IN ('fields', 'photos') "
+            "OR (state = 'waiting' AND not_before <= ?)) "
             "AND (next_at IS NULL OR next_at <= ?) ORDER BY created_at, post_id LIMIT 1",
-            (self._stamp(),),
+            (stamp, stamp),
         ).fetchone()
-        if job is None:
-            return IDLE
         site = self._client(site_key)
+        if job is None:
+            return self._night_step(site)
         try:
+            if job["state"] == "waiting":
+                return self._release(job)
             if job["state"] == "fields":
                 self._send_fields(site, job)
             else:
@@ -432,6 +528,166 @@ class Worker:
         except SiteError as error:
             return self._failed_request(job, error)
         return GAP
+
+    # --- Чи пост ще є (SITE-002) ---
+
+    def _check(self, post_id: int) -> str:
+        """Перевірка поста + запис у `post_checks`. 429 — пауза всієї черги."""
+        if self.presence is None:
+            self._once("nopresence", "Сайт: перевіряти пости в каналі нічим — пари чекають")
+            return UNKNOWN
+        result = self.presence.check(post_id)
+        stamp = self._stamp()
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO post_checks (post_id) VALUES (?)", (post_id,))
+            if result == UNKNOWN:
+                self.conn.execute(
+                    "UPDATE post_checks SET checked_at = ?, "
+                    "unknown_since = COALESCE(unknown_since, ?) WHERE post_id = ?",
+                    (stamp, stamp, post_id),
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE post_checks SET checked_at = ?, unknown_since = NULL, told_at = NULL, "
+                    "gone_at = CASE WHEN ? THEN COALESCE(gone_at, ?) END WHERE post_id = ?",
+                    (stamp, result == GONE, stamp, post_id),
+                )
+        if result == UNKNOWN and self.presence.retry_after:
+            self._pause_until = self.clock() + timedelta(seconds=self.presence.retry_after)
+        return result
+
+    def _tell_unknown(self) -> None:
+        """3 доби поспіль «невідомо» — одне повідомлення Власнику на всі такі пости."""
+        since = self._stamp(-UNKNOWN_TELL.total_seconds())
+        rows = [
+            r[0]
+            for r in self.conn.execute(
+                "SELECT post_id FROM post_checks WHERE unknown_since <= ? AND told_at IS NULL "
+                "ORDER BY post_id",
+                (since,),
+            )
+        ]
+        if not rows:
+            return
+        with self.conn:
+            self.conn.executemany(
+                "UPDATE post_checks SET told_at = ? WHERE post_id = ?",
+                [(self._stamp(), r) for r in rows],
+            )
+        listed = ", ".join(map(str, rows[:10])) + (" …" if len(rows) > 10 else "")
+        self.log(f"Сайт: понад 3 доби не вдається перевірити пости в каналі: {len(rows)}")
+        self.notify.owner(
+            f"Понад 3 доби не вдається перевірити, чи є в каналі пости ({len(rows)}): {listed}. "
+            "Проданими їх не вважаю. Перевір бота в каналі й інтернет."
+        )
+
+    def _release(self, job: sqlite3.Row) -> float:
+        """День виходу: пост є — на сайт з останнім текстом; видалено — не йде ніколи."""
+        post_id = job["post_id"]
+        result = self._check(post_id)
+        if result == PRESENT:
+            self._set(post_id, state="fields", attempts=0, next_at=None, error=None)
+            self.log(f"Сайт: пост {post_id} — минуло днів чекання, пост є, шлю на сайт")
+        elif result == GONE:
+            self._set(post_id, state="cancelled", next_at=None, error=None)
+            self.log(f"Сайт: пост {post_id} видалено з каналу до виходу — на сайт не йде")
+        else:
+            self._later(job, "не вдалося перевірити, чи пост є в каналі")
+            self._tell_unknown()
+        return CHECK_GAP
+
+    def _night_due(self) -> bool:
+        local = self.clock().astimezone()
+        if local.hour < NIGHT_HOUR:
+            return False
+        row = self.conn.execute("SELECT value FROM site_cache WHERE name = 'night'").fetchone()
+        return row is None or row["value"] != local.date().isoformat()
+
+    def _night_start(self, site: Site) -> None:
+        local, stamp = self.clock().astimezone(), self._stamp()
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO site_cache (name, value, fetched_at) VALUES ('night', ?, ?) "
+                "ON CONFLICT (name) DO UPDATE SET value = excluded.value, "
+                "fetched_at = excluded.fetched_at",
+                (local.date().isoformat(), stamp),
+            )
+            self.conn.execute(
+                "INSERT OR IGNORE INTO post_checks (post_id) "
+                "SELECT post_id FROM site_jobs WHERE state = 'done'"
+            )
+        old = self._site_list(site)
+        if old is None:
+            self.log("Сайт: списку пар сайту в API немає (TD-035) — старі пари не перевіряю")
+        else:
+            with self.conn:
+                self.conn.executemany(
+                    "INSERT OR IGNORE INTO post_checks (post_id, old) VALUES (?, 1)",
+                    [(p,) for p in old if isinstance(p, int)],
+                )
+        self._night = Night(stamp, self.clock() + timedelta(hours=NIGHT_HOURS))
+        self.log("Сайт: нічна перевірка проданого — почато")
+
+    def _night_end(self, site: Site) -> None:
+        night, self._night = self._night, None
+        assert night is not None
+        unsold = [
+            r[0]
+            for r in self.conn.execute(
+                "SELECT post_id FROM post_checks WHERE gone_at IS NOT NULL AND sold_at IS NULL"
+            )
+        ]
+        marked = 0
+        for post_id in unsold:  # заглушка — без мережі; справжня адреса — по одній, з паузою
+            if self._mark_sold(site, post_id):
+                marked += 1
+                with self.conn:
+                    self.conn.execute(
+                        "UPDATE post_checks SET sold_at = ? WHERE post_id = ?",
+                        (self._stamp(), post_id),
+                    )
+        if len(unsold) > marked:
+            self.log(
+                f"Сайт: «Продано» не позначено для {len(unsold) - marked} пар — адреси в API "
+                "сайту немає (TD-035)"
+            )
+        self.log(
+            f"Сайт: нічна перевірка — перевірено {night.checked}, зникло {night.gone}, "
+            f"невідомо {night.unknown}"
+        )
+        self._tell_unknown()
+
+    def _night_step(self, site: Site) -> float:
+        """Нічна перевірка проданого: одна перевірка за крок, найдавніше перевірені — першими."""
+        if self._night is None:
+            if not sold_check() or self.presence is None or not self._night_due():
+                return IDLE
+            self._night_start(site)
+        night = self._night
+        assert night is not None
+        row = None
+        if night.checked < self.night_max and self.clock() < night.deadline:
+            row = self.conn.execute(
+                "SELECT post_id FROM post_checks WHERE gone_at IS NULL "
+                "AND (old = 1 OR post_id IN (SELECT post_id FROM site_jobs WHERE state = 'done')) "
+                "AND (checked_at IS NULL OR checked_at < ?) "
+                "ORDER BY checked_at IS NOT NULL, checked_at, post_id LIMIT 1",
+                (night.started,),
+            ).fetchone()
+        if row is None:
+            self._night_end(site)
+            return IDLE
+        post_id = row["post_id"]
+        night.checked += 1
+        result = self._check(post_id)
+        if result == GONE:
+            night.gone += 1
+            self.log(f"Сайт: пост {post_id} зник з каналу — продано")
+        elif result == UNKNOWN:
+            night.unknown += 1
+            if self._pause_until is not None and self.clock() < self._pause_until:
+                return (self._pause_until - self.clock()).total_seconds()
+        return CHECK_GAP
 
     # --- Кроки ---
 
@@ -636,7 +892,11 @@ def run(
 
 
 def start(
-    db_path: Path, root: Path, notify: Notify, log: Callable[[str], None] = print
+    db_path: Path,
+    root: Path,
+    notify: Notify,
+    log: Callable[[str], None] = print,
+    presence: Presence | None = None,
 ) -> threading.Event:
     """Фоновий потік сайту в процесі бота (своє з'єднання з базою). Повертає `stop`."""
     from shafa import db
@@ -645,7 +905,7 @@ def start(
 
     def body() -> None:
         conn = db.connect(db_path)
-        worker = Worker(conn, root, notify, log=log)
+        worker = Worker(conn, root, notify, log=log, presence=presence)
         try:
             run(worker, stop)
         finally:

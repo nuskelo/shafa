@@ -137,6 +137,7 @@ def said():
 def on(monkeypatch):
     monkeypatch.setenv(site.KEY, KEY)
     monkeypatch.setenv(site.SEND_SETTING, "1")
+    monkeypatch.setenv(site.WAIT_SETTING, "0")  # одразу, як до SITE-002; чекання — test_site_wait
 
 
 def make_worker(conn, root, fake, ai_fake, clock, said):

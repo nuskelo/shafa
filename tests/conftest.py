@@ -33,6 +33,8 @@ def no_real_settings(tmp_path_factory, monkeypatch):
         "SHAFA_DAILY_NEW",
         "SITE_INTEGRATION_KEY",
         "SHAFA_SITE_SEND",
+        "SHAFA_SITE_WAIT_DAYS",
+        "SHAFA_SOLD_CHECK",
     ):
         monkeypatch.delenv(name, raising=False)
     # Тека даних (замок робота, журнал) — тимчасова: тести не бачать справжньої.

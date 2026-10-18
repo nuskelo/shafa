@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from shafa import config, site
+from shafa.bot import presence
 from shafa.bot.core import Bot, Settings
 from shafa.bot.telegram import Telegram, TelegramError
 from shafa.db import now
@@ -164,6 +165,9 @@ def start_site(db_path: Path, root: Path, token: str, settings: Settings) -> thr
 
     if site.key() is None:
         print(f"Сайт: немає {site.KEY} — інтеграція вимкнена")
+    chat = presence.service_chat(settings.owner_chat, settings.seller_chat)
+    checker = None if chat is None else presence.Presence(tg, settings.channel_id, chat)
     return site.start(
-        db_path, root, site.Notify(say(settings.owner_chat), say(settings.seller_chat))
-    )
+        db_path, root, site.Notify(say(settings.owner_chat), say(settings.seller_chat)),
+        presence=checker,
+    )  # fmt: skip

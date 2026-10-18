@@ -8,16 +8,17 @@ from shafa import db
 LISTINGS_DROP = (
     "ALTER TABLE items DROP COLUMN rules_version; ALTER TABLE items DROP COLUMN refill_at; "
     "DROP TABLE my_listings; DROP TABLE my_listings_read; "
-    "ALTER TABLE items DROP COLUMN duplicate_name;"
-)  # CORE-008 (версія 11): колонки rules_version і refill_at теж прибрати
+    "ALTER TABLE items DROP COLUMN duplicate_name; DROP TABLE post_checks;"
+)  # CORE-008 (версія 11): колонки rules_version і refill_at; SITE-002 (12): post_checks
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 11
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 12
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
         "bot_summaries", "site_jobs", "site_cache", "my_listings", "my_listings_read",
+        "post_checks",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
@@ -301,4 +302,35 @@ def test_version_9_migrated_adds_listings_snapshot(tmp_path):
         "7",
         None,
     )
+    conn.close()
+
+
+def test_version_11_migrated_site_queue_rebuilt_with_waiting_and_rows_kept(tmp_path):
+    """Схема 12 (SITE-002): `site_jobs` зі старим CHECK перебудовується — рядки ті самі,
+    нові стани `waiting`/`cancelled` і `not_before`; `post_checks` з'являється."""
+    path = tmp_path / "база.sqlite"
+    conn = db.connect(path)
+    with conn:
+        conn.executescript(
+            "DROP TABLE site_jobs; DROP TABLE post_checks;"
+            + db.SITE.split("CREATE TABLE site_cache")[0]
+        )
+        conn.execute(
+            "INSERT INTO site_jobs (post_id, folder_name, posted_at, text, state, fields, "
+            "next_photo, created_at, updated_at) VALUES (9, '9', 'p', 'т', 'done', '{}', 3, 'c', 'u')"
+        )
+        conn.execute("PRAGMA user_version = 11")
+    conn.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    row = conn.execute("SELECT * FROM site_jobs").fetchone()
+    assert (row["post_id"], row["state"], row["next_photo"], row["text"], row["not_before"]) == (
+        9, "done", 3, "т", None,
+    )  # fmt: skip
+    with conn:
+        conn.execute("UPDATE site_jobs SET state = 'waiting'")
+        conn.execute("UPDATE site_jobs SET state = 'cancelled'")
+    assert conn.execute("SELECT count(*) FROM post_checks").fetchone()[0] == 0
     conn.close()

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 class Status(StrEnum):
@@ -314,9 +314,62 @@ ALTER TABLE items ADD COLUMN rules_version INTEGER;
 ALTER TABLE items ADD COLUMN refill_at TEXT;
 """
 
+# Версія 12 (SITE-002): на сайт — через N днів після поста. Нові стани черги: `waiting` (чекає
+# `not_before`, UTC), `cancelled` (пост видалено з каналу до виходу — на сайт не йде). Стан у CHECK —
+# тому `site_jobs` перебудовується (дані ті самі). `post_checks` — чи пост ще є в каналі:
+# `checked_at` — остання спроба, `unknown_since` — з якої пори поспіль «невідомо», `told_at` — Власнику
+# сказано (3 доби «невідомо»), `gone_at` — пост зник (= продано), `sold_at` — сайт прийняв «Продано»;
+# `old` — пара зі списку сайту (старі ~2093), не з нашої черги.
+SITE_WAIT = """
+CREATE TABLE site_jobs_v12 (
+    post_id     INTEGER PRIMARY KEY,
+    folder_name TEXT NOT NULL,
+    posted_at   TEXT NOT NULL,
+    text        TEXT NOT NULL,
+    state       TEXT NOT NULL
+                CHECK (state IN ('waiting', 'fields', 'photos', 'done', 'failed', 'cancelled')),
+    fields      TEXT,
+    next_photo  INTEGER NOT NULL DEFAULT 0,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    next_at     TEXT,
+    error       TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    not_before  TEXT
+);
+INSERT INTO site_jobs_v12 (post_id, folder_name, posted_at, text, state, fields, next_photo,
+                           attempts, next_at, error, created_at, updated_at)
+SELECT post_id, folder_name, posted_at, text, state, fields, next_photo, attempts, next_at, error,
+       created_at, updated_at
+FROM site_jobs;
+DROP TABLE site_jobs;
+ALTER TABLE site_jobs_v12 RENAME TO site_jobs;
+
+CREATE TABLE post_checks (
+    post_id       INTEGER PRIMARY KEY,
+    old           INTEGER NOT NULL DEFAULT 0,
+    checked_at    TEXT,
+    unknown_since TEXT,
+    told_at       TEXT,
+    gone_at       TEXT,
+    sold_at       TEXT
+);
+"""
+
+
+def _site_wait(conn: sqlite3.Connection) -> None:
+    """Перебудова `site_jobs` одним записом: або вся, або ніяк."""
+    conn.commit()
+    try:
+        conn.executescript("BEGIN;" + SITE_WAIT + "PRAGMA user_version = 12; COMMIT;")
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
-    9: LISTINGS, 10: REFILL,
+    9: LISTINGS, 10: REFILL, 11: _site_wait,
 }  # fmt: skip
 
 
