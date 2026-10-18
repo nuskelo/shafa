@@ -361,3 +361,26 @@ def test_site_line_on_panel_only_when_site_on(conn, root, app, monkeypatch):
 
     assert "чекає 1 · вийде сьогодні 0 · продано за тиждень 1" in page
     assert "чекає 1" in html(get(app, "/review"))  # і на сторінках
+
+
+def test_held_sold_on_panel_and_release_button(conn, root, app, monkeypatch):
+    """SITE-003: «відкладено (запобіжник) M» на панелі; кнопка в «Налаштуваннях» знімає запобіжник."""
+    monkeypatch.setenv("SITE_INTEGRATION_KEY", "sk-site-test")
+    monkeypatch.setenv("SHAFA_SITE_SEND", "1")
+    with conn:
+        conn.execute(
+            "INSERT INTO post_checks (post_id, gone_at, hold) VALUES (5, '2999-01-01', 'fuse'), "
+            "(6, '2999-01-01', 'fuse'), (7, '2999-01-01', NULL)"
+        )
+
+    assert "продано за тиждень 1 · відкладено (запобіжник) 2" in html(get(app, "/robot/panel"))
+    assert "Відкладено запобіжником: 2" in html(get(app, "/settings"))
+
+    page = html(post(app, "/site/release-sold"))
+
+    assert "«Продано» для 2 пар надішле бот" in page
+    assert (
+        conn.execute("SELECT COUNT(*) FROM post_checks WHERE hold IS NOT NULL").fetchone()[0] == 0
+    )
+    assert "відкладено (запобіжник) 0" in html(get(app, "/robot/panel"))
+    assert "Відкладених «Продано» немає" in html(post(app, "/site/release-sold"))

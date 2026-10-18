@@ -15,7 +15,7 @@ def form(root, **changes):
         "SHAFA_DAILY_LIMIT": "25", "SHAFA_AI_DAILY_USD": "2,5", "SHAFA_AI_WAIT_DAYS": "5",
         "SHAFA_AI_BATCH_LIMIT": "40", "SHAFA_ROOT_DIR": str(root), "SHAFA_DELETE_PUBLISHED": "1",
         "SHAFA_DAILY_OLD": "10", "SHAFA_DAILY_NEW": "5", "SHAFA_LISTINGS_DAYS": "3",
-        "SHAFA_SITE_WAIT_DAYS": "7",
+        "SHAFA_SITE_WAIT_DAYS": "7", "SHAFA_SOLD_FUSE": "20",
     }  # fmt: skip
     values.update(changes)
     return {k: v for k, v in values.items() if v is not None}
@@ -118,3 +118,12 @@ def test_site_wait_days_out_of_range_not_saved(app, root):
     page = html(post(app, "/settings", **form(root, SHAFA_SITE_WAIT_DAYS="61")))
     assert "від 0 до 60" in page
     assert site.wait_days() == 7
+
+
+def test_sold_fuse_default_saved_and_checked(app, root):
+    """SITE-003: «Запобіжник: найбільше зниклих постів за ніч» (20)."""
+    assert 'name="SHAFA_SOLD_FUSE" value="20"' in html(get(app, "/settings"))
+    post(app, "/settings", **form(root, SHAFA_SOLD_FUSE="5"))
+    assert site.fuse() == 5
+    page = html(post(app, "/settings", **form(root, SHAFA_SOLD_FUSE="0")))
+    assert "від 1 до 1000" in page and site.fuse() == 5
