@@ -87,6 +87,13 @@ OPTIONS = (
         "1",
         "flag",
     ),
+    Option(
+        site.FUSE_SETTING,
+        "Запобіжник: найбільше зниклих постів за ніч",
+        "від 1 до 1000; зникло більше — «Продано» не надсилається, Власнику повідомлення",
+        str(site.FUSE_DEFAULT),
+        "int",
+    ),
 )
 _LIMITS = {
     OLD_SETTING: (0, GROUPS_MAX),
@@ -96,6 +103,7 @@ _LIMITS = {
     BATCH_SETTING: (1, 500),
     listings.DAYS_SETTING: listings.DAYS_RANGE,
     site.WAIT_SETTING: site.WAIT_RANGE,
+    site.FUSE_SETTING: site.FUSE_RANGE,
 }
 
 

@@ -654,8 +654,54 @@ def test_kids_35_36_with_adult_signs_are_women():
     fields = check_text(text, section=GIRLS, sizes=["36"], material_upper=[], season=[])
     assert fields["section"].value == "Жіночий одяг / Взуття / Кросівки"
     assert not fields["section"].yellow
-    fields = check_text(POST, section=GIRLS, sizes=["36"], material_upper=[], season=[])
+    text = "Дитячі кросівки 36 розміру. 600грн"  # дитяче слово — як у v1.4
+    fields = check_text(text, section=GIRLS, sizes=["36"], material_upper=[], season=[])
     assert (fields["section"].value, fields["section"].reason) == (GIRLS, ai.NO_KID_GENDER)
+
+
+GIRLS_SNEAKERS = "Дитячий одяг / Для дівчаток / Взуття / Кросівки"
+
+
+@pytest.mark.parametrize(
+    ("text", "size"),
+    [
+        ("Кросівки Nike 36 розміру, стан хороший. 700грн", "36"),
+        ("Кеди Converse, 37 розмір, устілка 23,5см. 550грн", "37"),
+        ("Шкіряні черевики 35 розміру, носила один сезон. 900грн", "35"),
+        ("Мокасини Geox, розмір 36,5. Майже нові. 800грн", "36,5"),
+    ],
+)
+def test_35_and_up_without_kid_words_is_women_not_yellow(text, size):
+    """SITE-003 6: пілот — ШІ ставило 36–37 у «Для дівчаток» і жовте teen; у неї 35+ — доросле."""
+    fields = check_text(
+        text, section=GIRLS_SNEAKERS, sizes=[size], material_upper=[], season=[], teen=True,
+        doubts=[doubt("teen", "не видно, підліткове чи дитяче"),
+                doubt("section", "35-37 — дитяче чи доросле")],
+    )  # fmt: skip
+    assert fields["section"].value == "Жіночий одяг / Взуття / Кросівки"
+    assert not fields["section"].yellow
+    assert (fields["teen"].value, fields["teen"].yellow) == (None, False)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Дитячі кеди 36 розміру. 400грн",
+        "Підліткові кросівки 35 розміру. 500грн",
+        "Шкільні туфлі 36 розміру. 450грн",
+        "Кросівки для дівчинки чи хлопчика, 35 розмір. 500грн",
+    ],
+)
+def test_35_36_with_kid_words_stays_kids_as_before(text):
+    fields = check_text(text, section=GIRLS_SNEAKERS, sizes=["35"], material_upper=[], season=[])
+    assert fields["section"].value.startswith("Дитячий одяг")
+    assert fields["section"].yellow
+
+
+def test_23_34_without_gender_as_before():
+    text = "Кросівки 34 розміру. 400грн"
+    fields = check_text(text, section=GIRLS_SNEAKERS, sizes=["34"], material_upper=[], season=[])
+    assert (fields["section"].value, fields["section"].reason) == (GIRLS_SNEAKERS, ai.NO_KID_GENDER)
 
 
 @pytest.mark.parametrize(

@@ -338,6 +338,8 @@ class App:
             return self.export_post(request)
         if path == "/listings/reread" and request.method == "POST":
             return self.reread_post(request)
+        if path == "/site/release-sold" and request.method == "POST":
+            return self.release_sold_post(request)
         if (match := _DUPLICATE_PHOTO.fullmatch(path)) and get:
             return self.duplicate_photo(int(match[1]))
         if path == "/quit" and request.method == "POST" and self.on_quit is not None:
@@ -400,6 +402,7 @@ class App:
                 options=options.OPTIONS,
                 values=values or options.current(),
                 snapshot=listings_mod.snapshot_info(conn),
+                held=site.summary(conn)[3],
                 errors=errors or {},
                 warnings=warnings or [],
                 message=message or MESSAGES.get(request.arg("msg")),
@@ -426,6 +429,20 @@ class App:
         finally:
             conn.close()
         message = "Добре: робот перечитає «Мої речі» на Шафі під час наступного запуску (5–10 хв)."
+        return self.settings_page(request, message=message)
+
+    def release_sold_post(self, request: Request) -> Response:
+        """«Надіслати відкладені Продано» (SITE-003): Власник перевірив канал — запобіжник знято."""
+        conn = self.connect()
+        try:
+            count = site.release_held(conn)
+        finally:
+            conn.close()
+        message = (
+            f"Добре: «Продано» для {count} пар надішле бот, поки програма відкрита."
+            if count
+            else "Відкладених «Продано» немає."
+        )
         return self.settings_page(request, message=message)
 
     def _duplicate_file(self, item_id: int) -> Path:
@@ -658,8 +675,9 @@ class App:
 
     # --- Робот ---
 
-    def site_state(self, conn) -> tuple[int, int, int] | None:
-        """Рядок панелі «Сайт: чекає N · вийде сьогодні M · продано за тиждень K» (SITE-002)."""
+    def site_state(self, conn) -> tuple[int, int, int, int] | None:
+        """Рядок панелі «Сайт: чекає N · вийде сьогодні M · продано за тиждень K · відкладено
+        (запобіжник) L» (SITE-002, SITE-003)."""
         return site.summary(conn) if site.enabled() else None
 
     def robot_state(self, conn) -> control.State:

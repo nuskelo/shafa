@@ -12,7 +12,12 @@ from collections.abc import Callable
 from shafa.bot.telegram import Telegram, TelegramError
 
 PRESENT, GONE, UNKNOWN = "present", "gone", "unknown"
-# Відповідь Telegram на пересилання поста, якого вже немає (400). Інше 400 — «невідомо».
+# «Видалено» (= продано) — ЛИШЕ 400 від `forwardMessage` з одним із текстів (SITE-003 b):
+#   «Bad Request: message to forward not found» — пост у каналі видалено;
+#   «Bad Request: MESSAGE_ID_INVALID» — такого номера в каналі немає.
+# Будь-що інше — «невідомо», «Продано» не шлемо: 400 «chat not found», «message has protected
+# content and can't be forwarded», 403 «bot is not a member…» (немає прав), 429, 5xx, мережа.
+# Звірено з документацією й відповідями Telegram у тестах; живий прогін — TD-036.
 GONE_MARKS = ("message to forward not found", "message_id_invalid")
 
 

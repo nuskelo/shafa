@@ -13,7 +13,7 @@ LISTINGS_DROP = (
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 12
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 13
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
@@ -333,4 +333,31 @@ def test_version_11_migrated_site_queue_rebuilt_with_waiting_and_rows_kept(tmp_p
         conn.execute("UPDATE site_jobs SET state = 'waiting'")
         conn.execute("UPDATE site_jobs SET state = 'cancelled'")
     assert conn.execute("SELECT count(*) FROM post_checks").fetchone()[0] == 0
+    conn.close()
+
+
+def test_version_12_migrated_sold_columns_and_unsent_gone_rechecked(tmp_path):
+    """Схема 13 (SITE-003): `hold`, `off_site_at`, `sold_note`; зниклі без «Продано» — `night`."""
+    path = tmp_path / "база.sqlite"
+    conn = db.connect(path)
+    with conn:
+        conn.executescript(
+            "ALTER TABLE post_checks DROP COLUMN hold; ALTER TABLE post_checks DROP COLUMN "
+            "off_site_at; ALTER TABLE post_checks DROP COLUMN sold_note;"
+        )
+        conn.execute(
+            "INSERT INTO post_checks (post_id, gone_at, sold_at) VALUES (1, 'g', NULL), "
+            "(2, 'g', 's'), (3, NULL, NULL)"
+        )
+        conn.execute("PRAGMA user_version = 12")
+    conn.close()
+
+    conn = db.connect(path)
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+    rows = conn.execute("SELECT post_id, hold, off_site_at, sold_note FROM post_checks ORDER BY 1")
+    assert [tuple(r) for r in rows] == [(1, "night", None, None), (2, None, None, None),
+                                        (3, None, None, None)]  # fmt: skip
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE post_checks SET hold = 'інше'")
     conn.close()

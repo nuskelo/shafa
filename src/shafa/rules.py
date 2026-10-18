@@ -206,8 +206,9 @@ def season(text: str) -> tuple[list[str] | None, str | None]:
 
 
 # Версія правил, за якими заповнено бланк: зростає, коли правила змінюються так, що старий бланк
-# варто перезаповнити (CORE-008 A4). 1 — до CORE-007 (у базі NULL), 2 — CORE-007.
-RULES_VERSION = 2
+# варто перезаповнити (CORE-008 A4). 1 — до CORE-007 (у базі NULL), 2 — CORE-007,
+# 3 — SITE-003 (35+ без дитячих слів — доросле).
+RULES_VERSION = 3
 
 # Поля, які Продавчиня виправляє руками і які правила читають разом із текстом поста (CORE-008 B).
 EDIT_TEXT_FIELDS = ("title", "description")
@@ -243,6 +244,17 @@ def said_gender(text: str) -> str | None:
     if len(found) != 1 or UNISEX.search(text):
         return None
     return found[0]
+
+
+# Дитячі слова (SITE-003 6): без них 35+ — доросле. «Для дівчинки/хлопчика» — ще й стать (`_SAID`).
+_KID = re.compile(
+    r"дитяч|для\s+(?:дівчин|хлопч)|(?<!\w)дівчинк|(?<!\w)хлопчик|підліт|шкільн", re.IGNORECASE
+)
+
+
+def kid_words(text: str) -> bool:
+    """У тексті сказано, що річ дитяча: «дитячі», «для дівчинки», «підліткові», «шкільні»."""
+    return bool(_KID.search(text))
 
 
 def adult_signs(text: str) -> bool:
