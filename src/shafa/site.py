@@ -251,9 +251,13 @@ def condition(text: str) -> str | None:
     return next((name for name, pattern in STATES if pattern.search(text)), None)
 
 
-def code_fields(text: str, posted_at: str) -> dict[str, Any]:
-    """Поля, які рахує код: ціна з тексту (як у Telegram, без +15% Шафи), стан, устілка, опис."""
-    fields: dict[str, Any] = {"title": None, "description": text, "postedAt": posted_at}
+def code_fields(text: str, sent_at: str) -> dict[str, Any]:
+    """Поля, які рахує код: ціна з тексту (як у Telegram, без +15% Шафи), стан, устілка, опис.
+
+    `postedAt` — момент відправки на сайт (UTC), не дата поста: інакше пара, що чекала 7 днів, не
+    потрапляє в «Новинки» сайту (SITE-003). Дата поста лишається в нашій базі (`posted_at`).
+    """
+    fields: dict[str, Any] = {"title": None, "description": text, "postedAt": sent_at}
     price = rules.price_from_text(text)
     if price is not None and 1 <= price <= PRICE_MAX:
         fields["price"] = price
@@ -909,7 +913,7 @@ class Worker:
         if job["fields"]:
             return json.loads(job["fields"])
         subs = self._subcategories(site)
-        fields = {**code_fields(job["text"], job["posted_at"]), **self._ai_fields(job, subs)}
+        fields = {**code_fields(job["text"], self._stamp()), **self._ai_fields(job, subs)}
         self._set(job["post_id"], fields=json.dumps(fields, ensure_ascii=False))
         return fields
 

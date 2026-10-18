@@ -315,8 +315,9 @@ def test_fields_then_photos_one_by_one_in_channel_order(conn, root, on, worker, 
     ]  # fmt: skip
     assert all(key == KEY for _, _, key in fake.requests)
     assert fake.products[1401] == {
-        "title": None, "description": TEXT, "postedAt": POSTED, "price": 1450,
-        "lengthSm": "24.5", "condition": "Ідеальний", "subcategoryId": "sub-women-winter",
+        "title": None, "description": TEXT, "postedAt": "2026-10-17T09:00:00+00:00",
+        "price": 1450, "lengthSm": "24.5", "condition": "Ідеальний",
+        "subcategoryId": "sub-women-winter",
         "brand": "Ecco", "size": "38",
     }  # fmt: skip
     for i in range(3):  # 0 — головне = 1.jpg (перше в каналі)

@@ -179,6 +179,10 @@ def test_present_after_7_days_goes_with_edited_text(conn, root, on, worker, fake
 
     assert fake.products[1401]["description"] == new_text
     assert fake.products[1401]["price"] == 1200
+    # SITE-003: postedAt — момент відправки (UTC), не дата поста — щоб пара була в «Новинках»
+    assert fake.products[1401]["postedAt"] == clock().isoformat(timespec="seconds")
+    assert fake.products[1401]["postedAt"] == "2026-10-25T09:00:00+00:00"
+    assert job(conn)["posted_at"] == POSTED
     assert not site.edited(conn, 1401, "ще раз")  # уже не чекає — текст сайту не міняємо
 
 
