@@ -2,7 +2,7 @@ import pytest
 
 from shafa.db import Status
 from shafa.robot import browser, guard
-from shafa.robot.form import FieldMissing, dry_fill, execute
+from shafa.robot.form import BrandMiss, FieldMissing, dry_fill, execute
 from shafa.robot.plan import Step
 from test_review import add_card, status
 from test_robot_plan import BLANK, TEXT
@@ -12,6 +12,8 @@ class FakeDriver:
     def __init__(self, session, missing=None):
         self.calls = []
         self.missing = missing
+        self.brand_miss = None
+        self.no_brands = {"Невідомий бренд"}  # цих брендів «на Шафі» наживо немає
 
     def _call(self, *args):
         if self.missing and self.missing in map(str, args):
@@ -40,7 +42,10 @@ class FakeDriver:
 
     def brand(self, name):
         self._call("brand", name)
-        return name != "Невідомий бренд"
+        self.brand_miss = None
+        if name in self.no_brands:
+            self.brand_miss = BrandMiss(name, ["Peter\xa0Storm Kids"], "<div>Бренд</div>")
+        return name not in self.no_brands
 
     def untouched(self, labels):
         self._call("untouched", *labels)
@@ -294,7 +299,7 @@ def test_brand_not_found_on_shafa_is_noted():
         [Step("brand", "Бренд", "Ecco"), Step("brand", "Бренд", "Невідомий бренд")], driver
     )
     assert driver.calls == [("brand", "Ecco"), ("brand", "Невідомий бренд")]
-    assert notes == ["Бренду «Невідомий бренд» немає на Шафі — не заповнено (OQ-004)"]
+    assert notes == ["бренд Невідомий бренд не в списку Шафи — лишено порожнім"]
 
 
 def test_missing_checkbox_and_photo_are_notes_not_stops():

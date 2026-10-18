@@ -1,7 +1,8 @@
 """Картка → кроки заповнення форми Шафи (чиста функція, без браузера).
 
 Значення поза знімком Шафи не заповнюються — потрапляють у нотатки звіту. Бренд шукається у формі
-наживо; не знайшовся — не заповнюється: «Додати бренд» робот не натискає (OQ-004).
+наживо; не знайшовся — не заповнюється: «Додати бренд» робот не натискає (OQ-004). Бренд є у
+знімку, а наживо не знайшовся (`Step.known`) — збій робота (ROBOT-006).
 """
 
 import re
@@ -28,6 +29,7 @@ class Step:
     label: str  # як поле називається на Шафі — для звіту й помилок
     value: Any = None
     target: str | None = None  # name поля (kind="text") або slug розділу (kind="category")
+    known: bool = False  # kind="brand": бренд є у знімку довідників Шафи
 
 
 def _number(text: str) -> float | None:
@@ -68,8 +70,8 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
         Step("condition", "Стан", f["condition"]),
     ]
     if f["brand"]:  # список у знімку неповний — шукаємо наживо, тут лише написання
-        brand = catalog.canonical(f["brand"], catalog.brands()) or f["brand"]
-        steps.append(Step("brand", "Бренд", brand))
+        canonical = catalog.canonical(f["brand"], catalog.brands())
+        steps.append(Step("brand", "Бренд", canonical or f["brand"], known=canonical is not None))
     if f["description"]:
         steps.append(Step("text", "Опис", f["description"], "descriptionUk"))
     if f["keywords"]:

@@ -42,7 +42,24 @@ class FieldMissing(Exception):
 
 
 class BrandMissing(Exception):
-    """Бренду немає у списку Шафи (публікація зупиняється, OQ-004). `args[0]` — бренд."""
+    """Бренд є у довіднику Шафи (знімок), а наживо не знайшовся — збій робота (ROBOT-006).
+    `args[0]` — бренд. Картка йде в «Проблеми», сесія триває."""
+
+
+@dataclass(frozen=True)
+class BrandMiss:
+    """Пошук бренду наживо нічого не дав: що бачив робот (для журналу, скриншота й розмітки)."""
+
+    name: str
+    options: list[str]  # тексти варіантів «як є» (repr покаже `\\xa0`)
+    markup: str = ""
+
+    def details(self) -> str:
+        shown = self.options[:SHOWN_OPTIONS]
+        more = (
+            f" … ще {len(self.options) - SHOWN_OPTIONS}" if len(self.options) > len(shown) else ""
+        )
+        return f"бренд {self.name!r}; варіанти ({len(self.options)}): {shown!r}{more}"
 
 
 class PhotosShort(Exception):
@@ -89,6 +106,9 @@ class Driver(Protocol):
     def choose_category(self, parts: list[str], slug: str) -> None: ...
     def pick(self, label: str, values: list[str]) -> list[str] | None: ...
     def keywords(self, words: list[str]) -> None: ...
+
+    brand_miss: BrandMiss | None  # що бачив останній невдалий пошук бренду
+
     def brand(self, name: str) -> bool: ...
     def untouched(self, labels: list[str]) -> list[str]: ...
     def verify(self) -> None: ...
@@ -99,8 +119,9 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
     """Виконати кроки по черзі. Розмір/колір/стан/характеристики — вибір у блоці з підписом.
     Наприкінці — звірка заповненого (`verify`): не збіглось → `FieldMissing`.
 
-    Повертає нотатки (бренд не знайшовся на Шафі — поле лишилось порожнім). `strict` (публікація):
-    бренд не знайдено → `BrandMissing`, не всі фото → `PhotosShort` — замість нотаток.
+    Повертає нотатки. Бренду немає на Шафі ні у знімку, ні наживо — поле лишається порожнім, лише
+    нотатка (OQ-004, ROBOT-006). `strict` (публікація): бренд є у знімку, а наживо не знайшовся →
+    `BrandMissing`, не всі фото → `PhotosShort` — замість нотаток.
     """
     notes = []
     for step in steps:
@@ -122,9 +143,14 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
             driver.keywords(step.value)
         elif step.kind == "brand":
             if not driver.brand(step.value):
-                if strict:
-                    raise BrandMissing(step.value)
-                notes.append(f"Бренду «{step.value}» немає на Шафі — не заповнено (OQ-004)")
+                if step.known:
+                    if strict:
+                        raise BrandMissing(step.value)
+                    notes.append(
+                        f"Бренд «{step.value}» є у довіднику Шафи, але робот його не знайшов"
+                    )
+                else:
+                    notes.append(f"бренд {step.value} не в списку Шафи — лишено порожнім")
         elif step.kind in ("condition", "size_system"):
             notes += driver.pick(step.label, [step.value]) or []
         elif step.kind in ("sizes", "colors", "choice"):
@@ -164,6 +190,26 @@ def same(a: str, b: str) -> bool:
 
 def among(value: str, values: list[str]) -> bool:
     return any(same(value, v) for v in values)
+
+
+ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
+
+
+def brand_key(text: str) -> str:
+    """Бренд для порівняння: усі пробіли (і `\\xa0`) — один звичайний, без невидимих, без регістру."""
+    return " ".join(text.translate(ZERO_WIDTH).split()).casefold()
+
+
+# Підказка форми, а не значення поля: «Додайте заголовок(до +11%)», «Виберіть…» (ROBOT-006)
+HINT = re.compile(
+    r"^\s*(додайте|добавьте|введіть|введите|виберіть|выберите|оберіть|select|add|enter|choose)\b"
+    r"|\(\s*до\s*\+\d+\s*%\s*\)",
+    re.IGNORECASE,
+)
+
+
+def is_hint(text: str) -> bool:
+    return bool(HINT.search(text))
 
 
 def exact(options: list[str], value: str) -> str | None:
@@ -341,6 +387,11 @@ OPTIONS = f"""() => {{
   }});
 }}"""
 
+# Ті самі варіанти, але тексти «як є» (без стискання пробілів): для журналу, `repr` покаже `\\xa0`.
+OPTIONS_RAW = f"""() => [...document.querySelectorAll("{OPTION}")].filter(e =>
+  !e.querySelector("{OPTION}") && e.getClientRects().length
+  && !/notice|NoOptions|no-options/i.test(String(e.className || ''))).map(e => e.textContent || '')"""
+
 # Розмітка блоку поля і відкритих меню поза ним (ROBOT-004): копії без скриптів і без `value`
 # прихованих полів введення (там бувають токени). Меню всередині блоку — уже в блоці.
 MENU = "[role=listbox], [class*=menu], [class*=Menu]"
@@ -360,6 +411,8 @@ MARKUP = f"""(mark) => {{
 MARKUP_LIMIT = 50 * 1024  # байтів у файлі розмітки
 
 LIST_WAIT = 5  # с чекаємо, поки список покаже варіанти
+BRAND_WAIT = 6  # с чекаємо точний збіг бренду (список домальовується)
+BRAND_STILL = 3  # с без змін у непорожньому списку — далі чекати нічого
 
 
 def markup(page: Any, mark: str | None) -> str:
@@ -490,6 +543,7 @@ class PageDriver:
         self.typed: set[str] = set()  # що робот набрав сам — не підписи полів (діагностика)
         self.texts: dict[str, tuple[str, str]] = {}  # name → (підпис, значення): звірка в кінці
         self.lists: dict[str, list[str]] = {}  # підпис списку → наші значення: звірка в кінці
+        self.brand_miss: BrandMiss | None = None
 
     def _find(self, label: str) -> str | None:
         self._marks += 1
@@ -589,6 +643,7 @@ class PageDriver:
         for label in labels:
             mark = self._find(label)
             chips = self.page.evaluate(CHIPS, mark) if mark else []
+            chips = [c for c in chips if not is_hint(c)]  # підказки форми — не значення
             if chips:
                 notes.append(f"на формі Шафа поставила сама: {label}: {', '.join(chips)}")
         return notes
@@ -611,22 +666,42 @@ class PageDriver:
                 )
 
     def brand(self, name: str) -> bool:
-        """Пошук у полі «Бренд»: лише варіант, що точно збігається. «Додати бренд» — ніколи."""
-        combo = self._block("Бренд").locator("input[role=combobox]")
+        """Пошук у полі «Бренд»: клікаємо лише варіант, що точно збігається (після стискання
+        пробілів і без регістру). Список може домальовуватись — опитуємо до `BRAND_WAIT` с.
+        Не знайшли — `brand_miss` (що бачили) і `False`. «Додати бренд» — ніколи."""
+        self.brand_miss = None
+        mark = self._find("Бренд")
+        if mark is None:
+            raise FieldMissing("Бренд", describe_form(self.page, typed=self.typed))
+        combo = self.page.locator(f"[data-robot-block='{mark}']").locator("input[role=combobox]")
         if not combo.count():
             raise FieldMissing("Бренд")
         combo.first.click()
         combo.first.fill(name)
-        browser.pause(1.5, 2.5)
-        options = self.page.locator("[class*=option]")
-        texts = options.all_inner_texts()  # список перемальовується — читаємо все за раз
-        found = next((x.strip() for x in texts if x.strip().casefold() == name.casefold()), None)
-        if found:
-            exact = re.compile(rf"^\s*{re.escape(found)}\s*$")
-            option = options.filter(has_text=exact)
-            if option.count():
+        self.typed.add(name)
+        browser.pause(1.0, 1.5)
+        want = brand_key(name)
+        deadline = time.monotonic() + BRAND_WAIT
+        previous, still = None, 0.0
+        while True:
+            shown = self.page.evaluate(OPTIONS)  # позначає варіанти `data-robot-option`
+            options = [o for o in shown if not among(o, list(NO_OPTIONS))]
+            index = next((i for i, o in enumerate(shown) if brand_key(o) == want), None)
+            if index is not None:
+                option = self.page.locator(f"[data-robot-option='{index}']")
                 self.session.click(option.first, f"бренд {name}")
                 return True
+            # Список не змінюється вже BRAND_STILL с (і не порожній) — далі чекати нічого
+            still = still + 0.5 if options and options == previous else 0.0
+            previous = options
+            if time.monotonic() >= deadline or still >= BRAND_STILL:
+                break
+            self.page.wait_for_timeout(500)
+        try:
+            raw = [o for o in self.page.evaluate(OPTIONS_RAW) if not among(o, list(NO_OPTIONS))]
+        except Exception:  # noqa: BLE001 — діагностика не має ховати справжню причину
+            raw = options
+        self.brand_miss = BrandMiss(name, raw, markup(self.page, mark))
         combo.first.fill("")
         self.session.press("Escape")
         return False

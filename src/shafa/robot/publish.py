@@ -33,9 +33,7 @@ from shafa.robot import listings as listings_mod
 from shafa.robot import lock
 from shafa.robot.browser import NO_LOGIN
 from shafa.robot.form import (
-    SUBMIT_TIMEOUT as SUBMIT_WAIT,
-)
-from shafa.robot.form import (
+    MARKUP_LIMIT,
     BrandMissing,
     Driver,
     FieldMissing,
@@ -43,6 +41,9 @@ from shafa.robot.form import (
     Submitted,
     execute,
     save_markup,
+)
+from shafa.robot.form import (
+    SUBMIT_TIMEOUT as SUBMIT_WAIT,
 )
 from shafa.robot.plan import PlanError, plan
 
@@ -54,6 +55,10 @@ OLD_DEFAULT, NEW_DEFAULT = 10, 0
 GROUPS_MAX = 30  # старих і нових разом на день
 DELETE_SETTING = "SHAFA_DELETE_PUBLISHED"  # видаляти папки з «Опубліковано» (типово — ні)
 DELETE_AFTER = timedelta(days=3)
+BRAND_BROKEN = (
+    "Бренд «{}» є у довіднику Шафи, але робот його не знайшов — скажіть Власнику. "
+    "«Перевірити ще раз» поверне Картку в Схвалені."
+)
 SHOT_WAIT = 10  # с: скріншот важкої сторінки (реклама) не має зависати робота
 PAUSE = (60.0, 180.0)  # с між товарами
 TICK = 5.0  # с: як часто під час паузи перевіряється Стоп
@@ -68,7 +73,7 @@ UNCERTAIN = (
 @dataclass(frozen=True)
 class Stop:
     """Чому сесія закінчилась. `code` — для екрана: done, limit, stop, login, no_form, sleep, site,
-    error, interrupted (і crash — сесію закрив recover після падіння)."""
+    photos, error, interrupted (і crash — сесію закрив recover після падіння)."""
 
     code: str
     text: str
@@ -522,6 +527,23 @@ class Run:
             return shot
         return shot
 
+    def _brand_miss(self, card: review.Card, driver: Driver) -> None:
+        """«Бренд не знайдено»: скриншот, розмітка блоку й тексти варіантів — у `robot-screens/` і в
+        журнал (ROBOT-006)."""
+        miss = getattr(driver, "brand_miss", None)
+        if miss is None:
+            return
+        shot = self._shot(card, "бренд")
+        self.log(f"Пост {card.post_id}: бренд не знайдено; {miss.details()}. Екран: {shot.name}")
+        body = f"<!-- {miss.details()} -->\n{miss.markup}"
+        path = shot.with_suffix(".html")
+        data = body.encode("utf-8")[:MARKUP_LIMIT].decode("utf-8", errors="ignore")
+        try:
+            path.write_text(data, encoding="utf-8")
+        except OSError:
+            return
+        self.log(f"Пост {card.post_id}: розмітка поля «Бренд» — {path}")
+
     def _open_form(self, card: review.Card | None) -> Stop | None:
         """Форма «Додати товар» є → None; немає входу чи форми → причина зупинки з деталями."""
         opened = self.session.open_form()
@@ -569,6 +591,7 @@ class Run:
             if stop.code == "login":
                 self._problem(report, card, ok, "robot_logged_out", "Робот не увійшов на Шафу")
             return stop  # «немає форми» — Картка не винна, лишається у Схвалених
+        driver.brand_miss = None
         try:
             notes += execute(steps, driver, strict=True)
         except FieldMissing as error:
@@ -583,12 +606,15 @@ class Run:
                 self.log(f"Пост {card.post_id}: розмітка поля «{error.field}» — {dump}")
             return Stop("site", "поле не знайдено — мабуть, Шафа змінила форму")
         except BrandMissing as error:
-            self._problem(report, card, ok, "robot_brand_missing",
-                          f"Бренду «{error}» немає в списку Шафи")  # fmt: skip
-            return Stop("site", "бренд не знайдено")
+            # Бренд є у довіднику, а наживо не знайшовся — збій робота, не Картки: далі наступна
+            self._brand_miss(card, driver)
+            self._problem(report, card, ok, "robot_brand_missing", BRAND_BROKEN.format(error))
+            return None
         except PhotosShort as error:
             self._problem(report, card, ok, "robot_photos", str(error))
-            return Stop("site", "не всі фото завантажились")
+            return Stop("photos", "не всі фото завантажились")
+        if getattr(driver, "brand_miss", None):
+            self._brand_miss(card, driver)  # бренду немає ні у знімку, ні наживо: публікуємо
         if attempts := self.session.publish_attempts():
             raise RuntimeError(f"Заблоковано спроби публікації до кліку: {attempts}")
 
