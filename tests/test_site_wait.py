@@ -134,7 +134,7 @@ def test_waits_7_days_by_default_then_goes_with_check(conn, root, on, worker, fa
     assert row["not_before"] == "2026-10-24T09:30:00+00:00"  # пост 12:30 за Києвом + 7 днів
     clock.pass_(days=7)  # 09:00 UTC 24.10 — ще пів години
     steps(worker)
-    assert fake.requests == [] and channel.forwards() == []
+    assert fake.sent() == [] and channel.forwards() == []
 
     clock.pass_(minutes=31)
     steps(worker)
@@ -165,8 +165,8 @@ def test_deleted_before_7_days_never_goes_to_site(conn, root, on, worker, fake, 
     steps(worker)
 
     assert job(conn)["state"] == "cancelled"
-    assert fake.requests == []
-    assert site.summary(conn, clock()) == (0, 0, 1)  # продано за тиждень
+    assert fake.sent() == []
+    assert site.summary(conn, clock()) == (0, 0, 1, 0)  # продано за тиждень
 
 
 def test_present_after_7_days_goes_with_edited_text(conn, root, on, worker, fake, clock, channel):
@@ -191,7 +191,7 @@ def test_network_429_or_other_error_is_not_sold(conn, root, on, worker, fake, cl
     steps(worker)
 
     assert job(conn)["state"] == "waiting"  # не cancelled: «невідомо» — не продаж
-    assert fake.requests == []
+    assert fake.sent() == []
     assert conn.execute("SELECT gone_at FROM post_checks").fetchone()[0] is None
 
     channel.mode = None
@@ -276,32 +276,104 @@ def done_post(conn, root, worker, clock, post_id=1401):
     assert job(conn, post_id)["state"] == "done"
 
 
-def test_gone_after_site_marked_sold_through_interface(conn, root, on, fake, clock, said, channel):
-    sold = []
-    worker = make(conn, root, fake, clock, said, channel,
-                  mark_sold=lambda s, p: sold.append(p) or True)  # fmt: skip
+def test_gone_after_site_marked_sold_after_night(
+    conn, root, on, worker, fake, clock, said, channel
+):
     done_post(conn, root, worker, clock)
     channel.posts.discard(1401)
     clock.pass_(days=1)
 
     steps(worker)
 
-    assert sold == [1401]
+    assert fake.sold == {1401}
+    assert fake.paths()[-1] == "POST /products/by-post/1401/sold"
     row = conn.execute("SELECT * FROM post_checks WHERE post_id = 1401").fetchone()
-    assert row["gone_at"] is not None and row["sold_at"] is not None
-    assert site.summary(conn, clock())[2] == 1
+    assert row["gone_at"] is not None and row["sold_at"] is not None and row["hold"] is None
+    assert site.summary(conn, clock())[2:] == (1, 0)
+    assert said["owner"] == []
 
 
-def test_sold_stub_only_logs_td(conn, root, on, worker, clock, said, channel):
+def test_sold_repeat_changed_false_is_fine(conn, root, on, worker, fake, clock, said, channel):
     done_post(conn, root, worker, clock)
+    body = {"id": "x", "postId": 1401, "status": "Sold", "changed": False}  # уже було
+    fake.fail("POST", "/products/by-post/1401/sold", httpx2.Response(200, json=body))
     channel.posts.discard(1401)
     clock.pass_(days=1)
 
     steps(worker)
 
-    row = conn.execute("SELECT * FROM post_checks WHERE post_id = 1401").fetchone()
-    assert row["gone_at"] is not None and row["sold_at"] is None
-    assert any("TD-035" in line and "Продано" in line for line in said["log"])
+    assert conn.execute("SELECT sold_at FROM post_checks").fetchone()[0] is not None
+    assert any("(уже було)" in line for line in said["log"])
+
+
+def test_sold_404_pair_missing_noted_and_never_resent(conn, root, on, worker, fake, clock, said,
+                                                      channel):  # fmt: skip
+    done_post(conn, root, worker, clock)
+    body = {"postId": 1401, "error": "not_found"}  # пару видалили на сайті після списку
+    fake.fail("POST", "/products/by-post/1401/sold", httpx2.Response(404, json=body))
+    channel.posts.discard(1401)
+    clock.pass_(days=1)
+
+    steps(worker)
+    clock.pass_(days=1)
+    steps(worker)
+
+    assert fake.paths().count("POST /products/by-post/1401/sold") == 1
+    row = conn.execute("SELECT sold_at, sold_note FROM post_checks").fetchone()
+    assert row["sold_at"] is None and "немає" in row["sold_note"]
+
+
+def test_sold_route_missing_tried_next_night(conn, root, on, worker, fake, clock, said, channel):
+    """API-023 ще не розгорнуто: 404 без тіла — нічого не ламаємо, наступної ночі — знову."""
+    done_post(conn, root, worker, clock)
+    fake.sold_api = False
+    channel.posts.discard(1401)
+    clock.pass_(days=1)
+
+    steps(worker)
+    steps(worker)  # до кінця доби не повторюємо
+
+    sold = "POST /products/by-post/1401/sold"
+    assert fake.paths().count(sold) == 1
+    assert conn.execute("SELECT sold_at FROM post_checks").fetchone()[0] is None
+    assert any("ще не вміє «Продано»" in line for line in said["log"])
+    assert any("списку пар у API сайту ще немає" in line for line in said["log"])
+    assert job(conn)["state"] == "done" and said["owner"] == []
+
+    fake.sold_api = True
+    clock.pass_(days=1)
+    steps(worker)
+    assert fake.paths().count(sold) == 2 and fake.sold == {1401}
+
+
+@pytest.mark.parametrize(("status", "retry"), [(500, True), (429, True), (400, False)])
+def test_sold_errors(conn, root, on, worker, fake, clock, said, channel, status, retry):
+    done_post(conn, root, worker, clock)
+    channel.posts.discard(1401)
+    sold = "/products/by-post/1401/sold"
+    fake.fail("POST", sold, httpx2.Response(status, json={}))
+    clock.pass_(days=1)
+
+    steps(worker)
+    clock.pass_(minutes=10)
+    steps(worker)
+
+    assert fake.paths().count("POST " + sold) == (2 if retry else 1)
+    assert (fake.sold == {1401}) is retry
+    assert any("Продано" in m and "1401" in m for m in said["owner"]) is not retry
+
+
+def test_sold_network_down_retried_later(conn, root, on, worker, fake, clock, channel):
+    done_post(conn, root, worker, clock)
+    channel.posts.discard(1401)
+    fake.fail("POST", "/products/by-post/1401/sold", httpx2.ConnectError)
+    clock.pass_(days=1)
+
+    steps(worker)
+    assert fake.sold == set()
+    clock.pass_(minutes=6)
+    steps(worker)
+    assert fake.sold == {1401}
 
 
 def test_night_unknown_is_not_sold(conn, root, on, worker, clock, said, channel):
@@ -319,8 +391,7 @@ def test_night_once_a_day_and_not_before_3(conn, root, on, monkeypatch, fake, sa
     clock = Clock()
     clock.now = datetime(2026, 10, 18, 2, 0).astimezone().astimezone(UTC)  # 02:00 місцевого
     worker = make(conn, root, fake, clock, said, channel)
-    with conn:
-        conn.execute("INSERT INTO post_checks (post_id, old) VALUES (1401, 1)")
+    fake.listed = {1401}
 
     steps(worker, 5)
     assert channel.forwards() == []
@@ -351,7 +422,8 @@ def test_night_switched_off_in_settings(conn, root, on, monkeypatch, worker, clo
 def test_old_pairs_rotated_with_limit_and_checked_at(conn, root, on, fake, clock, said, channel):
     old = [11, 12, 13, 14, 15]
     channel.posts.update(old)
-    worker = make(conn, root, fake, clock, said, channel, site_list=lambda s: old, night_max=2)
+    fake.listed = set(old)
+    worker = make(conn, root, fake, clock, said, channel, night_max=2)
 
     steps(worker, 10)
     assert channel.forwards() == [11, 12]
@@ -366,15 +438,49 @@ def test_old_pairs_rotated_with_limit_and_checked_at(conn, root, on, fake, clock
     assert all(r["old"] == 1 and r["checked_at"] for r in rows)
 
 
-def test_checks_spaced_about_one_per_second(conn, root, on, worker, channel):
-    with conn:
-        conn.execute("INSERT INTO post_checks (post_id, old) VALUES (1401, 1)")
-    assert worker.step() >= 1.0
+def test_checks_spaced_about_one_per_second(conn, root, on, worker, fake, channel):
+    fake.listed = {1401}
+    assert 1.0 <= worker.step() < 2
+    assert channel.forwards() == [1401]
 
 
-def test_no_site_list_stub_logged(conn, root, on, worker, said):
-    steps(worker, 3)
-    assert any("TD-035" in line and "старі" in line for line in said["log"])
+def test_site_list_once_a_night_sold_in_admin_not_checked(conn, root, on, worker, fake, clock,
+                                                          said, channel):  # fmt: skip
+    fake.listed = {11, 12}
+    channel.posts.update({11, 12})
+    steps(worker, 10)
+    assert fake.paths() == ["GET /products/post-ids"]
+    assert channel.forwards() == [11, 12]
+
+    fake.listed = {12, 13}  # 11 продано в адмінці, 13 — нова стара пара
+    channel.posts.add(13)
+    clock.pass_(days=1)
+    steps(worker, 10)
+
+    assert fake.paths() == ["GET /products/post-ids"] * 2
+    assert channel.forwards()[2:] == [13, 12]
+    row = conn.execute("SELECT off_site_at FROM post_checks WHERE post_id = 11").fetchone()
+    assert row["off_site_at"] is not None
+
+    fake.listed = {11, 12, 13}  # повернули на сайт — знову перевіряємо
+    clock.pass_(days=1)
+    steps(worker, 10)
+    assert sorted(channel.forwards()[4:]) == [11, 12, 13]
+
+
+def test_night_runs_until_6_am(conn, root, on, monkeypatch, fake, said, channel):
+    monkeypatch.setattr(site, "NIGHT_HOUR", 3)
+    clock = Clock()
+    clock.now = datetime(2026, 10, 18, 5, 59, 58).astimezone().astimezone(UTC)  # 05:59:58
+    fake.listed = {11, 12, 13, 14}
+    channel.posts.update(fake.listed)
+    worker = make(conn, root, fake, clock, said, channel)
+
+    for _ in range(10):
+        clock.pass_(seconds=worker.step())
+
+    assert channel.forwards() == [11, 12]  # о 06:00 ніч скінчилась; решта — наступної
+    assert any("нічна перевірка — перевірено 2" in line for line in said["log"])
 
 
 def test_unknown_3_days_owner_told_once(conn, root, on, worker, clock, said, channel):
@@ -403,7 +509,7 @@ def test_summary_counts(conn, root, on, clock):
             (clock().isoformat(timespec="seconds"),),
         )
 
-    assert site.summary(conn, clock()) == (2, 1, 1)
+    assert site.summary(conn, clock()) == (2, 1, 1, 0)
 
 
 def test_enqueue_keeps_posted_time_zone_independent(conn, root, on):
@@ -421,3 +527,120 @@ def test_server_error_with_not_found_text_is_unknown(said, channel):
 
     tg = Telegram("123:секрет", httpx2.Client(transport=httpx2.MockTransport(broken)))
     assert Presence(tg, CHANNEL, OWNER, log=said["log"].append).check(1401) == UNKNOWN
+
+
+# --- Запобіжник (SITE-003) ---
+
+
+def many_gone(conn, fake, channel, n):
+    """n старих пар сайту, пости яких зникли з каналу."""
+    fake.listed = set(range(100, 100 + n))
+    channel.posts.difference_update(fake.listed)
+
+
+def sold_posts(fake):
+    return [p for p in fake.paths() if p.endswith("/sold")]
+
+
+def test_fuse_21_gone_in_one_night_nothing_sent_owner_told(conn, root, on, worker, fake, clock,
+                                                           said, channel):  # fmt: skip
+    many_gone(conn, fake, channel, 21)
+
+    steps(worker, 40)
+
+    assert sold_posts(fake) == []
+    assert said["owner"] == [
+        (
+            "За ніч зникло 21 постів — схоже на збій, “Продано” не надіслано. Перевір канал. Якщо все "
+            "правильно — «Налаштування» → «Надіслати відкладені Продано»."
+        )
+    ]
+    assert site.summary(conn, clock())[2:] == (0, 21)
+
+    clock.pass_(days=1)  # наступна ніч: знову перевіряємо; все ще зниклі — чекають Власника
+    steps(worker, 40)
+    assert sold_posts(fake) == [] and len(said["owner"]) == 1
+    assert channel.forwards().count(100) == 2
+
+    assert site.release_held(conn) == 21  # «Надіслати відкладені Продано»
+    steps(worker, 40)
+    assert len(sold_posts(fake)) == 21 and fake.sold == fake.listed
+    assert site.summary(conn, clock())[2:] == (21, 0)
+
+
+def test_fuse_20_gone_is_normal(conn, root, on, worker, fake, said, channel):
+    many_gone(conn, fake, channel, 20)
+
+    steps(worker, 60)
+
+    assert len(sold_posts(fake)) == 20 and said["owner"] == []
+
+
+def test_fuse_setting(conn, root, on, monkeypatch, worker, fake, said, channel):
+    monkeypatch.setenv(site.FUSE_SETTING, "2")
+    many_gone(conn, fake, channel, 3)
+
+    steps(worker, 20)
+
+    assert sold_posts(fake) == [] and "зникло 3 постів" in said["owner"][0]
+
+
+@pytest.mark.parametrize("raw", ["", "0", "абв", "1001"])
+def test_bad_fuse_setting_means_20(monkeypatch, raw):
+    monkeypatch.setenv(site.FUSE_SETTING, raw)
+    assert site.fuse() == 20
+
+
+def test_fuse_glitch_heals_next_night(conn, root, on, worker, fake, clock, said, channel):
+    many_gone(conn, fake, channel, 21)
+    steps(worker, 40)
+    channel.posts.update(fake.listed)  # збій минув: пости на місці
+
+    clock.pass_(days=1)
+    steps(worker, 40)
+
+    assert site.summary(conn, clock())[2:] == (0, 0)
+    assert (
+        conn.execute("SELECT COUNT(*) FROM post_checks WHERE gone_at IS NOT NULL").fetchone()[0]
+        == 0
+    )
+    assert site.release_held(conn) == 0
+    steps(worker, 10)
+    assert sold_posts(fake) == []
+
+
+def test_gone_mid_night_not_sent_before_night_ends(conn, root, on, worker, fake, clock, channel):
+    """Перезапуск посеред ночі: зниклі цієї ночі чекають кінця наступної, запобіжник рахує їх."""
+    many_gone(conn, fake, channel, 3)
+    for _ in range(2):
+        worker.step()  # дві перевірки, ніч не скінчилась
+    restarted = make(conn, root, fake, clock, {"owner": [], "seller": [], "log": []}, channel)
+
+    steps(restarted, 10)  # ця доба вже була — нічна не починається, «Продано» не шлемо
+    assert sold_posts(fake) == []
+
+    clock.pass_(days=1)
+    steps(restarted, 20)
+    assert len(sold_posts(fake)) == 3
+
+
+@pytest.mark.parametrize(
+    ("status", "description", "expected"),
+    [
+        (400, "Bad Request: message to forward not found", GONE),
+        (400, "Bad Request: MESSAGE_ID_INVALID", GONE),
+        (400, "Bad Request: chat not found", UNKNOWN),
+        (400, "Bad Request: message has protected content and can't be forwarded", UNKNOWN),
+        (403, "Forbidden: bot is not a member of the channel chat", UNKNOWN),
+        (403, "Forbidden: message to forward not found", UNKNOWN),
+        (429, "Too Many Requests: retry after 5", UNKNOWN),
+        (502, "Bad Gateway", UNKNOWN),
+    ],
+)
+def test_only_explicit_not_found_is_gone(said, status, description, expected):
+    def answer(request):
+        body = {"ok": False, "error_code": status, "description": description}
+        return httpx2.Response(status, json=body)
+
+    tg = Telegram("123:секрет", httpx2.Client(transport=httpx2.MockTransport(answer)))
+    assert Presence(tg, CHANNEL, OWNER, log=said["log"].append).check(1401) == expected

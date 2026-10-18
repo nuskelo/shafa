@@ -53,6 +53,9 @@ class FakeSite:
         self.photos = {}
         self.warnings = []
         self.forget = False  # пара «зникає» одразу після створення (404 на фото завжди)
+        self.sold_api = True  # API-023 розгорнуто; False — 404 на маршрути «Продано» і списку
+        self.listed = set()  # старі пари сайту (не наші), номери постів
+        self.sold = set()
 
     def fail(self, method, path, outcome):
         self.plan.append((method, path, outcome))
@@ -68,6 +71,8 @@ class FakeSite:
                 return outcome
         if path == "/subcategories":
             return httpx2.Response(200, json=SUBS)
+        if path == "/products/post-ids" or path.endswith("/sold"):
+            return self.sold_route(request.method, path)
         parts = path.split("/")  # ['', 'products', 'by-post', '1401', 'photos', '0']
         post = int(parts[3])
         if len(parts) == 4:
@@ -85,8 +90,27 @@ class FakeSite:
         self.photos[(post, index)] = request.content
         return httpx2.Response(200, json={"index": index, "path": "/i.jpg", "replaced": replaced})
 
+    def sold_route(self, method, path):
+        if not self.sold_api:
+            return httpx2.Response(404)  # маршруту немає — без тіла
+        if path == "/products/post-ids":
+            ids = sorted((self.listed | set(self.products)) - self.sold)
+            return httpx2.Response(200, json={"postIds": ids, "count": len(ids)})
+        assert method == "POST"
+        post = int(path.split("/")[3])
+        if post not in self.listed and post not in self.products:
+            return httpx2.Response(404, json={"postId": post, "error": "not_found"})
+        changed = post not in self.sold
+        self.sold.add(post)
+        body = {"id": "x", "postId": post, "status": "Sold", "changed": changed}
+        return httpx2.Response(200, json=body)
+
     def paths(self):
         return [f"{m} {p}" for m, p, _ in self.requests]
+
+    def sent(self):
+        """Запити про пари (без нічного списку пар сайту)."""
+        return [p for p in self.paths() if p != "GET /products/post-ids"]
 
 
 class FakeAi:

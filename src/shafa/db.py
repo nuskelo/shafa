@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 class Status(StrEnum):
@@ -367,9 +367,21 @@ def _site_wait(conn: sqlite3.Connection) -> None:
         raise
 
 
+# Версія 13 (SITE-003): «Продано» на сайті. `hold` — «Продано» ще не слати: `night` — зник цієї
+# ночі, чекає кінця ночі (запобіжник рахує), `fuse` — запобіжник спрацював, чекає Власника
+# («Надіслати відкладені Продано»); `off_site_at` — пари немає в списку сайту (продано в адмінці) —
+# не перевіряємо; `sold_note` — сайт «Продано» не прийняв (пари немає — 404 тощо), більше не шлемо.
+# Зниклі до SITE-003 і ще не позначені — `night`: наступна ніч перевірить їх знову, через запобіжник.
+SOLD = """
+ALTER TABLE post_checks ADD COLUMN hold TEXT CHECK (hold IN ('night', 'fuse'));
+ALTER TABLE post_checks ADD COLUMN off_site_at TEXT;
+ALTER TABLE post_checks ADD COLUMN sold_note TEXT;
+UPDATE post_checks SET hold = 'night' WHERE gone_at IS NOT NULL AND sold_at IS NULL;
+"""
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
-    9: LISTINGS, 10: REFILL, 11: _site_wait,
+    9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD,
 }  # fmt: skip
 
 
