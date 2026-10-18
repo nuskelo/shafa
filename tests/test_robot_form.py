@@ -42,6 +42,13 @@ class FakeDriver:
         self._call("brand", name)
         return name != "Невідомий бренд"
 
+    def untouched(self, labels):
+        self._call("untouched", *labels)
+        return []
+
+    def verify(self):
+        pass
+
 
 class FakePage:
     def __init__(self):
