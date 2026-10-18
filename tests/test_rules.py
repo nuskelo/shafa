@@ -323,3 +323,17 @@ def test_season_without_fur_is_not_winter():
     assert rules.season("Черевики без хутра, 38 розмір") == (None, None)
     assert rules.season("Кеди 38 розмір") == (None, None)
     assert rules.season("Весняні кросівки") == (["Весна"], None)
+
+
+@pytest.mark.parametrize(
+    ("text", "kid"),
+    [
+        ("Дитячі кросівки 35", True), ("Кеди для дівчинки 36", True), ("Для хлопчика, 35", True),
+        ("Підліткові черевики", True), ("Шкільні туфлі 36", True), ("Кросівки Nike 36", False),
+        ("Черевики 37, хороший стан", False), ("Туфлі на дівчину 36", False),
+    ],
+)  # fmt: skip
+def test_kid_words(text, kid):
+    from shafa import rules
+
+    assert rules.kid_words(text) is kid

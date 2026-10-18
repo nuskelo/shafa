@@ -399,7 +399,8 @@ NO_KID_GENDER = "у тексті не сказано, для дівчинки ч
 def _target(kind: Kind, size: float, text: str) -> tuple[str | None, str | None]:
     """Група розділу за текстом і розміром (`docs/rules.md` §6, v1.4): (група, причина жовтого).
 
-    (None, None) — лишається вибір ШІ (40–42 без слова в тексті, жіноче 35–36).
+    (None, None) — лишається вибір ШІ (40–42 без слова в тексті). 35–39 без дитячих слів —
+    жіноче (v1.5); з дитячими словами — як у v1.4.
     """
     said = rules.said_gender(text)
     if size <= 22:
@@ -412,6 +413,8 @@ def _target(kind: Kind, size: float, text: str) -> tuple[str | None, str | None]
         return _GROUPS[said], None
     if size < 35:
         return None, (NO_KID_GENDER if kind is Kind.KIDS else f"розмір {_number(size)} — дитячий")
+    if size < 40 and not rules.kid_words(text):  # SITE-003: у неї 35+ — майже завжди доросле
+        return catalog.WOMEN, None
     if size < 37:
         if kind is Kind.KIDS:
             return (catalog.WOMEN, None) if rules.adult_signs(text) else (None, NO_KID_GENDER)
@@ -691,6 +694,8 @@ def check_answer(
         sizes, first_size = check_sizes_any(answer, path, kind, post_text)
     sizes, sizes_decided = _code_sizes(answer, sizes, path, post_text)
     decided = {"section"} if group_decided else set()
+    if group_decided and catalog.characteristic(path, "teen") is None:
+        decided.add("teen")  # код переніс у доросле — «Категорія» (дитячий / підліток) не про нього
     if sizes_decided:
         decided.add("sizes")
     if len(photo_names) == 1:
