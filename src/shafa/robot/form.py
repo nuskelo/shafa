@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 from shafa import config, review
 from shafa.db import Status, now
-from shafa.robot import browser, guard
+from shafa.robot import browser, guard, lang
 from shafa.robot.plan import PlanError, Step, plan
 
 MAX_CARDS = 3  # більше за один прогін не можна (тікет)
@@ -158,7 +158,8 @@ class Widget(Protocol):
 
 
 def same(a: str, b: str) -> bool:
-    return " ".join(a.split()).casefold() == " ".join(b.split()).casefold()
+    """Той самий текст без регістру й без мови: «Европейский» = «Європейський» (ROBOT-005)."""
+    return lang.equivalent(a, b)
 
 
 def among(value: str, values: list[str]) -> bool:
@@ -241,10 +242,11 @@ LABELS = {
     "Розмір": "Розмір",
 }
 
-FIND_BLOCK = """([label, mark]) => {
+FIND_BLOCK = """([labels, mark]) => {
   const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
   const own = el => norm([...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' '));
-  const starts = t => t === label || t.startsWith(label + ' ') || t.startsWith(label + '*') || t.startsWith(label + ' (');
+  const starts = t => labels.some(label => t === label || t.startsWith(label + ' ')
+    || t.startsWith(label + '*') || t.startsWith(label + ' ('));
   for (const el of document.querySelectorAll('body *')) {
     if (!starts(own(el)) || el.closest('header, nav, footer')) continue;
     let box = el;
@@ -279,7 +281,7 @@ LIST_FIELDS = f"""(mark) => {{
     block: block ? texts([...block.querySelectorAll(
       'button, [role=tab], [role=radio], [role=option], label')]) : [],
     sizes: texts([...document.querySelectorAll('body *')].filter(
-      e => !e.children.length && /розмір/i.test(e.textContent || '')
+      e => !e.children.length && /розмір|размер/i.test(e.textContent || '')
         && !e.closest('input, textarea, [contenteditable]') && !chip(e))),
   }};
 }}"""
@@ -432,13 +434,14 @@ class PageWidget:
         self.session.click(button.first, f"{self.label}: прибрати «{chip}»")
 
     def press(self, value: str) -> bool:
-        button = self.block.get_by_role("button", name=value, exact=True)
-        if not button.count() and not self.listed:
-            button = self.block.get_by_text(value, exact=True)
-        if not button.count():
-            return False
-        self.session.click(button.first, f"{self.label}: {value}")
-        return True
+        for spelling in lang.variants(value):  # Шафа показує то українською, то російською
+            button = self.block.get_by_role("button", name=spelling, exact=True)
+            if not button.count() and not self.listed:
+                button = self.block.get_by_text(spelling, exact=True)
+            if button.count():
+                self.session.click(button.first, f"{self.label}: {value}")
+                return True
+        return False
 
     def options(self) -> list[str]:
         return [o for o in self.page.evaluate(OPTIONS) if not among(o, list(NO_OPTIONS))]
@@ -491,7 +494,11 @@ class PageDriver:
     def _find(self, label: str) -> str | None:
         self._marks += 1
         mark = f"b{self._marks}"
-        return mark if self.page.evaluate(FIND_BLOCK, [LABELS.get(label, label), mark]) else None
+        return (
+            mark
+            if self.page.evaluate(FIND_BLOCK, [lang.variants(LABELS.get(label, label)), mark])
+            else None
+        )
 
     def _block(self, label: str) -> Any:
         mark = self._find(label)
@@ -596,7 +603,7 @@ class PageDriver:
         for label, values in self.lists.items():
             mark = self._find(label)
             chips = self.page.evaluate(CHIPS, mark) if mark else []
-            if sorted(map(str.casefold, chips)) != sorted(map(str.casefold, values)):
+            if lang.keys(chips) != lang.keys(values):
                 raise FieldMissing(
                     f"{label}: на формі {', '.join(chips) or 'порожньо'}, треба {', '.join(values)}",
                     field=label,

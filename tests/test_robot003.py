@@ -164,7 +164,8 @@ class FormPage:
 
     def evaluate(self, script, arg=None):
         if script == form.FIND_BLOCK:
-            label, mark = arg
+            labels, mark = arg
+            label = next((x for x in labels if x in self.blocks), labels[0])
             self.marks[mark] = label
             return label in self.blocks
         if script == form.CHIPS:
