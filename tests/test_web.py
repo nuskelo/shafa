@@ -278,6 +278,20 @@ def test_recheck_robot_problem_returns_to_approved_keeping_blank(conn, app, root
     assert conn.execute("SELECT value FROM edits WHERE item_id = ?", (item_id,)).fetchone()[0]
 
 
+def test_recheck_stale_rules_problem_recalculates_and_goes_to_review(conn, app, root, item_id):
+    """ROBOT-008: «Перевірити ще раз» для старих правил — перерахунок без ШІ, не назад у Схвалені."""
+    with conn:
+        conn.execute(
+            "UPDATE items SET status = 'problem', problem_code = 'stale_rules', "
+            "problem_text = 'старі правила', rules_version = NULL"
+        )
+
+    response = post(app, f"/item/{item_id}", action="recheck")
+
+    assert location(response) == "/review?msg=recheck_done"
+    assert status(conn, item_id) == Status.REVIEW
+
+
 def test_recheck_never_returns_publication_problem(conn, app, root, item_id):
     with conn:
         conn.execute(

@@ -137,6 +137,7 @@ PROBLEM_HINTS = {
     "robot_logged_out": "Робот не увійшов на Шафу. Власник: python -m shafa robot --login. «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_brand_missing": "Бренд є у довіднику Шафи, але робот його не знайшов. Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_photos": "Не всі фото завантажились на Шафу. «Перевірити ще раз» поверне Картку в Схвалені.",
+    "stale_rules": "Картку схвалено за старими правилами. «Перевірити ще раз» перерахує її правилами (без ШІ) і поверне на перевірку: перегляньте й схваліть знову.",
     "robot_not_ready": "Картку не можна передати роботу (текст вище). «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_not_sent": "Форма на Шафі не надіслалась (товар не створено). Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_publish_blocked": "Захист робота не пропустив запит публікації — товар не створено. Скажіть Власнику.",
@@ -867,6 +868,9 @@ class App:
                 if review.robot_retry(conn, item_id):
                     return redirect(f"/{Status.PROBLEM}?msg=robot_retry")
                 return redirect(f"{back}?msg=stale")
+            if action == "recheck" and card.problem_code == fill.STALE_RULES:
+                fill.recheck(conn, [item_id])
+                return redirect(f"/{Status.REVIEW}?msg=recheck_done")
             if action == "recheck" and card.problem_code in STICKY:
                 return redirect(f"{back}?msg=sticky")
             if action == "recheck":

@@ -306,7 +306,8 @@ def mark_refill(conn: sqlite3.Connection, item_ids: list[int]) -> int:
 # --- Перерахувати правилами, без ШІ (CORE-009 B) ---
 
 # Проблеми, які ставлять правила над текстом і відповіддю ШІ: перерахунок може їх зняти чи поставити.
-RECHECK_PROBLEMS = ("no_section", "many_items")
+STALE_RULES = "stale_rules"  # робот не бере Картку, схвалену за старими правилами (ROBOT-008)
+RECHECK_PROBLEMS = ("no_section", "many_items", STALE_RULES)
 _AI_DOUBT = "ШІ не впевнене: "
 
 
