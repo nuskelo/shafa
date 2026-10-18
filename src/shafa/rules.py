@@ -257,6 +257,16 @@ def kid_words(text: str) -> bool:
     return bool(_KID.search(text))
 
 
+# Дитяча лінійка моделі (CORE-009 A3): «Kids», «Junior», «Jr», «J» після моделі («Speedcross J»).
+_KID_MODEL = re.compile(r"(?<![\w])(?:kids?|junior|jr|джуніор)(?![\w])", re.IGNORECASE)
+_J_AFTER_MODEL = re.compile(r"(?<=[A-Za-z0-9])\s+J(?![\w'’ʼ])")
+
+
+def kid_model(text: str) -> bool:
+    """У назві моделі ознака дитячої лінійки: Kids, Junior, Jr, «J» після моделі."""
+    return bool(_KID_MODEL.search(text) or _J_AFTER_MODEL.search(text))
+
+
 def adult_signs(text: str) -> bool:
     """Ознаки дорослого жіночого взуття для 35–36: каблук, «жіночі»."""
     return bool(_ADULT.search(text)) or said_gender(text) == WOMEN
@@ -296,21 +306,17 @@ def _shown(value: float) -> str:
     return f"{value:g}".replace(".", ",")
 
 
-def label_sizes(text: str, state: str) -> list[str] | None:
-    """§7 «вказаний X, ідуть на Y» кодом: вживане — [X, Y], нове — [X]. None — правила немає.
+def label_sizes(text: str) -> list[str] | None:
+    """§7 «вказаний X, ідуть на Y» кодом: на Шафу — [Y] і для вживаного, і для нового (CORE-009,
+    рішення Власника: так вона ставить сама, 1405). None — правила немає.
 
-    Ярлик не європейський («вказаний розмір 5», v1.6) — [Y]: на Шафі лише європейська система,
-    а UK це чи US, з тексту не видно; так вона й ставить на Шафі.
+    Обидва не європейські («9,5 US, ідуть на 10 US») — None: переводить таблиця US/UK.
     """
     label, goes = _LABEL.search(text), _GOES.search(text)
     if not label or not goes:
         return None
-    x, y = _value(label[1] or label[2]), _value(goes[1])
-    if x < FOREIGN_LABEL:  # обидва не європейські («9,5 US, ідуть на 10 US») — таблиця US/UK
-        return [_shown(y)] if y >= FOREIGN_LABEL else None
-    if state == NEW or x == y:
-        return [_shown(x)]
-    return [_shown(x), _shown(y)]
+    y = _value(goes[1])
+    return [_shown(y)] if y >= FOREIGN_LABEL else None
 
 
 def foreign_label(text: str) -> bool:

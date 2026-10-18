@@ -358,7 +358,7 @@ def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, fl
     if allowed and not all(s in allowed for s in shown):
         return Field("sizes", shown, True, "розміру немає у списку Шафи для розділу"), numbers[0]
     if len(shown) == 2 and rules.condition(post_text) == rules.NEW:
-        return Field("sizes", shown, True, "нове — лише розмір з ярлика"), numbers[0]
+        return Field("sizes", shown, True, "нове — лише один розмір"), numbers[0]
     return Field("sizes", shown), numbers[0]
 
 
@@ -394,13 +394,19 @@ _GROUP_NAMES = {
     catalog.BOYS: "для хлопчиків",
 }
 NO_KID_GENDER = "у тексті не сказано, для дівчинки чи хлопчика — перевір"
+MAYBE_KID = "можливо дитяча модель — перевір"
+# ШІ бачить на фото дитячі ознаки (липучки на дитячому фасоні, дитячий принт) — пише в doubts.
+# Лише про ознаки моделі — загальне «дитяче чи доросле» за розміром не рахується (SITE-003).
+_KID_DOUBT = re.compile(r"дитяч\w*\s+(?:модел|лінійк|ознак|фасон|принт)", re.IGNORECASE)
 
 
-def _target(kind: Kind, size: float, text: str) -> tuple[str | None, str | None]:
-    """Група розділу за текстом і розміром (`docs/rules.md` §6, v1.4): (група, причина жовтого).
+def _target(
+    kind: Kind, size: float, text: str, ai_kid: bool = False
+) -> tuple[str | None, str | None]:
+    """Група розділу за текстом і розміром (`docs/rules.md` §6): (група, причина жовтого).
 
-    (None, None) — лишається вибір ШІ (40–42 без слова в тексті). 35–39 без дитячих слів —
-    жіноче (v1.5); з дитячими словами — як у v1.4.
+    (None, None) — лишається вибір ШІ (41–42 без слова в тексті; 40, коли ШІ бачить чоловіче).
+    Група й причина разом — код переносить у групу, але поле жовте (35–36 «можливо дитяча»).
     """
     said = rules.said_gender(text)
     if size < rules.FOREIGN_LABEL:  # не європейський розмір (UK/US з ярлика) — групу він не каже
@@ -415,38 +421,40 @@ def _target(kind: Kind, size: float, text: str) -> tuple[str | None, str | None]
         return _GROUPS[said], None
     if size < 35:
         return None, (NO_KID_GENDER if kind is Kind.KIDS else f"розмір {_number(size)} — дитячий")
-    if size < 40 and not rules.kid_words(text):  # SITE-003: у неї 35+ — майже завжди доросле
+    kid = rules.kid_words(text)
+    if size < 37 and not rules.adult_signs(text) and (kid or rules.kid_model(text) or ai_kid):
+        # CORE-009 A3: дитяча лінійка (Kids, Junior, «J») чи дитячі ознаки — жіноче, але перевірити
+        if kind is Kind.KIDS and kid:  # текст каже «дитячі», і ШІ згодне — лишається дитяче
+            return None, NO_KID_GENDER
+        return catalog.WOMEN, MAYBE_KID
+    if size < 37 or (size < 40 and not (kid and kind is Kind.KIDS)):  # SITE-003: 35+ — доросле
         return catalog.WOMEN, None
-    if size < 37:
-        if kind is Kind.KIDS:
-            return (catalog.WOMEN, None) if rules.adult_signs(text) else (None, NO_KID_GENDER)
-        return (catalog.WOMEN, None) if kind is Kind.MEN else (None, None)
+    if size == 40 and not kid:  # CORE-009 A1: 40 — жіноче; чоловіче — лише якщо ШІ бачить явне
+        return (None, None) if kind is Kind.MEN else (catalog.WOMEN, None)
     if kind is Kind.KIDS:
         return None, f"розмір {_number(size)} зазвичай дорослий"
-    if size < 40:
-        return catalog.WOMEN, None
     if size < 43:
         return None, None
     return catalog.MEN, None
 
 
 def check_group(
-    section: Field, kind: Kind | None, size: float | None, text: str
+    section: Field, kind: Kind | None, size: float | None, text: str, ai_kid: bool = False
 ) -> tuple[Field, bool]:
     """Розділ у потрібній групі. Друге — групу вирішив код (сумнів ШІ про стать не рахується)."""
     if kind in (None, Kind.ACCESSORY) or size is None or section.yellow:
         return section, False
-    group, reason = _target(kind, size, text)
-    if reason:
-        return Field("section", section.value, True, reason), False
+    group, reason = _target(kind, size, text, ai_kid)
     if group is None:
-        return section, False
+        return (
+            (Field("section", section.value, True, reason), False) if reason else (section, False)
+        )
     path = catalog.moved(section.value, group)
     if path is None:
         name = section.value.rsplit(catalog.SEP, 1)[1]
         why = f"має бути {_GROUP_NAMES[group]}, але типу «{name}» там немає — вибери розділ"
         return Field("section", section.value, True, why), False
-    return Field("section", path), True
+    return Field("section", path, bool(reason), reason), True
 
 
 BOOTS = "Чоботи"
@@ -666,6 +674,17 @@ def _with_doubts(fields: list[Field], doubts: Any, decided: set[str]) -> list[Fi
     return result
 
 
+def _ai_kid(answer: dict[str, Any]) -> bool:
+    """ШІ пише в сумнівах про розділ, що модель може бути дитяча (ознаки на фото, CORE-009 A3)."""
+    doubts = answer.get("doubts")
+    return any(
+        isinstance(d, dict)
+        and d.get("field") == "section"
+        and _KID_DOUBT.search(_text(d.get("reason")) or "")
+        for d in (doubts if isinstance(doubts, list) else [])
+    )
+
+
 def _code_sizes(
     answer: dict[str, Any], sizes: Field, path: str | None, post_text: str
 ) -> tuple[Field, bool]:
@@ -675,7 +694,7 @@ def _code_sizes(
     foreign = answer.get("size_system") in (sizes_mod.US, sizes_mod.UK)
     if (foreign and not rules.foreign_label(post_text)) or rules.unpaired(post_text):
         return sizes, False
-    label = rules.label_sizes(post_text, rules.condition(post_text))
+    label = rules.label_sizes(post_text)
     if label is not None:
         return check_sizes(label, path, post_text)[0], True
     found = rules.text_sizes(post_text)
@@ -695,9 +714,9 @@ def check_answer(
     section, kind = check_section(answer.get("section"))
     path = catalog.find_section(section.value) if section.value else None  # None — розділу немає
     sizes, first_size = check_sizes_any(answer, path, kind, post_text)
-    if not rules.unpaired(post_text) and (label := rules.label_sizes(post_text, rules.NEW)):
+    if not rules.unpaired(post_text) and (label := rules.label_sizes(post_text)):
         first_size = _parse_size(label[0])  # QA-001: групу каже ярлик з тексту, не відповідь ШІ
-    section, group_decided = check_group(section, kind, first_size, words)
+    section, group_decided = check_group(section, kind, first_size, words, _ai_kid(answer))
     section = check_shoe_type(section, words)
     moved = catalog.find_section(section.value) if section.value else None
     if moved != path:  # код переніс у іншу групу чи тип — розміри за списком нового розділу

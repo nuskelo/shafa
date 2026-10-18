@@ -94,7 +94,7 @@ def test_refill_keeps_gloves_in_problems(conn, root):
     ],
 )
 def test_foreign_label_gives_goes_size(text, sizes):
-    assert rules.label_sizes(text, rules.condition(text)) == sizes
+    assert rules.label_sizes(text) == sizes
 
 
 @pytest.mark.parametrize("system", ["EU", "UK"])
