@@ -24,7 +24,7 @@ class PlanError(Exception):
 @dataclass(frozen=True)
 class Step:
     kind: str  # photos, own_photos, text, category, condition, brand, keywords, size_system,
-    #           sizes, colors, choice
+    #           sizes, colors, choice, untouched
     label: str  # як поле називається на Шафі — для звіту й помилок
     value: Any = None
     target: str | None = None  # name поля (kind="text") або slug розділу (kind="category")
@@ -109,5 +109,9 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
             steps.append(Step("choice", insole["title"], chosen))
         else:
             notes.append(f"Довжина устілки {f['insole']}: немає у списку Шафи для розділу")
+    filled = {s.label for s in steps if s.kind == "choice"}
+    others = [c["title"] for c in catalog.section(path)["characteristics"]]
+    if others := [t for t in others if t not in filled]:  # Шафа могла поставити сама — у журнал
+        steps.append(Step("untouched", "Поля, яких робот не заповнює", others))
     steps.append(Step("text", "Ціна", str(f["price"]), "price"))
     return steps, notes

@@ -30,6 +30,11 @@ FORM_WAIT = 30.0  # с: на слабкому ноутбуці форма з'я�
 FORM_TICK = 0.5
 LOGIN_WAIT = 15 * 60.0  # с: вікно входу закривається штатно, якщо його так і не закрили
 LOGIN_DONE = "login-done"  # файл у теці даних: кнопка «Я увійшов — закрити вікно»
+# Після вибору розділу Шафа сама заповнює характеристики (живий dry-fill 878, 18.10.2026)
+AUTOFILL_TEXT = re.compile("характеристики оновлено", re.IGNORECASE)
+AUTOFILL_WAIT = 10.0  # с чекаємо повідомлення; немає — Шафа нічого не заповнювала
+QUIET = 2.0  # с без запитів до API — Шафа закінчила
+SETTLE_LIMIT = 30.0  # с найдовше чекаємо тиші
 
 # Що показала Шафа на `/uk/new`.
 FORM, NO_LOGIN, NO_FORM = "form", "login", "no_form"
@@ -160,6 +165,7 @@ class Session:
         self.publish_mode = publish
         self.blocked: list[tuple[str, str]] = []
         self.uploads = 0
+        self.last_api = 0.0  # коли (monotonic) сторінка востаннє зверталась до API Шафи
         self.creates = 0  # скільки запитів публікації пропущено за весь запуск
         self.armed: set[int] = set()  # Картки, на які вже видано квиток
         self._click_ticket: int | None = None
@@ -201,6 +207,8 @@ class Session:
             dialog.dismiss()
 
     def _route(self, route: Any, request: Any) -> None:
+        if "/api/" in request.url:
+            self.last_api = time.monotonic()
         allowed, reason = guard.request_verdict(
             request.method,
             request.url,
@@ -271,6 +279,23 @@ class Session:
             ops = [i.get("operationName") for i in items]
             return body[ops.index("WEB_ProductFormCatalog")]
         raise LookupError("порожній шлях")
+
+    def wait_autofill(self) -> bool:
+        """Після вибору розділу Шафа сама заповнює частину характеристик і пише «Додаткові
+        характеристики оновлено» (ROBOT-003). Чекаємо повідомлення до `AUTOFILL_WAIT` с, потім —
+        поки запити до API стихнуть на `QUIET` с (і після повідомлення теж) (не довше `SETTLE_LIMIT`): заповнене раніше
+        Шафа переписала б. Повертає, чи повідомлення було."""
+        note = self.page.get_by_text(AUTOFILL_TEXT)
+        deadline = time.monotonic() + AUTOFILL_WAIT
+        seen = bool(note.count())
+        while not seen and time.monotonic() < deadline:
+            self.page.wait_for_timeout(250)
+            seen = bool(note.count())
+        since = time.monotonic()  # тиша рахується щонайменше від повідомлення
+        deadline = since + SETTLE_LIMIT
+        while time.monotonic() - max(self.last_api, since) < QUIET and time.monotonic() < deadline:
+            self.page.wait_for_timeout(250)
+        return seen
 
     def open_form(self) -> Opened:
         """Відкрити форму «Додати товар» і дочекатись її (до `FORM_WAIT`) або сторінки входу."""

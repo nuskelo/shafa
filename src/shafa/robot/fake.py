@@ -165,6 +165,12 @@ class FakeDriver:
         self._step()
         return True
 
+    def untouched(self, labels: list[str]) -> list[str]:
+        return []
+
+    def verify(self) -> None:
+        pass
+
     def submit(self) -> Submitted:
         button = self.page.locator("button[type=submit]").filter(has_text=guard.PUBLISH_BUTTON)
         if button.count() != 1:

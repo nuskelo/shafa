@@ -84,14 +84,17 @@ class Driver(Protocol):
     def check_own_photos(self) -> bool: ...
     def fill(self, name: str, value: str, label: str) -> None: ...
     def choose_category(self, parts: list[str], slug: str) -> None: ...
-    def pick(self, label: str, values: list[str]) -> None: ...
+    def pick(self, label: str, values: list[str]) -> list[str] | None: ...
     def keywords(self, words: list[str]) -> None: ...
     def brand(self, name: str) -> bool: ...
+    def untouched(self, labels: list[str]) -> list[str]: ...
+    def verify(self) -> None: ...
     def submit(self) -> Submitted: ...
 
 
 def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str]:
     """Виконати кроки по черзі. Розмір/колір/стан/характеристики — вибір у блоці з підписом.
+    Наприкінці — звірка заповненого (`verify`): не збіглось → `FieldMissing`.
 
     Повертає нотатки (бренд не знайшовся на Шафі — поле лишилось порожнім). `strict` (публікація):
     бренд не знайдено → `BrandMissing`, не всі фото → `PhotosShort` — замість нотаток.
@@ -120,12 +123,108 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
                     raise BrandMissing(step.value)
                 notes.append(f"Бренду «{step.value}» немає на Шафі — не заповнено (OQ-004)")
         elif step.kind in ("condition", "size_system"):
-            driver.pick(step.label, [step.value])
+            notes += driver.pick(step.label, [step.value]) or []
         elif step.kind in ("sizes", "colors", "choice"):
-            driver.pick(step.label, step.value)
+            notes += driver.pick(step.label, step.value) or []
+        elif step.kind == "untouched":
+            notes += driver.untouched(step.value)
         else:
             raise ValueError(f"Невідомий крок {step.kind}")
+    driver.verify()  # Шафа могла переписати вже заповнене — перед публікацією ще раз звіряємо
     return notes
+
+
+# --- Вибір у полі (ROBOT-003) ---
+
+NO_OPTIONS = ("доступних опцій немає", "no options")  # напис порожнього списку — не варіант
+SHOWN_OPTIONS = 30  # скільки варіантів списку писати в журнал
+
+
+class Widget(Protocol):
+    """Блок поля на формі. `listed` — у блоці є список з пошуком (combobox), вибране — чипи «×»."""
+
+    listed: bool
+
+    def chips(self) -> list[str]: ...
+    def remove(self, chip: str) -> None: ...
+    def press(self, value: str) -> bool: ...  # кнопка з таким значенням: клік → True, немає → False
+    def search(self, text: str) -> list[str]: ...  # набрати в списку, повернути видимі варіанти
+    def choose(self, option: str) -> None: ...
+    def close(self) -> None: ...
+    def describe(self) -> str: ...
+
+
+def same(a: str, b: str) -> bool:
+    return " ".join(a.split()).casefold() == " ".join(b.split()).casefold()
+
+
+def among(value: str, values: list[str]) -> bool:
+    return any(same(value, v) for v in values)
+
+
+def exact(options: list[str], value: str) -> str | None:
+    """Точний збіг серед варіантів (без регістру, як у бренді)."""
+    return next((o for o in options if same(o, value)), None)
+
+
+def list_details(label: str, chips: list[str], options: list[str]) -> str:
+    """Для журналу: що вибрано в полі й що є у списку."""
+    shown = [o for o in options if not among(o, list(NO_OPTIONS))]
+    more = f" … ще {len(shown) - SHOWN_OPTIONS}" if len(shown) > SHOWN_OPTIONS else ""
+    return (
+        f"поле «{label}»; вибрано: {', '.join(chips) or 'нічого'}; "
+        f"у списку ({len(shown)}): {', '.join(shown[:SHOWN_OPTIONS]) or 'порожньо'}{more}"
+    )
+
+
+def pick_values(widget: Widget, label: str, values: list[str]) -> list[str]:
+    """Вибрати `values` у полі. Повертає нотатки (що Шафа поставила сама і що прибрано).
+
+    Список: уже вибране потрібне — не чіпаємо; чужі чипи (Шафа заповнює сама після розділу) —
+    прибираємо. Після набору варіантів немає → очистити поле, прочитати весь список, точний збіг.
+    Не знайшли — `FieldMissing` з чипами й варіантами. Наприкінці чипи мають бути рівно наші.
+    """
+    notes = []
+    kept = widget.chips() if widget.listed else []
+    for chip in kept:
+        if not among(chip, values):
+            widget.remove(chip)
+            notes.append(f"{label}: Шафа поставила сама «{chip}» — прибрано")
+    kept = [c for c in kept if among(c, values)]
+    chosen = []
+    for value in values:
+        if among(value, kept) or widget.press(value):
+            continue
+        if not widget.listed:
+            raise FieldMissing(f"{label}: {value}", widget.describe())
+        options = widget.search(value)
+        found = exact(options, value)
+        if not found:
+            options = widget.search("")
+            found = exact(options, value)
+        if not found:
+            raise FieldMissing(f"{label}: {value}", list_details(label, widget.chips(), options))
+        widget.choose(found)
+        chosen.append(value)
+    if not widget.listed:
+        return notes
+    widget.close()
+    now = widget.chips()
+    lost = [v for v in kept + chosen if not among(v, now)]
+    alien = [c for c in now if not among(c, values)]
+    if lost or alien:
+        raise FieldMissing(
+            f"{label}: на формі {', '.join(now) or 'порожньо'}, треба {', '.join(values)}",
+            list_details(label, now, []),
+        )
+    return notes
+
+
+def same_text(got: str, value: str, price: bool = False) -> bool:
+    """Значення поля збігається з потрібним (ціна — за цифрами: «1 200» = «1200»)."""
+    if price:
+        return re.sub(r"\D", "", got) == re.sub(r"\D", "", value)
+    return " ".join(got.split()) == " ".join(value.split())
 
 
 # --- Справжній драйвер ---
@@ -157,34 +256,151 @@ FIND_BLOCK = """([label, mark]) => {
 }"""
 
 
-# Що є на формі, коли потрібного поля немає: кнопки й вкладки блоку (якщо блок знайдено) та всі
-# підписи зі словом «розмір» (вкладки систем розмірів: «Європейський», «Український»…).
-LIST_FIELDS = """(mark) => {
+# Кнопка «×» чипа (вибране значення списку): react-select — клас «…Remove», aria-label «Remove …».
+REMOVE = "[class*=emove], [aria-label^='Remove'], [aria-label^='Видалити'], [aria-label^='Удалить']"
+OPTION = "[role=option], [class*=option], [class*=Option]"
+
+# Що є на формі, коли потрібного поля немає: кнопки й вкладки блоку (якщо блок знайдено) та
+# підписи зі словом «розмір» (вкладки систем розмірів: «Європейський», «Український»…). Не
+# підписи: чипи (вибрані значення й ключові слова), варіанти списків, поля введення.
+LIST_FIELDS = f"""(mark) => {{
   const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
   const texts = els => [...new Set(els.map(e => norm(e.innerText || e.textContent))
     .filter(t => t && t.length <= 40))].slice(0, 40);
-  const block = mark ? document.querySelector(`[data-robot-block='${mark}']`) : null;
-  return {
+  const chip = e => e.closest("{OPTION}, [class*=ultiValue], [class*=ulti-value], [class*=hip]")
+    || [e, e.parentElement, e.parentElement?.parentElement].some(
+      b => b && [...b.children].some(c => c !== e && c.matches("{REMOVE}")));
+  const block = mark ? document.querySelector(`[data-robot-block='${{mark}}']`) : null;
+  return {{
     block: block ? texts([...block.querySelectorAll(
       'button, [role=tab], [role=radio], [role=option], label')]) : [],
     sizes: texts([...document.querySelectorAll('body *')].filter(
-      e => !e.children.length && /розмір/i.test(e.textContent || ''))),
-  };
-}"""
+      e => !e.children.length && /розмір/i.test(e.textContent || '')
+        && !e.closest('input, textarea, [contenteditable]') && !chip(e))),
+  }};
+}}"""
+
+# Чипи блоку: текст кожного; кнопка «×» чипа позначається `data-robot-chip` (номер) для кліку.
+CHIPS = f"""(mark) => {{
+  const norm = s => (s || '').replace(/[×✕✖]/g, ' ').replace(/\\s+/g, ' ').trim();
+  const block = document.querySelector(`[data-robot-block='${{mark}}']`);
+  if (!block) return [];
+  block.querySelectorAll('[data-robot-chip]').forEach(e => e.removeAttribute('data-robot-chip'));
+  const removers = [...block.querySelectorAll("{REMOVE}")].concat([...block.querySelectorAll('*')]
+    .filter(e => !e.children.length && /^[×✕✖]$/.test((e.textContent || '').trim())));
+  const seen = new Set(), chips = [];
+  for (const r of removers) {{
+    const box = r.parentElement;
+    if (!box || box === block || seen.has(box) || box.querySelector('input')) continue;
+    const text = norm(box.innerText || box.textContent);
+    if (!text) continue;
+    seen.add(box);
+    r.setAttribute('data-robot-chip', String(chips.length));
+    chips.push(text);
+  }}
+  return chips;
+}}"""
+
+# Видимі варіанти відкритого списку (найглибші елементи-варіанти), позначені `data-robot-option`.
+OPTIONS = f"""() => {{
+  const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
+  document.querySelectorAll('[data-robot-option]').forEach(e => e.removeAttribute('data-robot-option'));
+  const found = [...document.querySelectorAll("{OPTION}")].filter(e =>
+    !e.querySelector("{OPTION}") && e.getClientRects().length
+    && !/notice|NoOptions|no-options/i.test(String(e.className || '')));
+  return found.map((e, i) => {{
+    e.setAttribute('data-robot-option', String(i));
+    return norm(e.innerText || e.textContent);
+  }});
+}}"""
+
+LIST_WAIT = 5  # с чекаємо, поки список покаже варіанти
 
 
-def describe_form(page: Any, mark: str | None = None) -> str:
-    """Перелік назв полів і вкладок розміру на формі — для журналу, коли поля не знайдено."""
+def describe_form(page: Any, mark: str | None = None, typed: set[str] | None = None) -> str:
+    """Перелік назв полів і вкладок розміру на формі — для журналу, коли поля не знайдено.
+
+    `typed` — що робот сам набрав (ключові слова, назва…): такі тексти — не підписи.
+    """
     try:
         found = page.evaluate(LIST_FIELDS, mark)
     except Exception:  # noqa: BLE001 — діагностика не має ховати справжню причину
         return ""
+    typed_keys = {" ".join(t.split()).casefold() for t in typed or ()}
+    labels = [
+        t for t in found.get("sizes") or [] if " ".join(t.split()).casefold() not in typed_keys
+    ]
     parts = []
     if found.get("block"):
         parts.append("у блоці: " + ", ".join(found["block"]))
-    if found.get("sizes"):
-        parts.append("підписи розміру: " + ", ".join(found["sizes"]))
+    if labels:
+        parts.append("підписи розміру: " + ", ".join(labels))
     return "; ".join(parts) or "на формі не знайдено нічого зі словом «розмір»"
+
+
+class PageWidget:
+    """Блок поля на справжній сторінці (усі кліки й клавіші — крізь захист `Session`)."""
+
+    def __init__(self, driver: "PageDriver", label: str, mark: str) -> None:
+        self.driver, self.label, self.mark = driver, label, mark
+        self.page, self.session = driver.page, driver.session
+        self.block = self.page.locator(f"[data-robot-block='{mark}']")
+        self.input = self.block.locator("input[role=combobox]")
+        self.listed = bool(self.input.count())
+
+    def chips(self) -> list[str]:
+        return list(self.page.evaluate(CHIPS, self.mark))
+
+    def remove(self, chip: str) -> None:
+        chips = self.chips()  # заново: номери чипів після кожної зміни інші
+        index = next(i for i, c in enumerate(chips) if same(c, chip))
+        button = self.block.locator(f"[data-robot-chip='{index}']")
+        self.session.click(button.first, f"{self.label}: прибрати «{chip}»")
+
+    def press(self, value: str) -> bool:
+        button = self.block.get_by_role("button", name=value, exact=True)
+        if not button.count() and not self.listed:
+            button = self.block.get_by_text(value, exact=True)
+        if not button.count():
+            return False
+        self.session.click(button.first, f"{self.label}: {value}")
+        return True
+
+    def options(self) -> list[str]:
+        return [o for o in self.page.evaluate(OPTIONS) if not among(o, list(NO_OPTIONS))]
+
+    def search(self, text: str) -> list[str]:
+        self.input.first.click()
+        self.input.first.fill(text)
+        browser.pause()
+        deadline = time.monotonic() + LIST_WAIT
+        options = self.options()
+        while not options and time.monotonic() < deadline:
+            if not text:
+                self.session.press("ArrowDown")  # порожнє поле: список відкривається стрілкою
+            self.page.wait_for_timeout(500)
+            options = self.options()
+        return options
+
+    def choose(self, option: str) -> None:
+        index = next((i for i, o in enumerate(self.page.evaluate(OPTIONS)) if o == option), None)
+        if index is None:
+            raise FieldMissing(
+                f"{self.label}: {option}", list_details(self.label, self.chips(), [])
+            )
+        self.session.click(
+            self.page.locator(f"[data-robot-option='{index}']").first, f"{self.label}: {option}"
+        )
+        self.session.press("Escape")
+
+    def close(self) -> None:
+        if self.input.first.input_value():
+            self.input.first.fill("")
+        self.session.press("Escape")
+        browser.pause(0.5, 1.0)
+
+    def describe(self) -> str:
+        return describe_form(self.page, self.mark, self.driver.typed)
 
 
 class PageDriver:
@@ -194,12 +410,19 @@ class PageDriver:
         self.session = session
         self.page = session.page
         self._marks = 0
+        self.typed: set[str] = set()  # що робот набрав сам — не підписи полів (діагностика)
+        self.texts: dict[str, tuple[str, str]] = {}  # name → (підпис, значення): звірка в кінці
+        self.lists: dict[str, list[str]] = {}  # підпис списку → наші значення: звірка в кінці
 
-    def _block(self, label: str) -> Any:
+    def _find(self, label: str) -> str | None:
         self._marks += 1
         mark = f"b{self._marks}"
-        if not self.page.evaluate(FIND_BLOCK, [LABELS.get(label, label), mark]):
-            raise FieldMissing(label, describe_form(self.page))
+        return mark if self.page.evaluate(FIND_BLOCK, [LABELS.get(label, label), mark]) else None
+
+    def _block(self, label: str) -> Any:
+        mark = self._find(label)
+        if mark is None:
+            raise FieldMissing(label, describe_form(self.page, typed=self.typed))
         return self.page.locator(f"[data-robot-block='{mark}']")
 
     def set_photos(self, paths: list[str]) -> int:
@@ -239,11 +462,21 @@ class PageDriver:
         return True
 
     def fill(self, name: str, value: str, label: str) -> None:
+        """Очистити поле, ввести значення і прочитати назад (Шафа сама ставить ціну, ROBOT-003).
+        Не збіглось і після другої спроби — `FieldMissing`: з чужим значенням не публікуємо."""
         field = self.page.locator(f"[name='{name}']")
         if not field.count():
             raise FieldMissing(label)
-        field.first.fill(value)
-        browser.pause()
+        self.typed.add(value)
+        for _ in range(2):
+            field.first.fill("")
+            field.first.fill(value)
+            browser.pause()
+            got = field.first.input_value()
+            if same_text(got, value, price=name == "price"):
+                self.texts[name] = (label, value)
+                return
+        raise FieldMissing(f"{label}: на формі {got[:40]}, треба {value[:40]}")
 
     def choose_category(self, parts: list[str], slug: str) -> None:
         try:
@@ -251,27 +484,43 @@ class PageDriver:
         except LookupError as error:
             raise FieldMissing(f"Розділ: {error}") from error
         self.page.wait_for_load_state("networkidle")
+        self.session.wait_autofill()  # Шафа сама заповнює характеристики — дочекатися кінця
 
-    def pick(self, label: str, values: list[str]) -> None:
-        block, mark = self._block(label), f"b{self._marks}"
-        for value in values:
-            button = block.get_by_role("button", name=value, exact=True)
-            if not button.count():
-                button = block.get_by_text(value, exact=True)
-            if button.count():
-                self.session.click(button.first, f"{label}: {value}")
-                continue
-            combo = block.locator("input[role=combobox]")
-            if not combo.count():
-                raise FieldMissing(f"{label}: {value}", describe_form(self.page, mark))
-            combo.first.click()
-            combo.first.fill(value)
-            browser.pause()
-            option = self.page.locator("[class*=option]").get_by_text(value, exact=True)
-            if not option.count():
-                raise FieldMissing(f"{label}: {value}", describe_form(self.page, mark))
-            self.session.click(option.first, f"{label}: {value}")
-            self.session.press("Escape")
+    def _widget(self, label: str) -> PageWidget:
+        self._block(label)
+        return PageWidget(self, label, f"b{self._marks}")
+
+    def pick(self, label: str, values: list[str]) -> list[str]:
+        widget = self._widget(label)
+        notes = pick_values(widget, label, values)
+        if widget.listed:
+            self.lists[label] = widget.chips()  # pick_values уже звірив: чипи — рівно наші
+        return notes
+
+    def untouched(self, labels: list[str]) -> list[str]:
+        """Поля, яких робот не заповнює: не чіпаємо, лише пишемо, що Шафа поставила сама."""
+        notes = []
+        for label in labels:
+            mark = self._find(label)
+            chips = self.page.evaluate(CHIPS, mark) if mark else []
+            if chips:
+                notes.append(f"на формі Шафа поставила сама: {label}: {', '.join(chips)}")
+        return notes
+
+    def verify(self) -> None:
+        """Після всіх кроків: тексти й списки на формі — рівно наші (Шафа могла переписати)."""
+        for name, (label, value) in self.texts.items():
+            field = self.page.locator(f"[name='{name}']")
+            got = field.first.input_value() if field.count() else ""
+            if not same_text(got, value, price=name == "price"):
+                raise FieldMissing(f"{label}: на формі {got[:40]}, треба {value[:40]}")
+        for label, values in self.lists.items():
+            mark = self._find(label)
+            chips = self.page.evaluate(CHIPS, mark) if mark else []
+            if sorted(map(str.casefold, chips)) != sorted(map(str.casefold, values)):
+                raise FieldMissing(
+                    f"{label}: на формі {', '.join(chips) or 'порожньо'}, треба {', '.join(values)}"
+                )
 
     def brand(self, name: str) -> bool:
         """Пошук у полі «Бренд»: лише варіант, що точно збігається. «Додати бренд» — ніколи."""
@@ -299,6 +548,7 @@ class PageDriver:
         if not combo.count():
             raise FieldMissing("Ключові слова")
         for word in words:
+            self.typed.add(word)
             combo.first.fill(word)
             browser.pause(0.5, 1.0)
             self.session.press("Enter", in_keywords=True)
