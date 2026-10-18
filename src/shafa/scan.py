@@ -69,6 +69,20 @@ def _join(names: list[str]) -> str:
 NO_SECTION_TEXT = "Немає підходящого розділу на Шафі (рукавички, шарфи, шапки тощо)"
 
 
+def text_problem(text: str) -> tuple[str, str] | None:
+    """Проблема, яку видно з самого тексту поста (ШІ тут не допоможе): кілька товарів, немає розділу.
+
+    Перевіряє і «Перезаповнити» (QA-001): Картки, завантажені до нових правил, інакше їх обходять.
+    """
+    if many_items(text):
+        return "many_items", "У пості кілька товарів з різними цінами"
+    if many_sizes(text):  # «43 і 45» — два товари (CORE-007)
+        return "many_items", "У пості кілька розмірів — схоже, кілька товарів"
+    if item_kind(text) == "other":  # рукавички, шарфи, шапки — у знімку Шафи їх немає
+        return "no_section", NO_SECTION_TEXT
+    return None
+
+
 def find_problem(
     folder: Folder, texts: dict[int, str], twins: dict[int, list[str]]
 ) -> tuple[str, str] | None:
@@ -86,12 +100,8 @@ def find_problem(
         return "no_text", f"У поста {post_id} немає тексту"
     if price_from_text(texts[post_id]) is None:
         return "no_price", f"У поста {post_id} немає ціни"
-    if many_items(texts[post_id]):
-        return "many_items", "У пості кілька товарів з різними цінами"
-    if many_sizes(texts[post_id]):  # «43 і 45» — два товари (CORE-007)
-        return "many_items", "У пості кілька розмірів — схоже, кілька товарів"
-    if item_kind(texts[post_id]) == "other":  # рукавички, шарфи, шапки — у знімку Шафи їх немає
-        return "no_section", NO_SECTION_TEXT
+    if problem := text_problem(texts[post_id]):
+        return problem
     if not folder.photos:
         return "no_photos", "У папці немає фото .jpg"
     if len(folder.photos) > MAX_PHOTOS:

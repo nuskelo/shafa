@@ -169,10 +169,10 @@ def many_items(text: str) -> bool:
 WINTER = "Зима"
 DEMI = "Демісезон"
 # Ознаки зими: «термо», «на хутрі» (не «без хутра»), «утеплені», «зимові», «уги/угги», «дутики»,
-# «на флісі». Мембрана й «не промокають» без них — демісезон.
+# «на флісі» чи «всередині фліс» (QA-001: те саме). Мембрана й «не промокають» без них — демісезон.
 _WINTER_SIGN = re.compile(
     r"термо|(?<!без )хутр|утепл|зимов|(?<![\w'’ʼ])у[гґ]{1,2}(?:и|і|ів|ах)?(?![\w'’ʼ])|"
-    r"(?<!\w)ugg|дутик|(?:на|з)\s+фліс",
+    r"(?<!\w)ugg|дутик|(?<!без )(?<!мікро)фліс",
     re.IGNORECASE,
 )
 _WET = re.compile(
@@ -263,10 +263,14 @@ def adult_signs(text: str) -> bool:
 
 
 _SIZE = r"(\d{2}(?:[.,]5)?)"
+# Ярлик буває не європейський: «вказаний розмір 5» — UK/US (QA-001), тому тут і одна цифра.
+_LABEL_SIZE = r"(\d{1,2}(?:[.,]5)?)(?![\d.,]*\s*см)"
+# Ярлик, менший за це, — не європейський (у Шафі найменший розмір — 15, у малюків).
+FOREIGN_LABEL = 15
 # «Вказаний 39 розмір, ідуть на 38»; «на ярлику 39, ідуть на 38»; «розмір вказаний 39».
 _LABEL = re.compile(
-    rf"(?:вказан\w*|на\s+ярлик\w*|на\s+бирц\w*)\s*(?:розмір\w*)?\s*[:-]?\s*{_SIZE}|"
-    rf"розмір\w*\s+вказан\w*\s*[:-]?\s*{_SIZE}",
+    rf"(?:вказан\w*|на\s+ярлик\w*|на\s+бирц\w*)\s*(?:розмір\w*)?\s*[:-]?\s*{_LABEL_SIZE}|"
+    rf"розмір\w*\s+вказан\w*\s*[:-]?\s*{_LABEL_SIZE}",
     re.IGNORECASE,
 )
 _GOES = re.compile(rf"(?<!\w)[іий]?дуть\s*(?:на\s*)?{_SIZE}(?!\s*[-–/]\s*\d)", re.IGNORECASE)
@@ -278,6 +282,8 @@ _SIZES_AFTER = re.compile(
     rf"розмір\w*\s*[:-]?\s*{_SIZE_LIST}(?![\d.,]\d)(?!\s*(?:см|мм|\*|[xх×]\s*\d))", re.IGNORECASE
 )
 _RANGE_AFTER = re.compile(r"^\s*[-–/]\s*\d")
+# «В наявності декілька розмірів» — кілька товарів (QA-001: пости-списки з «*» на кожен розмір).
+_SEVERAL = re.compile(r"(?<!\w)(?:де)?кілька\s+розмір|(?<!\w)різн\w*\s+розмір", re.IGNORECASE)
 # Розпаровка: лівий і правий різні — це не два товари, лишається жовтим.
 _UNPAIRED = re.compile(r"(?<!\w)лів\w*|(?<!\w)прав\w*|розпаров", re.IGNORECASE)
 
@@ -291,14 +297,28 @@ def _shown(value: float) -> str:
 
 
 def label_sizes(text: str, state: str) -> list[str] | None:
-    """§7 «вказаний X, ідуть на Y» кодом: вживане — [X, Y], нове — [X]. None — правила немає."""
+    """§7 «вказаний X, ідуть на Y» кодом: вживане — [X, Y], нове — [X]. None — правила немає.
+
+    Ярлик не європейський («вказаний розмір 5», v1.6) — [Y]: на Шафі лише європейська система,
+    а UK це чи US, з тексту не видно; так вона й ставить на Шафі.
+    """
     label, goes = _LABEL.search(text), _GOES.search(text)
     if not label or not goes:
         return None
     x, y = _value(label[1] or label[2]), _value(goes[1])
+    if x < FOREIGN_LABEL:  # обидва не європейські («9,5 US, ідуть на 10 US») — таблиця US/UK
+        return [_shown(y)] if y >= FOREIGN_LABEL else None
     if state == NEW or x == y:
         return [_shown(x)]
     return [_shown(x), _shown(y)]
+
+
+def foreign_label(text: str) -> bool:
+    """«Вказаний розмір 5, ідуть на 37»: ярлик не європейський — розмір дає «ідуть на» (v1.6)."""
+    label, goes = _LABEL.search(text), _GOES.search(text)
+    if not label or not goes:
+        return False
+    return _value(label[1] or label[2]) < FOREIGN_LABEL <= _value(goes[1])
 
 
 def text_sizes(text: str) -> list[float]:
@@ -316,8 +336,14 @@ def many_sizes(text: str) -> bool:
     """Два й більше різних розміри в пості (43 і 45; 37 і 38) — кілька товарів.
 
     «Вказаний X, ідуть на Y» і розпаровка (лівий/правий) — один товар. Розміри ближче 0,5 — теж.
+    Але «декілька розмірів» чи два різні «вказаний X» в одному пості — кілька товарів (QA-001).
     """
-    if _GOES_ANY.search(text) or _UNPAIRED.search(text):
+    if _UNPAIRED.search(text):
+        return False
+    labels = {_value(m[1] or m[2]) for m in _LABEL.finditer(text)}
+    if _SEVERAL.search(text) or len(labels) >= 2:
+        return True
+    if _GOES_ANY.search(text):
         return False
     sizes = sorted(text_sizes(text))
     return any(b - a > 0.5 for a, b in pairwise(sizes))

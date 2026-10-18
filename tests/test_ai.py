@@ -369,10 +369,8 @@ def test_accessory_fields():
 
 def test_gender_and_teen_only_where_they_belong():
     fields = check(gender="Для жінок", teen=True)  # жіночі черевики: ні «Стать», ні «Категорія»
-    assert (fields["gender"].value, fields["gender"].reason) == (
-        "Для жінок",
-        "у цьому розділі Шафи такого поля немає",
-    )
+    # QA-001: поля в типу немає — порожнє і не жовте (Шафа його не покаже)
+    assert (fields["gender"].value, fields["gender"].yellow) == (None, False)
     assert fields["teen"].value is None
 
 
