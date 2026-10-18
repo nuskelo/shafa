@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from shafa import ai
 from shafa.db import Status
 from shafa.folders import PUBLISHED_DIR
 from shafa.robot import browser, guard, lock, publish
@@ -17,7 +18,9 @@ from shafa.robot.listings import (
     similar,
     sizes_close,
 )
+from test_review import add_card
 from test_robot_form import FakeDriver, FakeLocator, FakePage
+from test_robot_plan import BLANK, TEXT
 
 
 @pytest.fixture(autouse=True)
@@ -541,7 +544,6 @@ def test_no_form_mid_run_leaves_card_approved(env):
     ("missing", "code", "reason"),
     [
         ("Сезон", "robot_field_missing", "поле не знайдено — мабуть, Шафа змінила форму"),
-        ("бренд", "robot_brand_missing", "бренд не знайдено"),
         ("фото", "robot_photos", "не всі фото завантажились"),
     ],
 )
@@ -550,7 +552,6 @@ def test_form_trouble_is_problem_and_stop(env, monkeypatch, missing, code, reaso
     second = add(env, "1400", 1400, "2025-05-01T10:00:00")
     errors = {
         "Сезон": FieldMissing("Сезон"),
-        "бренд": BrandMissing("Ecco"),
         "фото": PhotosShort("1 з 2"),
     }
 
@@ -563,6 +564,7 @@ def test_form_trouble_is_problem_and_stop(env, monkeypatch, missing, code, reaso
     assert state(env.conn, first) == (Status.PROBLEM, code)
     assert state(env.conn, second) == (Status.APPROVED, None)
     assert report.reason == reason
+    assert report.code == {"Сезон": "site", "фото": "photos"}[missing]
     assert env.driver.submits == []
 
 
@@ -720,7 +722,7 @@ def test_strict_execute_stops_on_missing_brand_and_photos():
 
     driver = FakeDriver(None)
     with pytest.raises(BrandMissing, match="Невідомий бренд"):
-        execute([Step("brand", "Бренд", "Невідомий бренд")], driver, strict=True)
+        execute([Step("brand", "Бренд", "Невідомий бренд", known=True)], driver, strict=True)
     driver.missing = "одне фото"
     with pytest.raises(PhotosShort, match="1 з 2"):
         execute([Step("photos", "Фото", ["a", "b"])], driver, strict=True)
@@ -995,3 +997,87 @@ def test_only_bot_posts_checked(env):
 
     assert env.checked == []
     assert state(env.conn, item)[0] == Status.PUBLISHED
+
+
+# --- ROBOT-006: бренд ---
+
+
+def branded_blank(brand):
+    return [f for f in BLANK if f.name != "brand"] + [ai.Field("brand", brand)]
+
+
+def add_branded(env, folder, post_id, brand, date):
+    item = add_card(
+        env.conn, env.root, folder=folder, post_id=post_id, date=date, status=Status.APPROVED,
+        blank=branded_blank(brand), text=TEXT,
+    )  # fmt: skip
+    with env.conn:  # «Це інший товар» — схожі назви не заважають
+        env.conn.execute("UPDATE items SET duplicate_ok_at = 'x' WHERE id = ?", (item,))
+    return item
+
+
+def no_brands(env, *names):
+    make = env.make_driver
+
+    def wrapped(session):
+        driver = make(session)
+        driver.no_brands = set(names)
+        return driver
+
+    env.make_driver = wrapped
+
+
+def test_known_brand_failure_puts_card_in_problems_and_session_goes_on(env):
+    first = add_branded(env, "1342", 1342, "Ecco", "2025-03-01T10:00:00")
+    second = add_branded(env, "1400", 1400, "Tamaris", "2025-05-01T10:00:00")
+    no_brands(env, "Ecco")
+
+    report = env.run()
+
+    assert state(env.conn, first) == (Status.PROBLEM, "robot_brand_missing")
+    assert state(env.conn, second)[0] == Status.PUBLISHED  # сесія не зупинилась
+    assert report.code == "done"
+    assert "скажіть Власнику" in row(env.conn, first)["problem_text"]
+    assert "є у довіднику Шафи, але робот його не знайшов" in row(env.conn, first)["problem_text"]
+    assert env.driver.submits == [Status.PUBLISHING]  # перша Картка до кліку не дійшла
+    assert any(s.endswith("-1342-бренд.png") for s in env.session.page.shots)
+
+
+def test_brand_failure_writes_markup_and_option_texts_to_screens_and_log(env):
+    add_branded(env, "1342", 1342, "Ecco", "2025-03-01T10:00:00")
+    no_brands(env, "Ecco")
+
+    env.run()
+
+    (dump,) = (env.tmp / "екрани").glob("*-1342-бренд.html")
+    text = dump.read_text(encoding="utf-8")
+    assert "Peter\\xa0Storm Kids" in text and "<div>Бренд</div>" in text  # repr видно \xa0
+    assert any("бренд не знайдено" in line and "Peter\\xa0Storm Kids" in line for line in env.lines)
+    assert any("розмітка поля «Бренд»" in line and dump.name in line for line in env.lines)
+
+
+def test_brand_nowhere_card_is_published_with_note_and_diagnostics(env):
+    item = add_branded(env, "1342", 1342, "Snowdonia", "2025-03-01T10:00:00")
+    no_brands(env, "Snowdonia")
+
+    report = env.run()
+
+    assert state(env.conn, item)[0] == Status.PUBLISHED
+    assert "Пост 1342: бренд Snowdonia не в списку Шафи — лишено порожнім" in report.notes
+    assert any(s.endswith("-1342-бренд.png") for s in env.session.page.shots)
+    assert list((env.tmp / "екрани").glob("*-1342-бренд.html"))
+
+
+def test_card_without_brand_miss_leaves_no_brand_screens(env):
+    item = add_branded(env, "1342", 1342, "Ecco", "2025-03-01T10:00:00")
+    env.run()
+    assert state(env.conn, item)[0] == Status.PUBLISHED
+    assert not list((env.tmp / "екрани").glob("*бренд*"))
+
+
+def test_old_brand_miss_does_not_leak_to_next_card(env):
+    add_branded(env, "1342", 1342, "Snowdonia", "2025-03-01T10:00:00")
+    add_branded(env, "1400", 1400, "Tamaris", "2025-05-01T10:00:00")
+    no_brands(env, "Snowdonia")
+    env.run()
+    assert not list((env.tmp / "екрани").glob("*-1400-бренд*"))
