@@ -31,11 +31,14 @@ class FieldMissing(Exception):
     """Поля форми не знайдено (Шафа змінила вигляд?). `args[0]` — назва поля на Шафі.
 
     `details` — що є на формі натомість (для журналу, CORE-008 D): кнопки блоку й підписи розміру.
+    `field` і `markup` — поле-список, де зупинився робот, і розмітка його блоку (ROBOT-004, дамп).
     """
 
-    def __init__(self, label: str, details: str = "") -> None:
+    def __init__(self, label: str, details: str = "", field: str = "", markup: str = "") -> None:
         super().__init__(label)
         self.details = details
+        self.field = field
+        self.markup = markup
 
 
 class BrandMissing(Exception):
@@ -314,7 +317,56 @@ OPTIONS = f"""() => {{
   }});
 }}"""
 
+# Розмітка блоку поля і відкритих меню поза ним (ROBOT-004): копії без скриптів і без `value`
+# прихованих полів введення (там бувають токени). Меню всередині блоку — уже в блоці.
+MENU = "[role=listbox], [class*=menu], [class*=Menu]"
+MARKUP = f"""(mark) => {{
+  const block = document.querySelector(`[data-robot-block='${{mark}}']`);
+  if (!block) return [];
+  const clean = el => {{
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll('script, style, noscript').forEach(e => e.remove());
+    copy.querySelectorAll('input[type=hidden]').forEach(e => e.removeAttribute('value'));
+    return copy.outerHTML;
+  }};
+  const menus = [...document.querySelectorAll("{MENU}")].filter(e => e.getClientRects().length
+    && !block.contains(e) && !e.closest('header, nav, footer'));
+  return [block, ...menus.filter(m => !menus.some(o => o !== m && o.contains(m)))].map(clean);
+}}"""
+MARKUP_LIMIT = 50 * 1024  # байтів у файлі розмітки
+
 LIST_WAIT = 5  # с чекаємо, поки список покаже варіанти
+
+
+def markup(page: Any, mark: str | None) -> str:
+    """Розмітка блоку поля й відкритого меню варіантів — для файлу поруч зі скриншотом."""
+    if mark is None:
+        return ""
+    try:
+        parts = page.evaluate(MARKUP, mark)
+    except Exception:  # noqa: BLE001 — діагностика не має ховати справжню причину
+        return ""
+    if not parts:
+        return ""
+    text = "<!-- блок поля -->\n" + parts[0]
+    if parts[1:]:
+        text += "\n<!-- меню варіантів -->\n" + "\n".join(parts[1:])
+    return text
+
+
+def save_markup(error: FieldMissing, shot: Path) -> Path | None:
+    """Розмітка поля-списку поруч зі скриншотом: `<час>-<пост>-<поле>.html`, до 50 КБ."""
+    if not error.markup:
+        return None
+    field = re.sub(r'[\\/:*?"<>|\s]+', "-", error.field).strip("-.") or "поле"
+    path = shot.with_name(f"{shot.stem.removesuffix('-нема-поля')}-{field}.html")
+    data = error.markup.encode("utf-8")[:MARKUP_LIMIT].decode("utf-8", errors="ignore")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data, encoding="utf-8")
+    except OSError:
+        return None
+    return path
 
 
 def describe_form(page: Any, mark: str | None = None, typed: set[str] | None = None) -> str:
@@ -492,7 +544,12 @@ class PageDriver:
 
     def pick(self, label: str, values: list[str]) -> list[str]:
         widget = self._widget(label)
-        notes = pick_values(widget, label, values)
+        try:
+            notes = pick_values(widget, label, values)
+        except FieldMissing as error:
+            if widget.listed:  # зупинка в полі-списку — розмітка для файлу (ROBOT-004)
+                error.field, error.markup = label, markup(self.page, widget.mark)
+            raise
         if widget.listed:
             self.lists[label] = widget.chips()  # pick_values уже звірив: чипи — рівно наші
         return notes
@@ -519,7 +576,9 @@ class PageDriver:
             chips = self.page.evaluate(CHIPS, mark) if mark else []
             if sorted(map(str.casefold, chips)) != sorted(map(str.casefold, values)):
                 raise FieldMissing(
-                    f"{label}: на формі {', '.join(chips) or 'порожньо'}, треба {', '.join(values)}"
+                    f"{label}: на формі {', '.join(chips) or 'порожньо'}, треба {', '.join(values)}",
+                    field=label,
+                    markup=markup(self.page, mark),
                 )
 
     def brand(self, name: str) -> bool:
@@ -664,6 +723,8 @@ def dry_fill(
             log(f"Пост {post_id}: не знайдено поле «{error}» — Картка в Проблемах, екран {shot}")
             if error.details:
                 log(f"  · на формі: {error.details}")
+            if dump := save_markup(error, shot):
+                log(f"  · розмітка поля: {dump}")
             break
         if attempts := session.publish_attempts():
             raise RuntimeError(f"Заблоковано спроби публікації: {attempts}")

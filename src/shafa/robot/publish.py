@@ -42,6 +42,7 @@ from shafa.robot.form import (
     PhotosShort,
     Submitted,
     execute,
+    save_markup,
 )
 from shafa.robot.plan import PlanError, plan
 
@@ -578,6 +579,8 @@ class Run:
                 self.log(
                     f"Пост {card.post_id}: поле «{error}» не знайдено; на формі — {error.details}"
                 )
+            if dump := save_markup(error, shot):
+                self.log(f"Пост {card.post_id}: розмітка поля «{error.field}» — {dump}")
             return Stop("site", "поле не знайдено — мабуть, Шафа змінила форму")
         except BrandMissing as error:
             self._problem(report, card, ok, "robot_brand_missing",
