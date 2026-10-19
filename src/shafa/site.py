@@ -257,7 +257,11 @@ def code_fields(text: str, sent_at: str) -> dict[str, Any]:
     `postedAt` — момент відправки на сайт (UTC), не дата поста: інакше пара, що чекала 7 днів, не
     потрапляє в «Новинки» сайту (SITE-003). Дата поста лишається в нашій базі (`posted_at`).
     """
-    fields: dict[str, Any] = {"title": None, "description": text, "postedAt": sent_at}
+    fields: dict[str, Any] = {
+        "title": None,
+        "description": rules.without_service_lines(text),
+        "postedAt": sent_at,
+    }
     price = rules.price_from_text(text)
     if price is not None and 1 <= price <= PRICE_MAX:
         fields["price"] = price

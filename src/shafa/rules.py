@@ -54,6 +54,10 @@ def first_sentence_end(text: str) -> int:
 
 
 SIGNATURE = re.compile(r"Пишіть сюди\s*👉?\s*@\w+", re.IGNORECASE)
+# Службові рядки підпису поста бота (BOT-007): рядок сайту (з 👈 і без) і «Всі/Більше/Додаткові фото
+# в коментарях» — не частина опису товару.
+COMMENTS = re.compile(r"^\s*(всі|більше|додаткові)\s+фото\s+в\s+коментар\w*\W*$", re.IGNORECASE)
+SITE_LINE = re.compile(r"^\s*🛍\s*більше\s+взуття\s+на\s+сайті\s*(?:👈\s*)?\W*$", re.IGNORECASE)
 MENTION = re.compile(r"(?<!\w)@\w+")
 LINK = re.compile(r"(?:https?://|www\.|t\.me/)\S+", re.IGNORECASE)
 PHONE = re.compile(r"(?<![\d+])(?:\+?38[\s-]?)?\(?0\d{2}\)?[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?!\d)")
@@ -75,12 +79,22 @@ def _without_price(text: str) -> str:
     return text[:start] + " " + text[prices[-1].end() :]
 
 
+def without_service_lines(text: str) -> str:
+    """Без рядків сайту, «фото в коментарях» і «Пишіть сюди…» (підпис поста бота)."""
+    lines = [
+        line
+        for line in text.split("\n")
+        if not (COMMENTS.match(line) or SITE_LINE.match(line) or SIGNATURE.search(line))
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def clean_description(text: str, state: str) -> str:
     """Опис для Шафи: без назви (першого речення), ціни, підпису, контактів і хештегів.
 
     Наприкінці — речення про стан, якщо в тексті його ще немає.
     """
-    text = text.strip()
+    text = without_service_lines(text.strip())
     text = _without_price(text[first_sentence_end(text) :])
     for pattern in (SIGNATURE, LINK, MENTION, PHONE, HASHTAG):
         text = pattern.sub(" ", text)
