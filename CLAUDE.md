@@ -129,7 +129,7 @@ Windows: збірка на Mac — `.venv/bin/python ops/build_windows.py lock |
 ## Перевірки
 
 - `make setup` — `.venv` і dev-залежності; `make ci` = `make lint` + `make test`. Те саме, що в CI. Ганяти перед пушем.
-- На PR — перевірки `quality` (Ubuntu, Python 3.12), `windows-tests` (Windows, Python 3.12) і `windows-package` (збірка пакета й димова перевірка на чистому Windows). Захисту `main` на GitHub немає (TD-002): мерж лише коли всі три зелені.
+- На PR — `quality` (Ubuntu, Python 3.12) і `windows-tests` (Windows; стартує лише після зеленого `quality`). `windows-package` (збірка пакета й димова перевірка на чистому Windows) біжить на PR лише коли змінено пакування/встановлення (`ops/`, `install.py`, `wizard.py`, `app.py`, `config.py`, `places.py`, `pyproject.toml`), і вручну: Actions → windows-package → Run workflow — перед випуском для Вікторії. На `push: main` перевірок немає. Захисту `main` на GitHub немає (TD-002): мерж лише коли зелені `quality` і `windows-tests` (і `windows-package`, якщо він біг або це випуск). Пуш гілки — один раз у кінці, не після кожного коміту.
 - Тест доводить головне: **якщо прибрати фікс, тест червоніє.** Перевір це і напиши у звіті.
 - Інтеграції (Telegram, Шафа, Claude API) — тести на моках і фікстурах.
 
