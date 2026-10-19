@@ -10,11 +10,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from shafa import catalog
+from shafa import ai, catalog, rules
 from shafa.db import Status
 from shafa.folders import item_folder
 from shafa.review import Card
+from shafa.robot import lang
 
+OTHER_SIZE = "Інший"  # кнопка блоку розміру аксесуарів, коли розміру в тексті немає (CORE-012)
 ORDER = ("material_upper", "material_lining", "season", "type", "style", "gender")
 
 
@@ -25,7 +27,7 @@ class PlanError(Exception):
 @dataclass(frozen=True)
 class Step:
     kind: str  # photos, own_photos, text, category, condition, brand, keywords, size_system,
-    #           sizes, colors, choice, untouched
+    #           sizes, size_block, colors, choice, untouched
     label: str  # як поле називається на Шафі — для звіту й помилок
     value: Any = None
     target: str | None = None  # name поля (kind="text") або slug розділу (kind="category")
@@ -41,6 +43,50 @@ def insole_choices(lengths: list[float], choices: list[str], limit: int) -> list
     """Заміри устілки → варіанти Шафи («25,5» чи «25,5 см» — як у розділі)."""
     by_number = {_number(c): c for c in choices}
     return [by_number[x] for x in lengths if x in by_number][:limit]
+
+
+def block_sizes(card: Card, path: str, block: dict, notes: list[str]) -> list[str]:
+    """Кнопки блоку розміру аксесуара (CORE-012): літерний з тексту (поправлений Продавчинею — як є),
+    розміру немає чи не вгадується — «Інший». Причини — у нотатки."""
+    field = card.fields["sizes"]
+    if field.edited:
+        picked = [c for s in field.value or [] if (c := catalog.canonical(s, block["choices"]))]
+    else:
+        found = ai.accessory_sizes(
+            card.post_text or "", card.fields["condition"].value == rules.NEW, path
+        )
+        picked = found.value
+        if found.reason:
+            notes.append(f"Розмір: {found.reason}")
+    if picked:
+        return picked
+    other = next((c for c in block["choices"] if lang.equivalent(c, OTHER_SIZE)), None)
+    if other is None:
+        raise PlanError(f"У полі «{block['title']}» немає кнопки «{OTHER_SIZE}»")
+    notes.append(f"Розмір: у тексті немає — поставлено «{other}»")
+    return [other]
+
+
+def required_gaps(path: str, steps: list[Step]) -> list[str]:
+    """Обов'язкові поля розділу за знімком, яких у кроках немає (підписи для Продавчині)."""
+    entry = catalog.section(path)
+    filled = {(s.kind, s.label) for s in steps if s.value}
+    gaps = [
+        c["title"]
+        for c in entry["characteristics"]
+        if c["required"] and ("choice", c["title"]) not in filled
+    ]
+    if entry["color_required"] and ("colors", "Колір") not in filled:
+        gaps.append("Колір")
+    block = entry.get("size_block")
+    if (
+        block
+        and block["required"]
+        and not catalog.sizes(path)
+        and (("size_block", block["title"]) not in filled)
+    ):
+        gaps.append(block["title"])
+    return gaps
 
 
 def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
@@ -79,6 +125,8 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
     if catalog.sizes(path):
         steps.append(Step("size_system", "Розмір", catalog.size_system(path)))
         steps.append(Step("sizes", "Розмір", [catalog.shafa_size(s) for s in f["sizes"]]))
+    elif block := catalog.size_block(path):
+        steps.append(Step("size_block", block["title"], block_sizes(card, path, block, notes)))
     steps.append(Step("colors", "Колір", list(f["colors"])))
 
     for name in ORDER:
@@ -116,4 +164,6 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
     if others := [t for t in others if t not in filled]:  # Шафа могла поставити сама — у журнал
         steps.append(Step("untouched", "Поля, яких робот не заповнює", others))
     steps.append(Step("text", "Ціна", str(f["price"]), "price"))
+    if gaps := required_gaps(path, steps):  # інакше форма не пустить, а dry-fill пройшов би мовчки
+        raise PlanError("Обов'язкові поля Шафи без значення: " + ", ".join(gaps))
     return steps, notes
