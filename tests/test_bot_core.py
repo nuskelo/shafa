@@ -204,9 +204,9 @@ def state(conn, draft_id=1):
 
 
 SIGN = "Пишіть сюди 👉 @viktoriaviktoriatg"
-SITE = "🛍 Більше взуття на сайті"
-MORE = "Більше фото в коментарях ⬇️"
-TAIL = f"{SIGN}\n{SITE}"  # кінець підпису одного фото
+SITE = "🛍 Більше взуття на сайті 👈"
+MORE = "Додаткові фото в коментарях ⬇️"
+TAIL = f"{SIGN}\n\n{SITE}"  # кінець підпису одного фото
 TAIL_ALBUM = f"{TAIL}\n\n{MORE}"  # фото ≥ 2
 
 
@@ -235,13 +235,13 @@ def test_caption_other_things_without_hashtag_and_unclear_size():
 
 def test_caption_site_line_follows_signature_and_comments_line_is_last():
     caption = core.caption_of(["Кеди 38 розмір. 800грн"], 2)
-    assert caption.split("\n")[-5:] == ["", SIGN, SITE, "", MORE]
-    assert core.caption_of(["Кеди 38 розмір. 800грн"], 1).endswith(f"{SIGN}\n{SITE}")
+    assert caption.split("\n")[-6:] == ["", SIGN, "", SITE, "", MORE]
+    assert core.caption_of(["Кеди 38 розмір. 800грн"], 1).endswith(f"{SIGN}\n\n{SITE}")
     assert MORE not in core.caption_of(["Кеди 38 розмір. 800грн"], 1)
 
 
 def test_caption_site_line_from_forwarded_post_not_duplicated():
-    text = f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n{SITE}\n\n{MORE}"
+    text = f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\n{SITE}\n\n{MORE}"
     caption = core.caption_of([text], 3)
     assert caption.count(SITE) == 1 and caption.count(MORE) == 1
     assert caption == f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{TAIL_ALBUM}"
@@ -672,7 +672,7 @@ def long_post(length):
     """Пост про кросівки (одне фото), підпис якого (хештег, «Пишіть сюди», рядок про сайт) —
     рівно `length` символів за рахунком Telegram (UTF-16: 👉 і 🛍 — по 2)."""
     start = "Кросівки 38 розмір. "
-    extra = core.caption_length(f"\n#VS_38_розмір\n\n{core.SIGNATURE}\n{core.SITE_TEXT}")
+    extra = core.caption_length(f"\n#VS_38_розмір\n\n{core.SIGNATURE}\n\n{core.SITE_TEXT}")
     return start + "я" * (length - extra - len(start))
 
 
@@ -1084,7 +1084,10 @@ def test_comments_line_in_the_middle_leaves_no_gap(conn, bot, tg, upd, clock):
     assert shown["caption"] == (f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{TAIL_ALBUM}")
 
 
-@pytest.mark.parametrize("old_line", ["Всі фото в коментарях ⬇️", "Більше фото в коментарях ⬇️"])
+@pytest.mark.parametrize(
+    "old_line",
+    ["Всі фото в коментарях ⬇️", "Більше фото в коментарях ⬇️", "Додаткові фото в коментарях ⬇️"],
+)
 def test_forwarded_comments_line_is_not_duplicated(conn, bot, tg, upd, clock, old_line):
     """Старий рядок («Всі…» / «Більше…») з пересланого поста прибрано, наш — один, в кінці."""
     text = f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\n{old_line}"
@@ -1747,7 +1750,7 @@ def test_both_off_plain_caption_without_entities(conn, bot, tg, upd, clock, monk
 
 
 def test_forwarded_ready_post_gets_links_once(conn, bot, tg, upd, clock):
-    ready = f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}\n{SITE}\n\n{MORE}"
+    ready = f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}\n\n{SITE}\n\n{MORE}"
     forwarded_post(upd, bot, tg, 10, "g", ready, files=2)
     clock.pass_(seconds=4)
     bot.tick()

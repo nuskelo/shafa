@@ -337,3 +337,15 @@ def test_kid_words(text, kid):
     from shafa import rules
 
     assert rules.kid_words(text) is kid
+
+
+@pytest.mark.parametrize("site_line", ["🛍 Більше взуття на сайті 👈", "🛍 Більше взуття на сайті"])
+@pytest.mark.parametrize(
+    "comments",
+    ["Додаткові фото в коментарях ⬇️", "Більше фото в коментарях ⬇️", "Всі фото в коментарях ⬇️"],
+)
+def test_clean_description_drops_site_and_comments_lines(site_line, comments):
+    """TD-049 (BOT-007): рядки підпису бота не йдуть в опис Шафи."""
+    text = f"Кеди 38 розмір. 800грн\nВідправка Новою поштою\n#VS_38_розмір\n\nПишіть сюди 👉 @x\n\n{site_line}\n\n{comments}"
+
+    assert clean_description(text, IDEAL) == "Відправка Новою поштою. Ідеальний стан, без дефектів."

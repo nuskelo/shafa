@@ -141,7 +141,7 @@ def test_waits_7_days_by_default_then_goes_with_check(conn, root, on, worker, fa
 
     assert channel.forwards()[0] == 1401
     assert job(conn)["state"] == "done"
-    assert fake.products[1401]["description"] == TEXT
+    assert fake.products[1401]["description"] == TEXT.split("\n\nПишіть")[0]
 
 
 def test_wait_days_setting_zero_goes_at_once(conn, root, on, monkeypatch, worker, channel):

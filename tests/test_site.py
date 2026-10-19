@@ -217,13 +217,28 @@ def test_condition_only_from_text(text, expected):
     assert site.condition(text) == expected
 
 
-def test_code_fields_price_as_in_telegram_insole_and_text_as_is():
+def test_code_fields_price_as_in_telegram_insole_and_text_without_service_lines():
     fields = site.code_fields(TEXT, POSTED)
 
     assert fields == {
-        "title": None, "description": TEXT, "postedAt": POSTED, "price": 1450,
-        "lengthSm": "24.5", "condition": "Ідеальний",
+        "title": None, "description": TEXT.split("\n\nПишіть")[0], "postedAt": POSTED,
+        "price": 1450, "lengthSm": "24.5", "condition": "Ідеальний",
     }  # fmt: skip
+
+
+@pytest.mark.parametrize("site_line", ["🛍 Більше взуття на сайті 👈", "🛍 Більше взуття на сайті"])
+@pytest.mark.parametrize(
+    "comments",
+    ["Додаткові фото в коментарях ⬇️", "Більше фото в коментарях ⬇️", "Всі фото в коментарях ⬇️"],
+)
+def test_site_description_drops_site_and_comments_lines(site_line, comments):
+    """TD-049: підпис поста бота не потрапляє в опис для сайту."""
+    text = f"Кеди Nike 38 розмір. 800грн\n#VS_38_розмір\n\nПишіть сюди 👉 @x\n\n{site_line}\n\n{comments}"
+
+    assert (
+        site.code_fields(text, POSTED)["description"]
+        == "Кеди Nike 38 розмір. 800грн\n#VS_38_розмір"
+    )
 
 
 def test_code_fields_without_price_and_state_sends_nothing_for_them():
@@ -315,7 +330,7 @@ def test_fields_then_photos_one_by_one_in_channel_order(conn, root, on, worker, 
     ]  # fmt: skip
     assert all(key == KEY for _, _, key in fake.requests)
     assert fake.products[1401] == {
-        "title": None, "description": TEXT, "postedAt": "2026-10-17T09:00:00+00:00",
+        "title": None, "description": TEXT.split("\n\nПишіть")[0], "postedAt": "2026-10-17T09:00:00+00:00",
         "price": 1450, "lengthSm": "24.5", "condition": "Ідеальний",
         "subcategoryId": "sub-women-winter",
         "brand": "Ecco", "size": "38",
