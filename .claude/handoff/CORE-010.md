@@ -1,5 +1,5 @@
 # CORE-010 — готово, чекає перевірок і мержу
-**Гілка:** `feature/CORE-010-aksesuary` · **PR:** (номер нижче в коментарі) · **Перевірки:** `make ci` локально — 1724 passed, 2 skipped; CI на PR — чекаю
+**Гілка:** `feature/CORE-010-aksesuary` · **PR:** #32 · **Перевірки:** `make ci` локально — 1724 passed, 2 skipped; CI на PR — чекаю
 1. Фаза 0 (лише HYP): розділи Шафи з тікета — UNKNOWN (живу Шафу не відкривав): назви гілок, типи, чи потрібен розмір і яка група розмірів — відомо лише після `--sync-catalog`. Усе інше (`GROUPS`, `check_sizes`, `item_kind`) — VERIFIED у коді.
 2. Файли: `robot/sync.py` (GROUPS), `bot/hashtag.py` (`accessory_group`), `scan.py`, `catalog.py` (`has_group`, літерні розміри), `ai.py` (`check_gender`, літерні розміри, v1.8), `prompts/blank.md`, `rules.py` (v5), `robot/lang.py` («Міжнародний», S…3XL), `robot/listings.py` (групи дублів), `fill.py` + `__main__.py` (`--refill`), `tests/test_core010.py` (58), фікстура +7 розділів, `docs/rules.md` v1.8, `TECH_DEBT` (TD-033 закрито), `CLAUDE.md`.
 3. Відхилення: (а) до sync рукавички лишаються `no_section` — ШІ не палимо; (б) правило статі («слово в тексті, інакше Для жінок») застосовано до всіх аксесуарів, не лише нових (сумки теж); (в) дубль-групи рукавички / шарфи / шапки розділено (у тікеті не було); (г) `guard.py`, `browser.py`, `db.py` не чіпав.
