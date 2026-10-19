@@ -212,13 +212,31 @@ def prices_close(ours: int | None, theirs: int | None) -> bool:
     return abs(ours - theirs) <= PRICE_GAP * max(ours, theirs)
 
 
+# CORE-010: рукавички, шарфи й шапки шукають дубль лише між собою; решта аксесуарів (сумки,
+# гаманці, ремені) — разом, як раніше.
+OWN_GROUPS = (
+    "Аксесуари / Рукавички та рукавиці",
+    "Аксесуари / Шарфи і хустки",
+    "Аксесуари / Головні убори",
+)
+
+
+def _bucket(name: str) -> str | None:
+    """Де шукати дубль: назва власної групи, «accessory» (решта аксесуарів) або None (взуття)."""
+    if catalog.section_kind(name) is not catalog.Kind.ACCESSORY:
+        return None
+    key = catalog.normalize_section(name).casefold()
+    return next((g for g in OWN_GROUPS if key.startswith(g.casefold() + " /")), "accessory")
+
+
 def group_slugs(path: str) -> frozenset[str]:
-    """Розділи, серед яких шукати дубль: усе взуття знімка або всі аксесуари."""
-    accessory = catalog.section_kind(path) is catalog.Kind.ACCESSORY
+    """Розділи, серед яких шукати дубль: усе взуття знімка, рукавички / шарфи / шапки окремо
+    або решта аксесуарів."""
+    bucket = _bucket(path)
     return frozenset(
         entry["slug"]
         for name, entry in catalog.snapshot()["sections"].items()
-        if (catalog.section_kind(name) is catalog.Kind.ACCESSORY) == accessory
+        if _bucket(name) == bucket
     )
 
 

@@ -6,6 +6,7 @@
 """
 
 import json
+import re
 from enum import StrEnum
 from functools import cache
 from pathlib import Path
@@ -43,6 +44,7 @@ FIELD_TITLES = {
     "insole": ("Довжина устілки",),
 }
 TEEN = {True: "Для підлітків", False: "Для дітей"}
+LETTER_SIZE = re.compile(r"(?:\d?X{0,3}S|M|L|\d?X{0,3}L)", re.IGNORECASE)  # S, M, L, XL, XXS, 2XL…
 SIZE_SYSTEMS = ("Європейський", "Український")  # перша наявна — наша (малюки — лише українська)
 
 
@@ -85,6 +87,12 @@ def find_section(path: str) -> str | None:
     return canonical(normalize_section(path), sections())
 
 
+def has_group(group: str) -> bool:
+    """У знімку є хоч один тип цієї групи («Аксесуари / Шарфи і хустки») — гілку вже збирали."""
+    prefix = _key(normalize_section(group)) + " /"
+    return any(_key(path).startswith(prefix) for path in sections())
+
+
 def section(path: str | None) -> dict[str, Any] | None:
     found = find_section(path) if path else None
     return snapshot()["sections"][found] if found else None
@@ -112,24 +120,41 @@ def section_kind(path: str) -> Kind | None:
     return None
 
 
+def _usable(name: str) -> bool:
+    """Розмір, який ми ставимо: число («38,5») чи літерний («S», «XL» — рукавички, шарфи)."""
+    return name.replace(".", "").isdigit() or bool(LETTER_SIZE.fullmatch(name.strip()))
+
+
 def size_system(path: str) -> str | None:
-    """Система розмірів розділу («Європейський»; у малюків — «Український») або None."""
+    """Система розмірів розділу («Європейський»; у малюків — «Український») або None.
+
+    CORE-010: у аксесуарів без звичних систем — перша група, де є число чи літерний розмір.
+    """
     entry = section(path)
-    return next((s for s in SIZE_SYSTEMS if entry and s in entry["sizes"]), None)
+    if entry is None:
+        return None
+    known = next((s for s in SIZE_SYSTEMS if s in entry["sizes"]), None)
+    if known or section_kind(path) is not Kind.ACCESSORY:
+        return known
+    return next((g for g, names in entry["sizes"].items() if any(_usable(n) for n in names)), None)
 
 
 def shafa_size(size: str) -> str:
-    """Наше «38,5» → як на Шафі «38.5»."""
+    """Наше «38,5» → як на Шафі «38.5»; літерний («XL») — без змін."""
     return size.replace(",", ".")
 
 
 def sizes(path: str) -> list[str]:
-    """Числові розміри розділу в нашому написанні («38,5»); без розміру — порожньо."""
+    """Розміри розділу в нашому написанні («38,5», «XL»); без розміру — порожньо."""
     system = size_system(path)
     if system is None:
         return []
     names = section(path)["sizes"][system]
-    return [n.replace(".", ",") for n in names if n.replace(".", "").isdigit()]
+    return [n.replace(".", ",") if n[:1].isdigit() else n for n in names if _usable(n)]
+
+
+def is_letter_size(size: str) -> bool:
+    return bool(LETTER_SIZE.fullmatch(size.strip()))
 
 
 def characteristic(path: str | None, field: str) -> dict[str, Any] | None:

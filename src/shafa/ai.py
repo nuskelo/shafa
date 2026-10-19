@@ -14,6 +14,7 @@ import anthropic
 
 from shafa import catalog, rules
 from shafa import sizes as sizes_mod
+from shafa.bot.hashtag import accessory_group
 from shafa.catalog import Kind
 from shafa.photos import PreparedPhoto
 
@@ -341,6 +342,22 @@ def _parse_size(text: str) -> float | None:
         return None
 
 
+def _letter_parts(sizes: list[str]) -> list[str]:
+    parts = [p.strip() for s in sizes for p in re.split(r"[/,;]|(?<=\w)\s*[-–]\s*(?=\w)", s)]
+    return [p for p in parts if p] or ["?"]
+
+
+def _check_letter_sizes(sizes: list[str], allowed: list[str]) -> Field:
+    """Літерні розміри аксесуарів (CORE-010): «S/M» — два розміри; лише зі списку розділу."""
+    shown = list(dict.fromkeys(p.upper() for p in _letter_parts(sizes)))
+    if len(shown) > 2:
+        return Field("sizes", shown, True, "більше двох розмірів")
+    by_upper = {a.upper(): a for a in allowed}
+    if not all(p in by_upper for p in shown):
+        return Field("sizes", shown, True, "розміру немає у списку Шафи для розділу")
+    return Field("sizes", [by_upper[p] for p in shown])
+
+
 def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, float | None]:
     """Розміри за списком Шафи для розділу (D6) і правилом ярлика (rules.md §7, D4)."""
     sizes = _strings(value)
@@ -353,6 +370,8 @@ def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, fl
         return Field("sizes", []), None
     if not sizes:
         return Field("sizes", [], True, "немає розміру"), None
+    if allowed and all(catalog.is_letter_size(p) for p in _letter_parts(sizes)):
+        return _check_letter_sizes(sizes, allowed), None
     numbers = [_parse_size(s) for s in sizes]
     if None in numbers:
         return Field("sizes", sizes, True, "розмір не число"), None
@@ -544,6 +563,41 @@ def check_values(name: str, value: Any, path: str | None, single: bool = False) 
     if not found and spec["required"]:
         return Field(name, shown(found), True, "обов'язкове поле Шафи")
     return Field(name, shown(found))
+
+
+# CORE-010: стать аксесуара — з тексту, інакше «Для жінок» (`docs/rules.md` §6).
+_SAID_GENDER = {
+    rules.WOMEN: "Для жінок",
+    rules.MEN: "Для чоловіків",
+    rules.GIRLS: "Для дівчаток",
+    rules.BOYS: "Для хлопчиків",
+}
+DEFAULT_GENDER = "Для жінок"
+GENDER_NOT_SAID = "у тексті стать не сказано, ШІ бачить іншу — перевір"
+
+
+def check_gender(value: Any, path: str | None, kind: Kind | None, text: str) -> tuple[Field, bool]:
+    """Стать: для аксесуарів слово в тексті важливіше за ШІ. Друге — вирішив код (сумнів ШІ не рахується)."""
+    field = check_values("gender", value, path, single=True)
+    spec = catalog.characteristic(path, "gender") if path else None
+    if kind is not Kind.ACCESSORY or spec is None:
+        return field, False
+    said = rules.said_gender(text)
+    if said is not None:
+        chosen = catalog.canonical(_SAID_GENDER[said], spec["choices"])
+        if chosen:
+            return Field("gender", chosen), True
+        return Field(
+            "gender", field.value, True, f"у тексті «{_SAID_GENDER[said]}», у Шафи так немає"
+        ), True
+    if field.yellow:
+        return field, False
+    default = catalog.canonical(DEFAULT_GENDER, spec["choices"])
+    if default and field.value in (None, default):
+        return Field("gender", default), False
+    if field.value in _SAID_GENDER.values():  # конкретна інша людина без слова в тексті
+        return Field("gender", field.value, True, GENDER_NOT_SAID), True
+    return field, False
 
 
 # CORE-005, `docs/rules.md` §9: матеріал верху — лише ці три і лише якщо названі в тексті.
@@ -739,6 +793,9 @@ def check_answer(
         decided.add("teen")  # код переніс у доросле — «Категорія» (дитячий / підліток) не про нього
     if sizes_decided:
         decided.add("sizes")
+    gender, gender_decided = check_gender(answer.get("gender"), path, kind, words)
+    if gender_decided:
+        decided.add("gender")
     if len(photo_names) == 1:
         decided.add("photo_order")
     fields = [
@@ -753,7 +810,7 @@ def check_answer(
         check_values("type", answer.get("type"), path, single=True),
         check_values("style", answer.get("style"), path, single=True),
         check_teen(answer.get("teen"), path),
-        check_values("gender", answer.get("gender"), path, single=True),
+        gender,
         check_keywords(answer.get("keywords")),
         check_photo_order(answer.get("photo_order"), photo_names),
     ]
@@ -764,9 +821,10 @@ def check_answer(
 
 # Версія інструкції ШІ (`prompts/blank.md`): зростає, коли інструкція змінюється так, що ШІ може
 # відповісти інакше. 1 — до QA-001 (і всі бланки без збереженої відповіді), 2 — QA-001 (v1.6),
-# 3 — CORE-009 (v1.7: 40, «можливо дитяча модель»). Разом з нею піднімається `rules.RULES_VERSION` —
-# тоді програма на старті перерахує Картки й позначить, яким потрібне ШІ.
-PROMPT_VERSION = 3
+# 3 — CORE-009 (v1.7: 40, «можливо дитяча модель»), 4 — CORE-010 (v1.8: рукавички, шарфи, шапки).
+# Разом з нею піднімається `rules.RULES_VERSION` — тоді програма на старті перерахує Картки й
+# позначить, яким потрібне ШІ.
+PROMPT_VERSION = 4
 
 # Слова назви лише з тексту (v1.6): (слово в назві, корінь у тексті) — «замшеві» є, коли в тексті «замша».
 _TITLE_WORDS = (
@@ -812,8 +870,14 @@ def _core009_changes(answer: dict[str, Any], text: str) -> bool:
     return size == 40 and (_text(answer.get("section")) or "").startswith(catalog.MEN)
 
 
+def _core010_changes(answer: dict[str, Any], text: str) -> bool:
+    """v1.8: рукавички, шарфи, шапки дозволені — стара відповідь без розділу для такого поста."""
+    group = accessory_group(text)
+    return group is not None and catalog.has_group(group) and not _text(answer.get("section"))
+
+
 # (версія, чи могла зміна інструкції цієї версії змінити відповідь)
-PROMPT_CHANGES = ((2, _qa001_changes), (3, _core009_changes))
+PROMPT_CHANGES = ((2, _qa001_changes), (3, _core009_changes), (4, _core010_changes))
 
 
 def needs_ai(prompt_version: int, answer: dict[str, Any], post_text: str) -> bool:

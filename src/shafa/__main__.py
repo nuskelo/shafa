@@ -7,6 +7,7 @@
 `python -m shafa fill --db … --root … [--post N] [--limit K] [--dry-run]` — ШІ-бланк для Карток.
 `python -m shafa fill --db … --root … --batch [--limit K] | --estimate` — пакет ШІ (Картки, чий пост
 старший 7 днів) або оцінка без запитів; `fill --db … --collect` — забрати готові результати.
+`python -m shafa fill --db … --refill N [M …]` — «Перезаповнити» лише ці пости, без ШІ (CORE-010).
 `python -m shafa ui --db … --root … [--port P] [--no-browser]` — екран перевірки в браузері.
 `python -m shafa robot --login | --sync-catalog | --dry-fill --db … --post N [--post M …]` — робот
 Шафи: ручний вхід Власника, знімок довідників, заповнення форми БЕЗ публікації (до 3 Карток).
@@ -137,6 +138,13 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--batch", action="store_true", help="відправити пакет (−50%%)")
     mode.add_argument("--collect", action="store_true", help="забрати результати пакетів")
     mode.add_argument("--estimate", action="store_true", help="що піде в пакет — без запитів")
+    mode.add_argument(
+        "--refill",
+        type=int,
+        nargs="+",
+        metavar="ПОСТ",
+        help="«Перезаповнити» лише ці пости (потім — «Оновити» чи --batch); ШІ тут не викликається",
+    )
     cmd = commands.add_parser("bot", help="Telegram-бот: пост → прев'ю → канал + папка з фото")
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
@@ -432,7 +440,24 @@ def run_batch(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0
 
 
+def run_refill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    conn = db.connect(args.db)
+    try:
+        result = fill.refill_posts(conn, args.refill)
+    finally:
+        conn.close()
+    print("У чергу ШІ: " + (", ".join(map(str, result.marked)) or "нічого"))
+    if result.skipped:
+        print("Не позначено (немає Картки чи вона не в «Перевірити»/«Проблеми»): ")
+        print("  " + ", ".join(map(str, result.skipped)))
+    return 0
+
+
 def run_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if args.refill:
+        return run_refill(parser, args)
     if args.batch or args.collect or args.estimate:
         if args.post is not None:
             parser.error("--post — лише для запитів по одній Картці")

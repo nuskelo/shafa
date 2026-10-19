@@ -1,6 +1,6 @@
 {
  "checked": "2026-10-13",
- "source": "форма https://shafa.ua/uk/new, відповіді WEB_ProductFormCatalog (лише читання); ТЕСТОВА ФІКСТУРА: 17 розділів, бренди обрізані",
+ "source": "форма https://shafa.ua/uk/new, відповіді WEB_ProductFormCatalog (лише читання); ТЕСТОВА ФІКСТУРА: 24 розділи (7 останніх — аксесуари CORE-010, зібрані вручну за формою, не з живого sync), бренди обрізані",
  "tree_version": 4611,
  "colors": [
   "Білий",
@@ -3703,6 +3703,354 @@
       "25,5 см",
       "25 см",
       "26 см"
+     ]
+    }
+   ]
+  },
+  "Аксесуари / Рукавички та рукавиці / Рукавички": {
+   "id": 9001,
+   "slug": "aksesuary/rukavychky-rukavytsi/rukavychky",
+   "color_required": true,
+   "sizes": {
+    "Міжнародний": [
+     "XS",
+     "S",
+     "M",
+     "L",
+     "XL",
+     "XXL"
+    ]
+   },
+   "characteristics": [
+    {
+     "title": "Зроблено в Україні?",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Виробництво",
+      "Хендмейд"
+     ]
+    },
+    {
+     "title": "Матеріал",
+     "max": 3,
+     "required": false,
+     "choices": [
+      "Замша",
+      "Текстиль",
+      "Шкіра",
+      "Штучна шкіра",
+      "Вовна"
+     ]
+    },
+    {
+     "title": "Стать",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Для жінок",
+      "Для чоловіків",
+      "Для дівчаток",
+      "Для хлопчиків",
+      "Для немовлят",
+      "Унісекс"
+     ]
+    },
+    {
+     "title": "Сезон",
+     "max": 2,
+     "required": false,
+     "choices": [
+      "Демісезон",
+      "Зима",
+      "Літо"
+     ]
+    }
+   ]
+  },
+  "Аксесуари / Рукавички та рукавиці / Рукавиці": {
+   "id": 9002,
+   "slug": "aksesuary/rukavychky-rukavytsi/rukavytsi",
+   "color_required": true,
+   "sizes": {
+    "Міжнародний": [
+     "XS",
+     "S",
+     "M",
+     "L",
+     "XL",
+     "XXL"
+    ]
+   },
+   "characteristics": [
+    {
+     "title": "Зроблено в Україні?",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Виробництво",
+      "Хендмейд"
+     ]
+    },
+    {
+     "title": "Матеріал",
+     "max": 3,
+     "required": false,
+     "choices": [
+      "Текстиль",
+      "Шкіра",
+      "Вовна"
+     ]
+    },
+    {
+     "title": "Стать",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Для жінок",
+      "Для чоловіків",
+      "Для дівчаток",
+      "Для хлопчиків",
+      "Для немовлят",
+      "Унісекс"
+     ]
+    },
+    {
+     "title": "Сезон",
+     "max": 2,
+     "required": false,
+     "choices": [
+      "Демісезон",
+      "Зима",
+      "Літо"
+     ]
+    }
+   ]
+  },
+  "Аксесуари / Рукавички та рукавиці / Мітенки": {
+   "id": 9003,
+   "slug": "aksesuary/rukavychky-rukavytsi/mitenky",
+   "color_required": true,
+   "sizes": {
+    "Міжнародний": [
+     "XS",
+     "S",
+     "M",
+     "L",
+     "XL",
+     "XXL"
+    ]
+   },
+   "characteristics": [
+    {
+     "title": "Зроблено в Україні?",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Виробництво",
+      "Хендмейд"
+     ]
+    },
+    {
+     "title": "Матеріал",
+     "max": 3,
+     "required": false,
+     "choices": [
+      "Текстиль",
+      "Шкіра",
+      "Вовна"
+     ]
+    },
+    {
+     "title": "Стать",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Для жінок",
+      "Для чоловіків",
+      "Для дівчаток",
+      "Для хлопчиків",
+      "Для немовлят",
+      "Унісекс"
+     ]
+    }
+   ]
+  },
+  "Аксесуари / Шарфи і хустки / Шарфи": {
+   "id": 9004,
+   "slug": "aksesuary/sharfy-khustky/sharfy",
+   "color_required": true,
+   "sizes": {},
+   "characteristics": [
+    {
+     "title": "Зроблено в Україні?",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Виробництво",
+      "Хендмейд"
+     ]
+    },
+    {
+     "title": "Матеріал",
+     "max": 3,
+     "required": false,
+     "choices": [
+      "Бавовна",
+      "Вовна",
+      "Текстиль"
+     ]
+    },
+    {
+     "title": "Стать",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Для жінок",
+      "Для чоловіків",
+      "Для дівчаток",
+      "Для хлопчиків",
+      "Для немовлят",
+      "Унісекс"
+     ]
+    },
+    {
+     "title": "Сезон",
+     "max": 2,
+     "required": false,
+     "choices": [
+      "Демісезон",
+      "Зима",
+      "Літо"
+     ]
+    }
+   ]
+  },
+  "Аксесуари / Шарфи і хустки / Хустки": {
+   "id": 9005,
+   "slug": "aksesuary/sharfy-khustky/khustky",
+   "color_required": true,
+   "sizes": {},
+   "characteristics": [
+    {
+     "title": "Зроблено в Україні?",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Виробництво",
+      "Хендмейд"
+     ]
+    },
+    {
+     "title": "Матеріал",
+     "max": 3,
+     "required": false,
+     "choices": [
+      "Бавовна",
+      "Текстиль"
+     ]
+    },
+    {
+     "title": "Стать",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Для жінок",
+      "Для чоловіків",
+      "Для дівчаток",
+      "Для хлопчиків",
+      "Для немовлят",
+      "Унісекс"
+     ]
+    }
+   ]
+  },
+  "Аксесуари / Головні убори / Шапки": {
+   "id": 9006,
+   "slug": "aksesuary/holovni-ubory/shapky",
+   "color_required": true,
+   "sizes": {},
+   "characteristics": [
+    {
+     "title": "Зроблено в Україні?",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Виробництво",
+      "Хендмейд"
+     ]
+    },
+    {
+     "title": "Матеріал",
+     "max": 3,
+     "required": false,
+     "choices": [
+      "Бавовна",
+      "Вовна",
+      "Текстиль"
+     ]
+    },
+    {
+     "title": "Стать",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Для жінок",
+      "Для чоловіків",
+      "Для дівчаток",
+      "Для хлопчиків",
+      "Для немовлят",
+      "Унісекс"
+     ]
+    },
+    {
+     "title": "Сезон",
+     "max": 2,
+     "required": false,
+     "choices": [
+      "Демісезон",
+      "Зима",
+      "Літо"
+     ]
+    }
+   ]
+  },
+  "Аксесуари / Головні убори / Бейсболки і кепки": {
+   "id": 9007,
+   "slug": "aksesuary/holovni-ubory/beysbolky-kepky",
+   "color_required": true,
+   "sizes": {},
+   "characteristics": [
+    {
+     "title": "Зроблено в Україні?",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Виробництво",
+      "Хендмейд"
+     ]
+    },
+    {
+     "title": "Матеріал",
+     "max": 3,
+     "required": false,
+     "choices": [
+      "Бавовна",
+      "Джинс",
+      "Текстиль"
+     ]
+    },
+    {
+     "title": "Стать",
+     "max": 1,
+     "required": false,
+     "choices": [
+      "Для жінок",
+      "Для чоловіків",
+      "Для дівчаток",
+      "Для хлопчиків",
+      "Для немовлят",
+      "Унісекс"
      ]
     }
    ]

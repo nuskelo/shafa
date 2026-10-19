@@ -303,6 +303,28 @@ def mark_refill(conn: sqlite3.Connection, item_ids: list[int]) -> int:
     return marked
 
 
+@dataclass(frozen=True)
+class RefillPosts:
+    marked: list[int]  # номери постів, Картки яких повернуто в чергу ШІ
+    skipped: list[int]  # номер не знайдено або Картка не в `review`/«Проблеми» (схвалені — ніколи)
+
+
+def refill_posts(conn: sqlite3.Connection, post_ids: list[int]) -> RefillPosts:
+    """«Перезаповнити» лише названі пости (CORE-010: сім Карток `no_section`, не всі). Та сама
+    позначка, що в `mark_refill`: `new` + `refill_at`, а ШІ-пакет (`fill --batch`, «Оновити») забере."""
+    marked, skipped = [], []
+    for post_id in dict.fromkeys(post_ids):
+        ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM items WHERE post_id = ? AND purged_at IS NULL ORDER BY id",
+                (post_id,),
+            )
+        ]
+        (marked if ids and mark_refill(conn, ids) else skipped).append(post_id)
+    return RefillPosts(marked, skipped)
+
+
 # --- Перерахувати правилами, без ШІ (CORE-009 B) ---
 
 # Проблеми, які ставлять правила над текстом і відповіддю ШІ: перерахунок може їх зняти чи поставити.
