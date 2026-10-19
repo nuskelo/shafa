@@ -205,7 +205,7 @@ def test_caption_like_her_posts():
     text = "Кросівки Lowa 37 розміру. 1200грн"
     assert core.caption_of([text]) == f"{text}\n#VS_37_розмір\n\n{SIGN}"
     assert core.caption_of([text], 2) == (
-        f"{text}\n#VS_37_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+        f"{text}\n#VS_37_розмір\n\n{SIGN}\n\nБільше фото в коментарях ⬇️"
     )
     assert core.caption_of(["  Кеди  ", "", "38 розмір\n"]) == (
         f"Кеди\n38 розмір\n#VS_38_розмір\n\n{SIGN}"
@@ -217,7 +217,7 @@ def test_caption_does_not_duplicate_her_hashtag_or_signature():
     signed = f"Кеди 38 розмір. 800грн\n\n{SIGN}"
     assert core.caption_of([signed]) == f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}"
     assert core.caption_of([f"Сумка шкіряна. 900грн\n#VS_сумки\n\n{SIGN}"], 3) == (
-        f"Сумка шкіряна. 900грн\n#VS_сумки\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+        f"Сумка шкіряна. 900грн\n#VS_сумки\n\n{SIGN}\n\nБільше фото в коментарях ⬇️"
     )
 
 
@@ -253,7 +253,7 @@ def test_album_preview_then_publish(conn, bot, tg, upd, clock, root):
     preview = [(m, p) for m, p in tg.calls if m == "sendPhoto"][-1][1]
     assert preview["chat_id"] == SELLER and preview["photo"] == "f1"  # найбільший розмір першого
     assert preview["caption"] == core.caption_of([TEXT], 3)
-    assert preview["caption"].endswith("\n\nВсі фото в коментарях ⬇️")
+    assert preview["caption"].endswith("\n\nБільше фото в коментарях ⬇️")
     buttons = [b["callback_data"] for row in preview["markup"]["inline_keyboard"] for b in row]
     assert buttons == ["pub:1", "edit:1", "cancel:1"]
     assert tg.channel_posts == []  # без натискання нічого не публікується
@@ -842,7 +842,7 @@ def test_live_bag_text_gets_bag_hashtag_in_preview_and_post(conn, bot, tg, upd, 
     send_post(bot, tg, upd, clock, files=3, text=BAG_TEXT)
 
     preview = [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]][-1]
-    assert preview["caption"] == (f"{BAG_TEXT}\n#VS_сумки\n\n{SIGN}\n\nВсі фото в коментарях ⬇️")
+    assert preview["caption"] == (f"{BAG_TEXT}\n#VS_сумки\n\n{SIGN}\n\nБільше фото в коментарях ⬇️")
     assert "Хештег: #VS_сумки." in preview_header(tg)
     press(upd, bot, tg)
     assert tg.channel_posts[0][1] == preview["caption"]
@@ -962,7 +962,9 @@ def test_album_without_caption_plus_separate_text_one_preview(
 
 @pytest.mark.parametrize("files", [1, 3])
 def test_forwarded_ready_post_no_duplicates(conn, bot, tg, upd, clock, files):
-    ready = f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+    ready = (
+        f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}\n\nБільше фото в коментарях ⬇️"
+    )
     forwarded_post(upd, bot, tg, 10, "g", ready, files=files)
     clock.pass_(seconds=4)
     bot.tick()
@@ -970,7 +972,7 @@ def test_forwarded_ready_post_no_duplicates(conn, bot, tg, upd, clock, files):
     (shown,) = previews(tg)
     caption = shown["caption"]
     assert caption.count("#VS_") == 1 and caption.count("Пишіть сюди") == 1
-    assert caption.count("Всі фото в коментарях") == (1 if files >= 2 else 0)
+    assert caption.count("Більше фото в коментарях") == (1 if files >= 2 else 0)
     assert caption.startswith(f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}")
     assert "\n\n\n" not in caption
 
@@ -994,8 +996,20 @@ def test_comments_line_in_the_middle_leaves_no_gap(conn, bot, tg, upd, clock):
     bot.tick()
     (shown,) = previews(tg)
     assert shown["caption"] == (
-        f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+        f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\nБільше фото в коментарях ⬇️"
     )
+
+
+@pytest.mark.parametrize("old_line", ["Всі фото в коментарях ⬇️", "Більше фото в коментарях ⬇️"])
+def test_forwarded_comments_line_is_not_duplicated(conn, bot, tg, upd, clock, old_line):
+    """BOT-004: старий («Всі…») і новий («Більше…») рядок з пересланого поста — один рядок у підписі."""
+    text = f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\n{old_line}"
+    forwarded_post(upd, bot, tg, 10, "g", text, files=2)
+    clock.pass_(seconds=4)
+    bot.tick()
+    (shown,) = previews(tg)
+    assert shown["caption"].count("фото в коментарях") == 1
+    assert shown["caption"].endswith("\n\nБільше фото в коментарях ⬇️")
 
 
 def test_comments_line_between_paragraphs_leaves_no_gap(conn, bot, tg, upd, clock):
@@ -1021,7 +1035,9 @@ def edit_query(upd, bot, tg, conn, action="edit", draft_id=1, message_id=None):
 
 
 def test_edit_sends_only_her_text_then_new_text_new_preview(conn, bot, tg, upd, clock):
-    ready = f"Черевики Ecco 38 розмір. 1500грн\n#VS_38_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+    ready = (
+        f"Черевики Ecco 38 розмір. 1500грн\n#VS_38_розмір\n\n{SIGN}\n\nБільше фото в коментарях ⬇️"
+    )
     forwarded_post(upd, bot, tg, 10, "g", ready, files=2)
     clock.pass_(seconds=4)
     bot.tick()
@@ -1044,7 +1060,7 @@ def test_edit_sends_only_her_text_then_new_text_new_preview(conn, bot, tg, upd, 
     assert state(conn) == "preview"
     new = previews(tg)[-1]
     assert new["caption"] == (
-        f"Черевики Ecco 39 розмір. 1700грн\n#VS_39_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"
+        f"Черевики Ecco 39 розмір. 1700грн\n#VS_39_розмір\n\n{SIGN}\n\nБільше фото в коментарях ⬇️"
     )
     press(upd, bot, tg)
     assert tg.channel_posts[0][1] == new["caption"]
@@ -1091,7 +1107,7 @@ def test_photo_while_editing_is_new_draft_text_still_edits(conn, bot, tg, upd, c
 
 
 def test_own_text_strips_what_bot_adds():
-    texts = [f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\nВсі фото в коментарях ⬇️"]
+    texts = [f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\nБільше фото в коментарях ⬇️"]
     assert core.own_text(texts) == "Кеди 38 розмір. 800грн"
 
 
