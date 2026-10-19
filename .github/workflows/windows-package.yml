@@ -3,10 +3,24 @@ name: windows-package
 # WIN-001 D3: окрема задача — зібрати пакет для Windows і зробити димову перевірку на чистому
 # windows-latest. Без секретів, без мережевих публікацій; quality і windows-tests не чіпає.
 
+# CI-001: лише вручну (Actions → windows-package → Run workflow) і на PR, що чіпають пакування.
 on:
+  workflow_dispatch:
   pull_request:
-  push:
-    branches: [main]
+    paths:
+      - ".github/workflows/windows-package.yml"
+      - "ops/**"
+      - "pyproject.toml"
+      - "src/shafa/install.py"
+      - "src/shafa/wizard.py"
+      - "src/shafa/app.py"
+      - "src/shafa/config.py"
+      - "src/shafa/places.py"
+      - "src/shafa/__main__.py"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -15,6 +29,7 @@ jobs:
   windows-package:
     name: windows-package
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -22,6 +37,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
       - run: python -m pip install pip==26.2.1
       - run: python -m pip install -e .
       - name: Збірка (вбудований Python 3.12.10 + залежності з контрольними сумами)
