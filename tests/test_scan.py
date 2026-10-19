@@ -291,14 +291,16 @@ def test_scan_never_resets_publication_or_robot_problem(conn, posts, root, code)
 @pytest.mark.parametrize(
     ("text", "code"),
     [
-        ("Шкіряні рукавички, розмір 7. 500 грн", "no_section"),
-        ("Новий шарф кашемір. Ціна 400 грн", "no_section"),
+        ("Шкіряні окуляри, розмір 7. 500 грн", "no_section"),
+        ("Нова парасолька. Ціна 400 грн", "no_section"),
+        ("Шкіряні рукавички, розмір M. 500 грн", None),  # CORE-010: розділ є у знімку
+        ("Новий шарф кашемір. Ціна 400 грн", None),
         ("Черевики шкіряні 38 розмір. 1200 грн", None),
         ("Сумка шкіряна. 900 грн", None),
     ],
 )
 def test_thing_without_section_on_shafa_is_problem(text, code):
-    """FIX-002: рукавички, шарфи тощо — розділу в знімку Шафи немає, схожий не підставляємо."""
+    """FIX-002: окуляри, парасольки тощо — розділу в знімку Шафи немає, схожий не підставляємо."""
     problem = find_problem(Folder("7", 7, ("1.jpg",)), {7: text}, {7: ["7"]})
     assert (problem[0] if problem else None) == code
 

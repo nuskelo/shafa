@@ -67,8 +67,9 @@ def test_refill_sends_several_items_to_problems_without_ai(conn, root):
     assert status(conn, ready) == Status.NEW
 
 
-def test_refill_keeps_gloves_in_problems(conn, root):
-    gloves = refill_card(conn, root, "1", 1, text="Шкіряні рукавички Avan, розмір M. 300грн")
+def test_refill_keeps_things_without_a_section_in_problems(conn, root):
+    """CORE-010: рукавички тепер мають розділ; окуляри — ні, лишаються в «Проблемах» без ШІ."""
+    gloves = refill_card(conn, root, "1", 1, text="Шкіряні окуляри Avan, розмір M. 300грн")
     set_problem(conn, gloves, "no_section")
 
     fill.mark_refill(conn, [gloves])

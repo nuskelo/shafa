@@ -4,7 +4,8 @@ import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
 
-from shafa.bot.hashtag import item_kind
+from shafa import catalog
+from shafa.bot.hashtag import accessory_group, item_kind
 from shafa.db import Status, now
 from shafa.export import Post
 from shafa.folders import Folder, is_old, natural_key
@@ -66,7 +67,7 @@ def _join(names: list[str]) -> str:
     return ", ".join(names[:-1]) + " і " + names[-1]
 
 
-NO_SECTION_TEXT = "Немає підходящого розділу на Шафі (рукавички, шарфи, шапки тощо)"
+NO_SECTION_TEXT = "Немає підходящого розділу на Шафі (окуляри, парасольки, шкарпетки тощо)"
 
 
 def text_problem(text: str) -> tuple[str, str] | None:
@@ -78,8 +79,11 @@ def text_problem(text: str) -> tuple[str, str] | None:
         return "many_items", "У пості кілька товарів з різними цінами"
     if many_sizes(text):  # «43 і 45» — два товари (CORE-007)
         return "many_items", "У пості кілька розмірів — схоже, кілька товарів"
-    if item_kind(text) == "other":  # рукавички, шарфи, шапки — у знімку Шафи їх немає
-        return "no_section", NO_SECTION_TEXT
+    if item_kind(text) == "other":  # окуляри, парасольки… — розділу на Шафі немає
+        # CORE-010: рукавички, шарфи, шапки — розділи є, коли гілку вже зібрано у знімку
+        group = accessory_group(text)
+        if group is None or not catalog.has_group(group):
+            return "no_section", NO_SECTION_TEXT
     return None
 
 
