@@ -109,6 +109,7 @@ class Driver(Protocol):
 
     brand_miss: BrandMiss | None  # що бачив останній невдалий пошук бренду
 
+    def reset(self) -> None: ...  # новий товар — стан попереднього не переходить (ROBOT-008)
     def brand(self, name: str) -> bool: ...
     def untouched(self, labels: list[str]) -> list[str]: ...
     def verify(self) -> None: ...
@@ -544,6 +545,17 @@ class PageDriver:
         self.texts: dict[str, tuple[str, str]] = {}  # name → (підпис, значення): звірка в кінці
         self.lists: dict[str, list[str]] = {}  # підпис списку → наші значення: звірка в кінці
         self.brand_miss: BrandMiss | None = None
+
+    def reset(self) -> None:
+        """Початок нової Картки: звірка в кінці — лише з її власним (ROBOT-008).
+
+        Драйвер живе всю сесію; без цього `verify` порівнював би порожню форму нової Картки
+        зі списками й текстами попередньої.
+        """
+        self.typed.clear()
+        self.texts.clear()
+        self.lists.clear()
+        self.brand_miss = None
 
     def _find(self, label: str) -> str | None:
         self._marks += 1

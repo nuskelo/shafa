@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from shafa import catalog, config, review
+from shafa import catalog, config, review, rules
 from shafa.bot.presence import GONE
 from shafa.db import Status, now
+from shafa.fill import STALE_RULES
 from shafa.folders import PUBLISHED_DIR, is_old
 from shafa.robot import listings as listings_mod
 from shafa.robot import lock
@@ -65,6 +66,10 @@ TICK = 5.0  # с: як часто під час паузи перевіряєт�
 SLEEP_JUMP = 60.0  # с: «тік» став довшим — ноутбук засинав
 ITEM_URL = "https://shafa.ua/uk/item/{id}-shafa"  # Шафа переводить на справжню адресу (301)
 
+STALE_TEXT = (
+    "Картку схвалено за старими правилами — робот її не бере. Натисніть «Перерахувати правилами» "
+    "(вкладка ШІ) або «Перевірити ще раз», перевірте Картку й схваліть знову"
+)
 UNCERTAIN = (
     "Перевірте на Шафі, чи опубліковано: робот натиснув «Додати річ», але певної відповіді немає"
 )
@@ -570,6 +575,13 @@ class Run:
             return None
         if self._post_deleted(report, card):
             return None
+        version = self.conn.execute(
+            "SELECT rules_version FROM items WHERE id = ?", (card.id,)
+        ).fetchone()[0]
+        if version is None or version < rules.RULES_VERSION:
+            # Схвалена за старими правилами (розміри, «ідуть на»…): робот її не бере (ROBOT-008)
+            self._problem(report, card, ok, STALE_RULES, STALE_TEXT)
+            return None
         try:
             steps, notes = plan(card, self.root)
         except PlanError as error:
@@ -591,7 +603,7 @@ class Run:
             if stop.code == "login":
                 self._problem(report, card, ok, "robot_logged_out", "Робот не увійшов на Шафу")
             return stop  # «немає форми» — Картка не винна, лишається у Схвалених
-        driver.brand_miss = None
+        driver.reset()  # texts/lists/typed/brand_miss — лише цієї Картки (ROBOT-008)
         try:
             notes += execute(steps, driver, strict=True)
         except FieldMissing as error:
