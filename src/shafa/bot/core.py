@@ -54,6 +54,8 @@ SITE_URL = "https://viktoriashoes.com.ua"
 SITE_TEXT = "🛍 Більше взуття на сайті"
 SITE_SETTING = "SHAFA_SITE_BUTTON"  # друга кнопка; типово увімкнено, «ні» — вимкнути (BOT-003)
 ASK_SETTING = "SHAFA_ASK_BUTTON"  # кнопка під постом; типово увімкнено, «ні» — вимкнути (BOT-002)
+PHOTO_SETTING = "SHAFA_PHOTO_BUTTON"  # перша кнопка — коментарі з альбомом; типово так (BOT-005)
+PHOTO_TEXT = "📷 Більше фото"
 ASK_TEXT = "💬 Запитати про цю пару"
 ASK_HELLO = "Вітаю! Цікавить ця пара: "
 ASK_RETRY = (timedelta(seconds=30), timedelta(minutes=2), timedelta(minutes=10))
@@ -208,10 +210,37 @@ def site_enabled() -> bool:
     return (config.setting(SITE_SETTING) or "").strip().lower() not in ("0", "ні", "no", "false")
 
 
-def ask_markup(link: str) -> dict | None:
-    """URL-кнопки, кожна в окремому рядку: «Запитати» (лише заповнює поле вводу, нічого не шле
-    само) і «Більше взуття на сайті». Кожна вмикається окремо; обидві вимкнено — `None`."""
+def is_not_modified(error: TelegramError) -> bool:
+    return "not modified" in error.description.lower() or "not modified" in str(error).lower()
+
+
+def photo_enabled() -> bool:
+    return (config.setting(PHOTO_SETTING) or "").strip().lower() not in ("0", "ні", "no", "false")
+
+
+def comments_url(post_url: str, comment_id: int) -> str:
+    """Посилання на тред коментарів поста: `?comment=` — id повідомлення в групі обговорення
+    (документація t.me-посилань, і для `t.me/<ім'я>/…`, і для `t.me/c/…`)."""
+    return f"{post_url}?comment={comment_id}"
+
+
+def first_message_id(sent: Any) -> int | None:
+    """Найменший id серед повідомлень відповіді `sendMediaGroup` — перше фото альбому."""
+    if not isinstance(sent, list):
+        return None
+    ids = [
+        m["message_id"] for m in sent if isinstance(m, dict) and type(m.get("message_id")) is int
+    ]
+    return min(ids) if ids else None
+
+
+def ask_markup(link: str, photo_url: str | None = None) -> dict | None:
+    """URL-кнопки, кожна в окремому рядку: «Більше фото» (коментарі; лише коли `photo_url`),
+    «Запитати» (лише заповнює поле вводу, нічого не шле само) і «Більше взуття на сайті». Кожна
+    вмикається окремо; жодної — `None`."""
     rows = []
+    if photo_url and photo_enabled():
+        rows.append([{"text": PHOTO_TEXT, "url": photo_url}])
     if ask_enabled():
         url = f"https://t.me/{SELLER_USERNAME}?text={quote(ASK_HELLO + link, safe='')}"
         rows.append([{"text": ASK_TEXT, "url": url}])
@@ -273,6 +302,7 @@ class Bot:
         self.sleep = sleep
         self._username: str | None = None  # публічне ім'я каналу; "" — немає (кеш після getChat)
         self._buttons: dict[int, tuple[int, datetime]] = {}  # пост → (спроб було, наступна)
+        self._comment_ids: dict[int, int] = {}  # пост → перше фото альбому, кнопка ще не стоїть
 
     # --- Надсилання без падінь (відповідь не дійшла — не привід ламати обробку) ---
 
@@ -764,26 +794,47 @@ class Bot:
     def _ask_button(self, post_id: int) -> None:
         """Кнопка «Запитати про цю пару» під щойно опублікованим постом (BOT-002). Помилка
         публікацію не ламає: пост уже в каналі, лише повтор пізніше. Пост удруге — ніколи."""
-        if not (ask_enabled() or site_enabled()):
+        comment_id = self._comment_ids.get(post_id)  # BOT-005: альбом уже в коментарях
+        if not (ask_enabled() or site_enabled() or comment_id):
             return
         try:
-            markup = ask_markup(self._post_link(post_id))
+            link = self._post_link(post_id)
+            markup = ask_markup(link, comments_url(link, comment_id) if comment_id else None)
             self.tg.set_markup(self.settings.channel_id, post_id, markup)
         except TelegramError as error:
-            if "not modified" in error.description.lower() or "not modified" in str(error).lower():
-                return  # кнопка вже стоїть
-            self._button_failed(post_id, error)
+            if not is_not_modified(error):
+                self._button_failed(post_id, error)
+                return
+            self._buttons.pop(post_id, None)  # кнопки вже стоять
+            self._comment_ids.pop(post_id, None)
         except Exception as error:  # noqa: BLE001 — канал важливіший за кнопку
             self.log(f"Кнопка під постом {post_id}: {type(error).__name__}")
         else:
             self._buttons.pop(post_id, None)
+            self._comment_ids.pop(post_id, None)
+
+    def _photo_button(self, post_id: int, sent: Any) -> None:
+        """Альбом у коментарях `done` → третя кнопка «Більше фото» (BOT-005): ті самі повтори, що
+        в «Запитати». Без id першого фото — кнопки нема, лише рядок у журналі."""
+        if not photo_enabled():
+            return
+        comment_id = first_message_id(sent)
+        if comment_id is None:
+            self.log(f"Пост {post_id}: Telegram не повернув id фото альбому — без кнопки")
+            return
+        self._comment_ids[post_id] = comment_id
+        self._ask_button(post_id)
 
     def _button_failed(self, post_id: int, error: TelegramError) -> None:
         tried = self._buttons.get(post_id, (0, self.clock()))[0] + 1
         if tried > len(ASK_RETRY):
             self._buttons.pop(post_id, None)
+            comment_id = self._comment_ids.pop(post_id, None)
             self.log(f"Кнопка під постом {post_id}: не вийшло ({error})")
-            self.tell_owner(f"пост {post_id} опубліковано, але кнопки під ним не поставлено.")
+            if comment_id:
+                self.tell_owner(f"пост {post_id}: кнопку «Більше фото» не поставлено.")
+            else:
+                self.tell_owner(f"пост {post_id} опубліковано, але кнопки під ним не поставлено.")
             return
         wait = timedelta(seconds=error.retry_after) if error.retry_after else ASK_RETRY[tried - 1]
         self._buttons[post_id] = (tried, self.clock() + wait)
@@ -888,7 +939,7 @@ class Bot:
             album = self._album(draft["folder_name"] or "")
             if len(album) < 2:
                 raise PhotoError("у папці поста менше двох фото")
-            self.tg.send_media_group(self.settings.discussion_id, album, forwarded_id)
+            sent = self.tg.send_media_group(self.settings.discussion_id, album, forwarded_id)
         except (TelegramError, PhotoError, OSError) as error:
             self.log(f"Коментарі до поста {draft['post_id']}: {error}")
             self._set(draft["id"], comments="failed")
@@ -900,6 +951,7 @@ class Bot:
             )
             return
         self._set(draft["id"], comments="done")
+        self._photo_button(draft["post_id"], sent)
         if draft["comments"] == "late":
             self.say(draft["chat_id"], TEXTS["comments_done"].format(link=link))
 

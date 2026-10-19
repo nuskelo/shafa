@@ -54,6 +54,7 @@ class FakeTelegram:
         self.channel_posts = []
         self.last_preview = None
         self.albums = []
+        self.album_first = None  # id першого фото останнього альбому
         self.chat_info = {}  # відповідь getChat каналу (username тощо)
 
     def _record(self, method, **params):
@@ -78,7 +79,9 @@ class FakeTelegram:
     def send_media_group(self, chat_id, photos, reply_to):
         self._record("sendMediaGroup", chat_id=chat_id, photos=photos, reply_to=reply_to)
         self.albums.append((chat_id, photos, reply_to))
-        return [{"message_id": self.next_id}]
+        first = self.album_first = self.next_id
+        self.next_id += len(photos)
+        return [{"message_id": first + i} for i in range(len(photos))]
 
     def get_file(self, file_id):
         self._record("getFile", file_id=file_id)
@@ -1635,3 +1638,159 @@ def test_edit_after_our_button_changes_nothing(conn, tg, upd, clock, root, site_
 
     assert not any("змінено" in line for line in log)
     assert tuple(conn.execute("SELECT updated_at, text FROM site_jobs").fetchone()) == tuple(before)
+
+
+# --- Кнопка «📷 Більше фото» (BOT-005) ---
+
+PHOTO = "📷 Більше фото"
+
+
+def photo_rows(tg):
+    """Тексти й адреси кнопок кожного виклику `setButton`: [[(текст, url), …], …]."""
+    return [
+        [(b["text"], b["url"]) for r in c["markup"]["inline_keyboard"] for b in r]
+        for c in buttons(tg)
+    ]
+
+
+def first_album_id(tg):
+    return tg.album_first  # перше фото альбому в групі обговорення
+
+
+def test_photo_button_only_after_comments_done_and_goes_first(conn, bot, tg, upd, clock):
+    tg.chat_info = {"username": "viktoriashoes"}
+    published(bot, tg, upd, clock, files=3)
+    assert [[t for t, _ in row] for row in photo_rows(tg)] == [
+        ["💬 Запитати про цю пару", "🛍 Більше взуття на сайті"]  # альбому ще нема — дві кнопки
+    ]
+
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    first, second = photo_rows(tg)
+    assert [t for t, _ in second] == [PHOTO, "💬 Запитати про цю пару", "🛍 Більше взуття на сайті"]
+    assert second[0][1] == f"https://t.me/viktoriashoes/1401?comment={first_album_id(tg)}"
+    assert second[1:] == first  # решта кнопок — ті самі
+    assert [c["message_id"] for c in buttons(tg)] == [1401, 1401]
+
+
+def test_photo_button_url_private_channel_uses_c_link(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=2)
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    url = photo_rows(tg)[-1][0][1]
+    assert url == f"https://t.me/c/2394827824/1401?comment={first_album_id(tg)}"
+
+
+def test_photo_button_uses_first_of_album_not_last(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=3)
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    comment = photo_rows(tg)[-1][0][1].rsplit("=", 1)[1]
+    assert int(comment) == tg.album_first  # з трьох id альбому — найменший
+
+
+def test_one_photo_no_photo_button(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=1)
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    assert [[t for t, _ in row] for row in photo_rows(tg)] == [
+        ["💬 Запитати про цю пару", "🛍 Більше взуття на сайті"]
+    ]
+
+
+def test_album_failed_no_photo_button(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=3)
+    tg.errors["sendMediaGroup"] = TelegramError("ні", code=400)
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    assert comments(conn) == "failed"
+    assert len(buttons(tg)) == 1
+
+
+def test_photo_button_late_album_still_gets_button(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=3)
+    clock.pass_(minutes=3)
+    bot.tick()
+    assert comments(conn) == "late"
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    assert photo_rows(tg)[-1][0][0] == PHOTO
+
+
+def test_photo_button_retries_after_error_with_same_comment(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=3)
+    tg.errors["setButton"] = TelegramError("мережа", uncertain=True)
+    bot.handle(upd(message=forwarded(77, 1401)))
+    assert comments(conn) == "done"  # помилка кнопки альбом не ламає
+    n = len(buttons(tg))
+
+    tg.errors.clear()
+    clock.pass_(seconds=31)
+    bot.tick()
+
+    assert len(buttons(tg)) == n + 1
+    assert photo_rows(tg)[-1][0] == (
+        PHOTO,
+        f"https://t.me/c/2394827824/1401?comment={first_album_id(tg)}",
+    )
+    clock.pass_(hours=1)
+    bot.tick()
+    assert len(buttons(tg)) == n + 1  # поставлено — більше не пробуємо
+    assert len(tg.channel_posts) == 1 and len(tg.albums) == 1
+
+
+def test_photo_button_gives_up_to_owner(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=3)
+    tg.errors["setButton"] = TelegramError("забагато", code=429, retry_after=1)
+    bot.handle(upd(message=forwarded(77, 1401)))
+    for _ in range(5):
+        clock.pass_(minutes=15)
+        bot.tick()
+
+    assert sum("Більше фото" in t for t in tg.texts(OWNER)) == 1
+    assert comments(conn) == "done"
+
+
+def test_photo_button_not_modified_counts_as_done(conn, bot, tg, upd, clock):
+    published(bot, tg, upd, clock, files=3)
+    tg.errors["setButton"] = TelegramError(
+        "400", code=400, description="Bad Request: message is not modified"
+    )
+    bot.handle(upd(message=forwarded(77, 1401)))
+    n = len(buttons(tg))
+    clock.pass_(hours=1)
+    bot.tick()
+
+    assert len(buttons(tg)) == n
+
+
+def test_photo_button_pending_first_button_gets_all_three_at_once(conn, bot, tg, upd, clock):
+    """Перші кнопки ще чекають повтору, а альбом уже готовий — повтор ставить усі три."""
+    tg.errors["setButton"] = TelegramError("мережа", uncertain=True)
+    published(bot, tg, upd, clock, files=3)
+    tg.errors.clear()
+    bot.handle(upd(message=forwarded(77, 1401)))
+    clock.pass_(hours=1)
+    bot.tick()
+
+    assert photo_rows(tg)[-1][0][0] == PHOTO
+    assert len(buttons(tg)) == 2  # перша невдала + одна вдала з трьома
+
+
+def test_photo_button_switched_off_two_buttons_as_before(conn, bot, tg, upd, clock, monkeypatch):
+    monkeypatch.setenv("SHAFA_PHOTO_BUTTON", "ні")
+    published(bot, tg, upd, clock, files=3)
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    assert comments(conn) == "done"
+    assert len(buttons(tg)) == 1  # лише початкові «Запитати» і «Сайт»
+
+
+def test_photo_button_alone_when_others_off(conn, bot, tg, upd, clock, monkeypatch):
+    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
+    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
+    published(bot, tg, upd, clock, files=3)
+    assert buttons(tg) == []
+    bot.handle(upd(message=forwarded(77, 1401)))
+
+    assert [[t for t, _ in row] for row in photo_rows(tg)] == [[PHOTO]]
