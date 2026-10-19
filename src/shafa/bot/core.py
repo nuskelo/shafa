@@ -39,15 +39,21 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from shafa import rules, site
+from shafa import config, rules, site
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
 
-SIGNATURE = "Пишіть сюди 👉 @viktoriaviktoriatg"  # як у її постах (звірено з Експортом)
+SELLER_USERNAME = "viktoriaviktoriatg"
+SIGNATURE = f"Пишіть сюди 👉 @{SELLER_USERNAME}"  # як у її постах (звірено з Експортом)
+ASK_SETTING = "SHAFA_ASK_BUTTON"  # кнопка під постом; типово увімкнено, «ні» — вимкнути (BOT-002)
+ASK_TEXT = "💬 Запитати про цю пару"
+ASK_HELLO = "Вітаю! Цікавить ця пара: "
+ASK_RETRY = (timedelta(seconds=30), timedelta(minutes=2), timedelta(minutes=10))
 COMMENTS_LINE = "Всі фото в коментарях ⬇️"
 WINDOW = timedelta(minutes=2)  # D5
 ASK_WINDOW = timedelta(minutes=10)  # бот щось спитав — її відповідь чекаємо довше
@@ -191,6 +197,16 @@ def post_link(channel_id: int, message_id: int) -> str:
     return f"https://t.me/c/{str(channel_id).removeprefix('-100')}/{message_id}"
 
 
+def ask_enabled() -> bool:
+    return (config.setting(ASK_SETTING) or "").strip().lower() not in ("0", "ні", "no", "false")
+
+
+def ask_markup(link: str) -> dict:
+    """Одна URL-кнопка: відкриває чат із нею й лише заповнює поле вводу (нічого не шле само)."""
+    url = f"https://t.me/{SELLER_USERNAME}?text={quote(ASK_HELLO + link, safe='')}"
+    return {"inline_keyboard": [[{"text": ASK_TEXT, "url": url}]]}
+
+
 def local_date(unix: int) -> str:
     """Дата Telegram → місцевий час без поясу, як в Експорті (D7)."""
     return datetime.fromtimestamp(unix, UTC).astimezone().strftime("%Y-%m-%dT%H:%M:%S")
@@ -242,6 +258,8 @@ class Bot:
     ) -> None:
         self.conn, self.tg, self.settings, self.clock, self.log = conn, tg, settings, clock, log
         self.sleep = sleep
+        self._username: str | None = None  # публічне ім'я каналу; "" — немає (кеш після getChat)
+        self._buttons: dict[int, tuple[int, datetime]] = {}  # пост → (спроб було, наступна)
 
     # --- Надсилання без падінь (відповідь не дійшла — не привід ламати обробку) ---
 
@@ -447,6 +465,7 @@ class Bot:
         for draft in drafts:
             self._preview(draft)
         self._comments_overdue(now_)
+        self._retry_buttons(now_)
         self._summaries()
 
     def _parts(self, draft_id: int) -> list[sqlite3.Row]:
@@ -691,6 +710,7 @@ class Bot:
                 "VALUES (?, ?, ?, 'bot', ?) ON CONFLICT (post_id) DO NOTHING",
                 (post_id, date, caption, now()),
             )
+        self._ask_button(post_id)
         link = post_link(self.settings.channel_id, post_id)
         try:
             folder = self._save_folder(post_id, photos)
@@ -716,6 +736,50 @@ class Bot:
                 f"папка {post_id} уже була — фото поста {post_id} збережено в «{folder.name}». "
                 "Розберись, яка правильна."
             )
+
+    def _post_link(self, post_id: int) -> str:
+        """`t.me/<ім'я>/<номер>`, якщо в каналу є публічне ім'я (getChat — один раз), інакше `t.me/c/…`."""
+        if self._username is None:
+            try:
+                self._username = self.tg.get_chat(self.settings.channel_id).get("username") or ""
+            except TelegramError as error:  # не кешуємо: спробуємо наступного разу
+                self.log(f"getChat каналу: {error}")
+        if self._username:
+            return f"https://t.me/{self._username}/{post_id}"
+        return post_link(self.settings.channel_id, post_id)
+
+    def _ask_button(self, post_id: int) -> None:
+        """Кнопка «Запитати про цю пару» під щойно опублікованим постом (BOT-002). Помилка
+        публікацію не ламає: пост уже в каналі, лише повтор пізніше. Пост удруге — ніколи."""
+        if not ask_enabled():
+            return
+        try:
+            markup = ask_markup(self._post_link(post_id))
+            self.tg.set_markup(self.settings.channel_id, post_id, markup)
+        except TelegramError as error:
+            if "not modified" in error.description.lower() or "not modified" in str(error).lower():
+                return  # кнопка вже стоїть
+            self._button_failed(post_id, error)
+        except Exception as error:  # noqa: BLE001 — канал важливіший за кнопку
+            self.log(f"Кнопка під постом {post_id}: {type(error).__name__}")
+        else:
+            self._buttons.pop(post_id, None)
+
+    def _button_failed(self, post_id: int, error: TelegramError) -> None:
+        tried = self._buttons.get(post_id, (0, self.clock()))[0] + 1
+        if tried > len(ASK_RETRY):
+            self._buttons.pop(post_id, None)
+            self.log(f"Кнопка під постом {post_id}: не вийшло ({error})")
+            self.tell_owner(f"пост {post_id} опубліковано, але кнопку «Запитати» не поставлено.")
+            return
+        wait = timedelta(seconds=error.retry_after) if error.retry_after else ASK_RETRY[tried - 1]
+        self._buttons[post_id] = (tried, self.clock() + wait)
+        self.log(f"Кнопка під постом {post_id}: {error}; спробую ще раз")
+
+    def _retry_buttons(self, now_: datetime) -> None:
+        for post_id, (_, when) in list(self._buttons.items()):
+            if when <= now_:
+                self._ask_button(post_id)
 
     def _to_site(self, post_id: int, folder_name: str, sent: dict, caption: str) -> None:
         """Пост від бота → черга сайту (SITE-001). Лише запис у базу, мережі тут немає; будь-яка

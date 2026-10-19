@@ -207,3 +207,11 @@ class Telegram:
             "editMessageReplyMarkup",
             {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}},
         )
+
+    def set_markup(self, chat_id: int, message_id: int, markup: dict) -> None:
+        """Кнопки під уже надісланим повідомленням (BOT-002). Ті самі — Telegram каже 400
+        «message is not modified»; це розбирає той, хто викликає."""
+        self.call(
+            "editMessageReplyMarkup",
+            {"chat_id": chat_id, "message_id": message_id, "reply_markup": markup},
+        )
