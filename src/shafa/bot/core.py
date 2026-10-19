@@ -50,6 +50,9 @@ from shafa.db import now
 
 SELLER_USERNAME = "viktoriaviktoriatg"
 SIGNATURE = f"Пишіть сюди 👉 @{SELLER_USERNAME}"  # як у її постах (звірено з Експортом)
+SITE_URL = "https://viktoriashoes.com.ua"
+SITE_TEXT = "🛍 Більше взуття на сайті"
+SITE_SETTING = "SHAFA_SITE_BUTTON"  # друга кнопка; типово увімкнено, «ні» — вимкнути (BOT-003)
 ASK_SETTING = "SHAFA_ASK_BUTTON"  # кнопка під постом; типово увімкнено, «ні» — вимкнути (BOT-002)
 ASK_TEXT = "💬 Запитати про цю пару"
 ASK_HELLO = "Вітаю! Цікавить ця пара: "
@@ -201,10 +204,20 @@ def ask_enabled() -> bool:
     return (config.setting(ASK_SETTING) or "").strip().lower() not in ("0", "ні", "no", "false")
 
 
-def ask_markup(link: str) -> dict:
-    """Одна URL-кнопка: відкриває чат із нею й лише заповнює поле вводу (нічого не шле само)."""
-    url = f"https://t.me/{SELLER_USERNAME}?text={quote(ASK_HELLO + link, safe='')}"
-    return {"inline_keyboard": [[{"text": ASK_TEXT, "url": url}]]}
+def site_enabled() -> bool:
+    return (config.setting(SITE_SETTING) or "").strip().lower() not in ("0", "ні", "no", "false")
+
+
+def ask_markup(link: str) -> dict | None:
+    """URL-кнопки, кожна в окремому рядку: «Запитати» (лише заповнює поле вводу, нічого не шле
+    само) і «Більше взуття на сайті». Кожна вмикається окремо; обидві вимкнено — `None`."""
+    rows = []
+    if ask_enabled():
+        url = f"https://t.me/{SELLER_USERNAME}?text={quote(ASK_HELLO + link, safe='')}"
+        rows.append([{"text": ASK_TEXT, "url": url}])
+    if site_enabled():
+        rows.append([{"text": SITE_TEXT, "url": SITE_URL}])
+    return {"inline_keyboard": rows} if rows else None
 
 
 def local_date(unix: int) -> str:
@@ -751,7 +764,7 @@ class Bot:
     def _ask_button(self, post_id: int) -> None:
         """Кнопка «Запитати про цю пару» під щойно опублікованим постом (BOT-002). Помилка
         публікацію не ламає: пост уже в каналі, лише повтор пізніше. Пост удруге — ніколи."""
-        if not ask_enabled():
+        if not (ask_enabled() or site_enabled()):
             return
         try:
             markup = ask_markup(self._post_link(post_id))
@@ -770,7 +783,7 @@ class Bot:
         if tried > len(ASK_RETRY):
             self._buttons.pop(post_id, None)
             self.log(f"Кнопка під постом {post_id}: не вийшло ({error})")
-            self.tell_owner(f"пост {post_id} опубліковано, але кнопку «Запитати» не поставлено.")
+            self.tell_owner(f"пост {post_id} опубліковано, але кнопки під ним не поставлено.")
             return
         wait = timedelta(seconds=error.retry_after) if error.retry_after else ASK_RETRY[tried - 1]
         self._buttons[post_id] = (tried, self.clock() + wait)

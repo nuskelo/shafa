@@ -1476,7 +1476,9 @@ def test_ask_button_under_new_post_private_channel_link(conn, bot, tg, upd, cloc
 
     ((call,),) = [[p] for p in buttons(tg)]
     assert (call["chat_id"], call["message_id"]) == (CHANNEL, 1401)
-    ((button,),) = call["markup"]["inline_keyboard"]
+    ask_row, site_row = call["markup"]["inline_keyboard"]
+    assert site_row == [{"text": "🛍 Більше взуття на сайті", "url": "https://viktoriashoes.com.ua"}]
+    (button,) = ask_row
     assert button["text"] == "💬 Запитати про цю пару"
     assert button["url"] == (
         "https://t.me/viktoriaviktoriatg?text="
@@ -1536,7 +1538,7 @@ def test_ask_button_429_waits_retry_after_then_gives_up_to_owner(conn, bot, tg, 
         clock.pass_(minutes=15)
         bot.tick()
     assert len(buttons(tg)) == 4  # перша + 3 повтори, далі здаємось
-    assert any("кнопку" in t for t in tg.texts(OWNER))
+    assert any("кнопки" in t for t in tg.texts(OWNER))
     assert len(tg.channel_posts) == 1
 
 
@@ -1567,6 +1569,34 @@ def test_ask_button_redelivery_does_not_duplicate_post_or_button(conn, bot, tg, 
 
 def test_ask_button_switched_off_no_button(conn, bot, tg, upd, clock, monkeypatch):
     monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
+    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
+    publish_one(bot, tg, upd, clock)
+
+    assert buttons(tg) == []
+    assert state(conn) == "published"
+
+
+def _rows(tg):
+    return [[b["text"] for r in c["markup"]["inline_keyboard"] for b in r] for c in buttons(tg)]
+
+
+def test_site_button_off_leaves_only_ask(conn, bot, tg, upd, clock, monkeypatch):
+    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
+    publish_one(bot, tg, upd, clock)
+
+    assert _rows(tg) == [["💬 Запитати про цю пару"]]
+
+
+def test_ask_button_off_leaves_only_site(conn, bot, tg, upd, clock, monkeypatch):
+    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
+    publish_one(bot, tg, upd, clock)
+
+    assert _rows(tg) == [["🛍 Більше взуття на сайті"]]
+
+
+def test_both_buttons_off_no_keyboard(conn, bot, tg, upd, clock, monkeypatch):
+    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
+    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
     publish_one(bot, tg, upd, clock)
 
     assert buttons(tg) == []
