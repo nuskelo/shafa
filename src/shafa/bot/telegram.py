@@ -166,12 +166,20 @@ class Telegram:
         return self.call("sendMessage", params)
 
     def send_photo(
-        self, chat_id: int, photo: Upload | str, caption: str, markup: dict | None = None
+        self,
+        chat_id: int,
+        photo: Upload | str,
+        caption: str,
+        markup: dict | None = None,
+        entities: list[dict] | None = None,
     ) -> dict:
-        """Фото завантаженням (`Upload`) або за `file_id`. Підпис — простим текстом."""
+        """Фото завантаженням (`Upload`) або за `file_id`. Підпис — простим текстом, посилання в
+        ньому — `entities` (без `parse_mode`: її текст не розбирається як розмітка)."""
         params: dict[str, Any] = {"chat_id": chat_id, "caption": caption}
         if markup is not None:
             params["reply_markup"] = markup
+        if entities:
+            params["caption_entities"] = entities
         if isinstance(photo, Upload):
             return self.call("sendPhoto", params, files={"photo": photo})
         return self.call("sendPhoto", {**params, "photo": photo})
@@ -208,10 +216,12 @@ class Telegram:
             {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}},
         )
 
-    def set_markup(self, chat_id: int, message_id: int, markup: dict) -> None:
-        """Кнопки під уже надісланим повідомленням (BOT-002). Ті самі — Telegram каже 400
-        «message is not modified»; це розбирає той, хто викликає."""
-        self.call(
-            "editMessageReplyMarkup",
-            {"chat_id": chat_id, "message_id": message_id, "reply_markup": markup},
-        )
+    def edit_caption(
+        self, chat_id: int, message_id: int, caption: str, entities: list[dict] | None = None
+    ) -> None:
+        """Новий підпис уже надісланого фото (BOT-006). Той самий — Telegram каже 400 «message
+        is not modified»; це розбирає той, хто викликає."""
+        params: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "caption": caption}
+        if entities:
+            params["caption_entities"] = entities
+        self.call("editMessageCaption", params)

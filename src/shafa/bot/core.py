@@ -28,6 +28,13 @@
 - Чернеток ≥ 2 — повідомлення «Чернеток: N» з «Опублікувати всі / Скасувати всі». «Опублікувати
   всі» — по черзі, з паузою, кожна тим самим шляхом, що й одна кнопка (рівно один пост); ті, що
   чекають її відповіді, пропускає. Повторне натискання нічого не дублює.
+
+BOT-006: кнопок під постом немає (з ними Telegram ховає «Коментарі»). Замість них — посилання в
+тексті підпису (`caption_entities`, UTF-16): ціле «Пишіть сюди 👉 @…» — посилання «Запитати про цю
+пару» (текст для поля вводу містить посилання на пост, яке відоме лише після `sendPhoto`, тож пост
+іде з посиланням на чат, а `editMessageCaption` ставить правильне; помилка правки пост не ламає),
+«🛍 Більше взуття на сайті» — посилання на сайт, «Більше фото в коментарях ⬇️» — звичайний рядок.
+У базі (`posts.text`) — простий текст, як бачить покупець.
 """
 
 import io
@@ -52,11 +59,11 @@ SELLER_USERNAME = "viktoriaviktoriatg"
 SIGNATURE = f"Пишіть сюди 👉 @{SELLER_USERNAME}"  # як у її постах (звірено з Експортом)
 SITE_URL = "https://viktoriashoes.com.ua"
 SITE_TEXT = "🛍 Більше взуття на сайті"
-SITE_SETTING = "SHAFA_SITE_BUTTON"  # друга кнопка; типово увімкнено, «ні» — вимкнути (BOT-003)
-ASK_SETTING = "SHAFA_ASK_BUTTON"  # кнопка під постом; типово увімкнено, «ні» — вимкнути (BOT-002)
-PHOTO_SETTING = "SHAFA_PHOTO_BUTTON"  # перша кнопка — коментарі з альбомом; типово так (BOT-005)
-PHOTO_TEXT = "📷 Більше фото тут"
-ASK_TEXT = "💬 Запитати про цю пару"
+COMMENTS_TEXT = "Більше фото в коментарях ⬇️"  # лише коли фото ≥ 2
+SITE_SETTING = (
+    "SHAFA_SITE_BUTTON"  # рядок-посилання на сайт; типово так, «ні» — без нього (BOT-006)
+)
+ASK_SETTING = "SHAFA_ASK_BUTTON"  # «Пишіть сюди» — посилання «Запитати»; типово так, «ні» — текст
 ASK_HELLO = "Вітаю! Цікавить ця пара: "
 ASK_RETRY = (timedelta(seconds=30), timedelta(minutes=2), timedelta(minutes=10))
 WINDOW = timedelta(minutes=2)  # D5
@@ -146,6 +153,7 @@ class Settings:
 
 NO_TAG = re.compile(r"^\s*без\s+хеш\s*тег\w*\s*[.!]?\s*$", re.IGNORECASE)
 COMMENTS = re.compile(r"^\s*(всі|більше)\s+фото\s+в\s+коментар\w*\W*$", re.IGNORECASE)
+SITE_LINE = re.compile(r"^\s*🛍\s*більше\s+взуття\s+на\s+сайті\W*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -158,13 +166,18 @@ class Composed:
 
 
 def compose(texts: list[str], photos: int = 1) -> Composed:
-    """Підпис, як у її постах: текст → хештег → «Пишіть сюди…» → «Більше фото в коментарях»
-    (фото ≥ 2). Хештег чи підпис уже є — не дублюємо. Хештег не визначено — питання, не мовчання;
-    рядок «без хештега» від неї — явна згода без хештега (у пост він не йде)."""
+    """Підпис: текст → хештег → «Пишіть сюди…» → «🛍 Більше взуття на сайті» → «Більше фото в
+    коментарях» (фото ≥ 2). Хештег чи підпис уже є — не дублюємо. Хештег не визначено — питання,
+    не мовчання; рядок «без хештега» від неї — явна згода без хештега (у пост він не йде)."""
     lines = "\n".join(t.strip() for t in texts if t and t.strip()).split("\n")
     no_tag = any(NO_TAG.match(line) for line in lines)
-    # «Всі/Більше фото в коментарях» з пересланого поста — прибираємо: додамо самі, якщо фото ≥ 2
-    lines = [line for line in lines if not NO_TAG.match(line) and not COMMENTS.match(line)]
+    # «Всі/Більше фото в коментарях» і «Більше взуття на сайті» з пересланого поста — прибираємо:
+    # додамо самі
+    lines = [
+        line
+        for line in lines
+        if not (NO_TAG.match(line) or COMMENTS.match(line) or SITE_LINE.match(line))
+    ]
     body = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if not body:
         return Composed(None, ask="text")
@@ -175,14 +188,21 @@ def compose(texts: list[str], photos: int = 1) -> Composed:
     note = decision.note
     if no_tag and not note.startswith("хештег твій"):
         note = "без хештега — як ти написала"
-    signed = rules.SIGNATURE.search(body)
-    if tag and signed:  # хештег — перед її власним «Пишіть сюди…»
-        body = f"{body[: signed.start()].rstrip()}\n{tag}\n\n{body[signed.start() :]}"
-    elif tag:
-        body = f"{body}\n{tag}"
-    if not signed:
-        body = f"{body}\n\n{SIGNATURE}"
-    return Composed(body, note)
+    lines = body.split("\n")
+    signed = next((i for i, line in enumerate(lines) if rules.SIGNATURE.search(line)), None)
+    head = lines if signed is None else lines[:signed]
+    tail = [] if signed is None else lines[signed + 1 :]
+    text = "\n".join(head).rstrip()
+    if tag:  # хештег — перед її власним «Пишіть сюди…»
+        text += f"\n{tag}"
+    text += f"\n\n{SIGNATURE if signed is None else lines[signed].strip()}"
+    if site_enabled():
+        text += f"\n{SITE_TEXT}"
+    if "\n".join(tail).strip():
+        text += "\n\n" + "\n".join(tail).strip()
+    if photos >= 2:
+        text += f"\n\n{COMMENTS_TEXT}"
+    return Composed(re.sub(r"\n{3,}", "\n\n", text).strip(), note)
 
 
 def caption_of(texts: list[str], photos: int = 1) -> str | None:
@@ -211,39 +231,33 @@ def is_not_modified(error: TelegramError) -> bool:
     return "not modified" in error.description.lower() or "not modified" in str(error).lower()
 
 
-def photo_enabled() -> bool:
-    return (config.setting(PHOTO_SETTING) or "").strip().lower() not in ("0", "ні", "no", "false")
+def ask_url(link: str | None = None) -> str:
+    """Чат з нею; з `link` (посилання на пост) — ще й готовий текст у полі вводу (нічого не шле
+    само). Посилання на пост відоме лише після публікації — до того лише чат."""
+    url = f"https://t.me/{SELLER_USERNAME}"
+    return f"{url}?text={quote(ASK_HELLO + link, safe='')}" if link else url
 
 
-def comments_url(post_url: str, comment_id: int) -> str:
-    """Посилання на тред коментарів поста: `?comment=` — id повідомлення в групі обговорення
-    (документація t.me-посилань, і для `t.me/<ім'я>/…`, і для `t.me/c/…`)."""
-    return f"{post_url}?comment={comment_id}"
+def caption_entities(caption: str, link: str | None = None) -> list[dict]:
+    """Посилання в підписі: ціле «Пишіть сюди…» (перший такий рядок) — «Запитати» і рядок про
+    сайт. Зсув і довжина — у UTF-16, як рахує Telegram (емодзі — 2); хештег Telegram знаходить сам.
+    Без розмітки HTML: її текст може містити `<`, `&`, `_` — нічого не ламається."""
+    found: list[dict] = []
+    offset, asked = 0, False
+    for line in caption.split("\n"):
+        length = caption_length(line)
+        if not asked and rules.SIGNATURE.search(line):
+            asked = True
+            if ask_enabled():
+                found.append(link_entity(offset, length, ask_url(link)))
+        elif SITE_LINE.match(line) and site_enabled():
+            found.append(link_entity(offset, length, SITE_URL))
+        offset += length + 1
+    return found
 
 
-def first_message_id(sent: Any) -> int | None:
-    """Найменший id серед повідомлень відповіді `sendMediaGroup` — перше фото альбому."""
-    if not isinstance(sent, list):
-        return None
-    ids = [
-        m["message_id"] for m in sent if isinstance(m, dict) and type(m.get("message_id")) is int
-    ]
-    return min(ids) if ids else None
-
-
-def ask_markup(link: str, photo_url: str | None = None) -> dict | None:
-    """URL-кнопки, кожна в окремому рядку: «Більше фото» (коментарі; лише коли `photo_url`),
-    «Запитати» (лише заповнює поле вводу, нічого не шле само) і «Більше взуття на сайті». Кожна
-    вмикається окремо; жодної — `None`."""
-    rows = []
-    if photo_url and photo_enabled():
-        rows.append([{"text": PHOTO_TEXT, "url": photo_url}])
-    if ask_enabled():
-        url = f"https://t.me/{SELLER_USERNAME}?text={quote(ASK_HELLO + link, safe='')}"
-        rows.append([{"text": ASK_TEXT, "url": url}])
-    if site_enabled():
-        rows.append([{"text": SITE_TEXT, "url": SITE_URL}])
-    return {"inline_keyboard": rows} if rows else None
+def link_entity(offset: int, length: int, url: str) -> dict:
+    return {"type": "text_link", "offset": offset, "length": length, "url": url}
 
 
 def local_date(unix: int) -> str:
@@ -298,8 +312,8 @@ class Bot:
         self.conn, self.tg, self.settings, self.clock, self.log = conn, tg, settings, clock, log
         self.sleep = sleep
         self._username: str | None = None  # публічне ім'я каналу; "" — немає (кеш після getChat)
-        self._buttons: dict[int, tuple[int, datetime]] = {}  # пост → (спроб було, наступна)
-        self._comment_ids: dict[int, int] = {}  # пост → перше фото альбому, кнопка ще не стоїть
+        # пост → (спроб було, наступна, підпис): посилання «Запитати» ще не виправлено
+        self._links: dict[int, tuple[int, datetime, str]] = {}
 
     # --- Надсилання без падінь (відповідь не дійшла — не привід ламати обробку) ---
 
@@ -505,7 +519,7 @@ class Bot:
         for draft in drafts:
             self._preview(draft)
         self._comments_overdue(now_)
-        self._retry_buttons(now_)
+        self._retry_links(now_)
         self._summaries()
 
     def _parts(self, draft_id: int) -> list[sqlite3.Row]:
@@ -565,7 +579,7 @@ class Bot:
                 picture: Upload | str = first["file_id"]
             else:
                 picture = Upload("1.jpg", for_channel(self._download(first)))
-            sent = self.tg.send_photo(chat_id, picture, caption, markup)
+            sent = self.tg.send_photo(chat_id, picture, caption, markup, caption_entities(caption))
         except (TelegramError, PhotoError, OSError) as error:
             self.log(f"Прев'ю не надіслано: {error}")
             self._set(draft_id, asked=1)  # без кнопок публікувати нічого; вона надішле ще раз
@@ -700,8 +714,9 @@ class Bot:
             return
         try:
             sent = self.tg.send_photo(
-                self.settings.channel_id, Upload("1.jpg", channel_photo), caption
-            )
+                self.settings.channel_id, Upload("1.jpg", channel_photo), caption,
+                entities=caption_entities(caption),
+            )  # fmt: skip
         except TelegramError as error:
             self._channel_failed(draft_id, chat_id, error)
             return
@@ -750,7 +765,7 @@ class Bot:
                 "VALUES (?, ?, ?, 'bot', ?) ON CONFLICT (post_id) DO NOTHING",
                 (post_id, date, caption, now()),
             )
-        self._ask_button(post_id)
+        self._fix_link(post_id, caption)
         link = post_link(self.settings.channel_id, post_id)
         try:
             folder = self._save_folder(post_id, photos)
@@ -788,59 +803,43 @@ class Bot:
             return f"https://t.me/{self._username}/{post_id}"
         return post_link(self.settings.channel_id, post_id)
 
-    def _ask_button(self, post_id: int) -> None:
-        """Кнопка «Запитати про цю пару» під щойно опублікованим постом (BOT-002). Помилка
+    def _fix_link(self, post_id: int, caption: str, tried: int = 0) -> None:
+        """Пост пішов із посиланням «Пишіть сюди» на чат без тексту (номера ще не було): тепер
+        `editMessageCaption` ставить посилання з готовим текстом про цю пару (BOT-006). Помилка
         публікацію не ламає: пост уже в каналі, лише повтор пізніше. Пост удруге — ніколи."""
-        comment_id = self._comment_ids.get(post_id)  # BOT-005: альбом уже в коментарях
-        if not (ask_enabled() or site_enabled() or comment_id):
+        if not ask_enabled():  # посилання на пост у підписі нема — виправляти нічого
             return
         try:
             link = self._post_link(post_id)
-            markup = ask_markup(link, comments_url(link, comment_id) if comment_id else None)
-            self.tg.set_markup(self.settings.channel_id, post_id, markup)
+            self.tg.edit_caption(
+                self.settings.channel_id, post_id, caption, caption_entities(caption, link)
+            )
         except TelegramError as error:
             if not is_not_modified(error):
-                self._button_failed(post_id, error)
+                self._link_failed(post_id, caption, tried, error)
                 return
-            self._buttons.pop(post_id, None)  # кнопки вже стоять
-            self._comment_ids.pop(post_id, None)
-        except Exception as error:  # noqa: BLE001 — канал важливіший за кнопку
-            self.log(f"Кнопка під постом {post_id}: {type(error).__name__}")
-        else:
-            self._buttons.pop(post_id, None)
-            self._comment_ids.pop(post_id, None)
+        except Exception as error:  # noqa: BLE001 — канал важливіший за посилання
+            self.log(f"Підпис поста {post_id}: {type(error).__name__}")
+        self._links.pop(post_id, None)
 
-    def _photo_button(self, post_id: int, sent: Any) -> None:
-        """Альбом у коментарях `done` → третя кнопка «Більше фото» (BOT-005): ті самі повтори, що
-        в «Запитати». Без id першого фото — кнопки нема, лише рядок у журналі."""
-        if not photo_enabled():
-            return
-        comment_id = first_message_id(sent)
-        if comment_id is None:
-            self.log(f"Пост {post_id}: Telegram не повернув id фото альбому — без кнопки")
-            return
-        self._comment_ids[post_id] = comment_id
-        self._ask_button(post_id)
-
-    def _button_failed(self, post_id: int, error: TelegramError) -> None:
-        tried = self._buttons.get(post_id, (0, self.clock()))[0] + 1
+    def _link_failed(self, post_id: int, caption: str, tried: int, error: TelegramError) -> None:
+        tried += 1
         if tried > len(ASK_RETRY):
-            self._buttons.pop(post_id, None)
-            comment_id = self._comment_ids.pop(post_id, None)
-            self.log(f"Кнопка під постом {post_id}: не вийшло ({error})")
-            if comment_id:
-                self.tell_owner(f"пост {post_id}: кнопку «Більше фото» не поставлено.")
-            else:
-                self.tell_owner(f"пост {post_id} опубліковано, але кнопки під ним не поставлено.")
+            self._links.pop(post_id, None)
+            self.log(f"Підпис поста {post_id}: не вийшло ({error})")
+            self.tell_owner(
+                f"пост {post_id} опубліковано, але посилання «Пишіть сюди» не доповнено "
+                "текстом про пару — воно веде просто в чат."
+            )
             return
         wait = timedelta(seconds=error.retry_after) if error.retry_after else ASK_RETRY[tried - 1]
-        self._buttons[post_id] = (tried, self.clock() + wait)
-        self.log(f"Кнопка під постом {post_id}: {error}; спробую ще раз")
+        self._links[post_id] = (tried, self.clock() + wait, caption)
+        self.log(f"Підпис поста {post_id}: {error}; спробую ще раз")
 
-    def _retry_buttons(self, now_: datetime) -> None:
-        for post_id, (_, when) in list(self._buttons.items()):
+    def _retry_links(self, now_: datetime) -> None:
+        for post_id, (tried, when, caption) in list(self._links.items()):
             if when <= now_:
-                self._ask_button(post_id)
+                self._fix_link(post_id, caption, tried)
 
     def _to_site(self, post_id: int, folder_name: str, sent: dict, caption: str) -> None:
         """Пост від бота → черга сайту (SITE-001). Лише запис у базу, мережі тут немає; будь-яка
@@ -936,7 +935,7 @@ class Bot:
             album = self._album(draft["folder_name"] or "")
             if len(album) < 2:
                 raise PhotoError("у папці поста менше двох фото")
-            sent = self.tg.send_media_group(self.settings.discussion_id, album, forwarded_id)
+            self.tg.send_media_group(self.settings.discussion_id, album, forwarded_id)
         except (TelegramError, PhotoError, OSError) as error:
             self.log(f"Коментарі до поста {draft['post_id']}: {error}")
             self._set(draft["id"], comments="failed")
@@ -948,7 +947,6 @@ class Bot:
             )
             return
         self._set(draft["id"], comments="done")
-        self._photo_button(draft["post_id"], sent)
         if draft["comments"] == "late":
             self.say(draft["chat_id"], TEXTS["comments_done"].format(link=link))
 
@@ -1225,7 +1223,7 @@ def first_line(draft_id: int, bot: "Bot") -> str:
 
 
 def own_text(texts: list[str]) -> str:
-    """Лише її текст — без хештега, «Пишіть сюди…», «Більше фото в коментарях» і «без хештега»."""
+    """Лише її текст — без хештега, «Пишіть сюди…», рядків про сайт і коментарі та «без хештега»."""
     lines = "\n".join(t.strip() for t in texts if t and t.strip()).split("\n")
     kept = [
         line
@@ -1233,6 +1231,7 @@ def own_text(texts: list[str]) -> str:
         if not (
             rules.SIGNATURE.search(line)
             or COMMENTS.match(line)
+            or SITE_LINE.match(line)
             or NO_TAG.match(line)
             or re.fullmatch(r"\s*(#VS_\S+\s*)+", line, re.IGNORECASE)
         )
