@@ -342,6 +342,25 @@ def text_sizes(text: str) -> list[float]:
     return list(dict.fromkeys(found))
 
 
+_LETTER = r"(?:\d?X{0,3}S|M|L|\d?X{0,3}L)"
+# «розмір S/M», «розмір: XL», «р. M», «size L». Лише поруч зі словом: окремий «M» чи «L» у тексті
+# (ініціал, модель) — не розмір.
+_LETTERS_AFTER = re.compile(
+    rf"(?:розмір\w*|размер\w*|size|(?<!\w)р\.)\s*[:-]?\s*"
+    rf"({_LETTER}(?:\s*(?:[/,-]|і|й|та)\s*{_LETTER})*)(?![\w/])",
+    re.IGNORECASE,
+)
+
+
+def letter_sizes(text: str) -> list[str]:
+    """Літерні розміри аксесуара з тексту поста («розмір S/M» → S, M), великими, по порядку, без
+    повторів. Немає слова «розмір» поруч із літерою — порожньо (CORE-012)."""
+    found: list[str] = []
+    for match in _LETTERS_AFTER.finditer(text):
+        found += re.findall(_LETTER, match[1], re.IGNORECASE)
+    return list(dict.fromkeys(f.upper() for f in found))
+
+
 def many_sizes(text: str) -> bool:
     """Два й більше різних розміри в пості (43 і 45; 37 і 38) — кілька товарів.
 

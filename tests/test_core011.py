@@ -66,10 +66,16 @@ def test_ukrainian_is_the_first_spelling_of_the_table():
 # --- Аксесуари без розміру ---
 
 
-def test_sizes_of_gloves_and_scarves_are_dropped_without_yellow(real):
-    for section, text in ((GLOVES, GLOVES_TEXT), (SCARVES, WOOL_SCARF)):
-        field = answer(text, section=section, sizes=["S", "M"])["sizes"]
-        assert (field.value, field.yellow) == ([], False)
+def test_sizes_of_scarves_are_dropped_without_yellow(real):
+    """Шарфи: блоку розміру в знімку ще немає (CORE-012 — лише рукавички зі скриншота)."""
+    field = answer(WOOL_SCARF, section=SCARVES, sizes=["S", "M"])["sizes"]
+    assert (field.value, field.yellow) == ([], False)
+
+
+def test_gloves_take_the_size_from_the_text_not_from_the_ai(real):
+    """CORE-012: у рукавичок є блок розміру — розмір береться з тексту, а не з відповіді ШІ."""
+    field = answer(GLOVES_TEXT, section=GLOVES, sizes=["S", "L"])["sizes"]
+    assert (field.value, field.yellow) == (["M"], False)
 
 
 def test_shoes_without_a_size_list_entry_are_still_yellow():

@@ -154,7 +154,7 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
                     notes.append(f"бренд {step.value} не в списку Шафи — лишено порожнім")
         elif step.kind in ("condition", "size_system"):
             notes += driver.pick(step.label, [step.value]) or []
-        elif step.kind in ("sizes", "colors", "choice"):
+        elif step.kind in ("sizes", "size_block", "colors", "choice"):
             notes += driver.pick(step.label, step.value) or []
         elif step.kind == "untouched":
             notes += driver.untouched(step.value)

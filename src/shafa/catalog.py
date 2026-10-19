@@ -184,6 +184,15 @@ def sizes(path: str) -> list[str]:
     return [n.replace(".", ",") if n[:1].isdigit() else n for n in names if _usable(n)]
 
 
+def size_block(path: str | None) -> dict[str, Any] | None:
+    """Окремий блок розміру аксесуара («Виберіть размер *»: кнопки без систем EU/UA, CORE-012).
+
+    `{"title", "required", "choices"}` або None — у знімку розділу блоку немає.
+    """
+    entry = section(path)
+    return entry.get("size_block") if entry else None
+
+
 def is_letter_size(size: str) -> bool:
     return bool(LETTER_SIZE.fullmatch(size.strip()))
 

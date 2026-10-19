@@ -218,10 +218,9 @@ def test_scarf_has_no_size_and_no_yellow_for_it():
 
 
 def test_size_for_an_accessory_without_sizes_is_dropped_silently():
-    """CORE-011: «S/M» лишається в описі, поле порожнє й не жовте."""
-    for section, text in ((SCARVES, "Шарф Burberry M. 900грн"), (GLOVES, GLOVES_TEXT)):
-        field = answer(text, section=section, sizes=["S", "M"])["sizes"]
-        assert (field.value, field.yellow) == ([], False)
+    """CORE-011: «S/M» лишається в описі, поле порожнє й не жовте. Рукавички — CORE-012 (блок розміру)."""
+    field = answer("Шарф Burberry M. 900грн", section=SCARVES, sizes=["S", "M"])["sizes"]
+    assert (field.value, field.yellow) == ([], False)
 
 
 @pytest.mark.parametrize(

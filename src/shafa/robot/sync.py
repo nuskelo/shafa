@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from shafa import config
-from shafa.robot import browser
+from shafa.robot import browser, lang
 
 SNAPSHOT = Path(__file__).resolve().parents[1] / "data" / "shafa-catalog.json"
 CACHE = config.data_dir() / "sync-cache"  # проміжні відповіді обходу (поза репозиторієм)
@@ -93,18 +93,39 @@ def section_entry(catalog_response: dict, slug: str) -> tuple[dict, list[str]]:
     return entry, list(dict.fromkeys(names))  # «топ» (Nike, Skechers…) + решта, без повторів
 
 
+SIZE_BLOCK_LABEL = "Виберіть розмір"  # підпис блоку розміру аксесуарів (на формі — «размер»)
+MAX_BUTTON = 12  # довший текст — не кнопка розміру (підказка, значок «?»)
+
+
+def size_block_entry(heading: str, buttons: list[str]) -> dict | None:
+    """Блок розміру аксесуара за розміткою форми (CORE-012): підпис «Виберіть размер *» і кнопки.
+
+    Відповідь `WEB_ProductFormCatalog` у аксесуарів `sizeGroups` не віддає (порожньо), тому блок
+    читається з форми. Підпис і кнопки — українською через `lang`; `*` у підписі — обов'язковість.
+    Немає кнопок — None.
+    """
+    choices = [lang.ukrainian(b.strip()) for b in buttons if 0 < len(b.strip()) <= MAX_BUTTON]
+    if not choices:
+        return None
+    title = lang.ukrainian(heading.replace("*", "").strip())
+    return {"title": title, "required": "*" in heading, "choices": list(dict.fromkeys(choices))}
+
+
 def build_snapshot(
     tree_response: dict,
     colors_response: dict,
     conditions_response: dict,
     catalogs: dict[tuple[str, ...], tuple[dict, str]],
     checked: str,
+    size_blocks: dict[tuple[str, ...], dict] | None = None,
 ) -> dict:
     """Знімок: розділи за повним шляхом і спільний список брендів."""
     _, version = parse_tree(tree_response)
     sections, brands = {}, set()
     for path, (response, slug) in catalogs.items():
         entry, names = section_entry(response, slug)
+        if block := (size_blocks or {}).get(path):
+            entry["size_block"] = block
         sections[SEP.join(path)] = entry
         brands.update(names)
     return {
@@ -149,6 +170,27 @@ def _from_batch(response: Any, op: str) -> dict:
     return next(b for i, b in zip(items, bodies, strict=False) if i.get("operationName") == op)
 
 
+def read_size_block(page: Any) -> dict | None:  # pragma: no cover — живе читання форми
+    """Блок «Виберіть размер *» відкритої форми: підпис і кнопки (лише читання, нічого не тиснемо)."""
+    from shafa.robot import form
+
+    labels = lang.variants(SIZE_BLOCK_LABEL)
+    if not page.evaluate(form.FIND_BLOCK, [labels, "size-block"]):
+        return None
+    got = page.evaluate(
+        """(mark) => {
+          const block = document.querySelector(`[data-robot-block='${mark}']`);
+          const label = document.querySelector(`[data-robot-label='${mark}']`);
+          return {
+            heading: label ? label.textContent : '',
+            buttons: [...block.querySelectorAll('button')].map(b => (b.innerText || '').trim()),
+          };
+        }""",
+        "size-block",
+    )
+    return size_block_entry(got["heading"], got["buttons"])
+
+
 def crawl(session: browser.Session, cache: Path, log=print) -> dict:
     """Обійти потрібні типи у формі й зібрати знімок. Кожен тип — нове відкриття форми.
 
@@ -173,12 +215,15 @@ def crawl(session: browser.Session, cache: Path, log=print) -> dict:
     slugs = leaf_slugs(root)
     log(f"Типів для обходу: {len(slugs)}")
     catalogs: dict[tuple[str, ...], tuple[dict, str]] = {}
+    size_blocks: dict[tuple[str, ...], dict] = {}
     colors = None
     for n, (path, slug) in enumerate(slugs.items(), start=1):
         saved = cache / (SEP.join(path).replace("/", "|") + ".json")
         if saved.is_file():
             stored = json.loads(saved.read_text(encoding="utf-8"))
             catalogs[path] = (stored["response"], stored["slug"])
+            if stored.get("size_block"):
+                size_blocks[path] = stored["size_block"]
             colors = colors or stored.get("colors")
             continue
         session.open_form()
@@ -189,16 +234,30 @@ def crawl(session: browser.Session, cache: Path, log=print) -> dict:
         else:
             response = session.choose_category(path, slug)
         catalogs[path] = (response, slug)
+        block = None
+        if path[0] == "Аксесуари" and not response["data"]["catalog"].get("sizeGroups"):
+            browser.pause(1.0, 2.0)  # блок розміру малюється після відповіді
+            block = read_size_block(page)
+            if block:
+                size_blocks[path] = block
         saved.write_text(
-            json.dumps({"response": response, "slug": slug, "colors": colors}, ensure_ascii=False),
+            json.dumps(
+                {"response": response, "slug": slug, "colors": colors, "size_block": block},
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
-        log(f"{n}/{len(slugs)} {SEP.join(path)}")
+        log(f"{n}/{len(slugs)} {SEP.join(path)}" + (" · розмір: кнопки" if block else ""))
         browser.pause(4.0, 8.0)
     if session.publish_attempts():
         raise RuntimeError(f"Заблоковано спроби змін: {session.publish_attempts()}")
     return build_snapshot(
-        tree, colors, conditions, catalogs, datetime.now().astimezone().date().isoformat()
+        tree,
+        colors,
+        conditions,
+        catalogs,
+        datetime.now().astimezone().date().isoformat(),
+        size_blocks,
     )
 
 
