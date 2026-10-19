@@ -431,8 +431,8 @@ def edited(conn: sqlite3.Connection, post_id: int, text: str) -> bool:
     with conn:
         cursor = conn.execute(
             "UPDATE site_jobs SET text = ?, fields = NULL, updated_at = ? "
-            "WHERE post_id = ? AND state = 'waiting'",
-            (text, now(), post_id),
+            "WHERE post_id = ? AND state = 'waiting' AND text IS NOT ?",
+            (text, now(), post_id, text),
         )
     return cursor.rowcount == 1
 

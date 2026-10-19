@@ -1,5 +1,6 @@
 import io
 from datetime import UTC, datetime, timedelta, timezone
+from urllib.parse import unquote
 
 import pytest
 from PIL import Image
@@ -53,6 +54,7 @@ class FakeTelegram:
         self.channel_posts = []
         self.last_preview = None
         self.albums = []
+        self.chat_info = {}  # відповідь getChat каналу (username тощо)
 
     def _record(self, method, **params):
         self.calls.append((method, params))
@@ -96,6 +98,13 @@ class FakeTelegram:
 
     def delete_message(self, chat_id, message_id):
         self._record("deleteMessage", chat_id=chat_id, message_id=message_id)
+
+    def get_chat(self, chat_id):
+        self._record("getChat", chat_id=chat_id)
+        return {"id": chat_id, **self.chat_info}
+
+    def set_markup(self, chat_id, message_id, markup):
+        self._record("setButton", chat_id=chat_id, message_id=message_id, markup=markup)
 
     def drop_buttons(self, chat_id, message_id):
         self._record("editMessageReplyMarkup", chat_id=chat_id, message_id=message_id)
@@ -1448,3 +1457,135 @@ def test_channel_refusal_not_queued_for_site(conn, bot, tg, upd, clock, site_on)
     press(upd, bot, tg)
 
     assert site_jobs(conn) == []
+
+
+# --- Кнопка «Запитати про цю пару» (BOT-002) ---
+
+
+def buttons(tg):
+    return [p for m, p in tg.calls if m == "setButton"]
+
+
+def publish_one(bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock)
+    press(upd, bot, tg)
+
+
+def test_ask_button_under_new_post_private_channel_link(conn, bot, tg, upd, clock):
+    publish_one(bot, tg, upd, clock)
+
+    ((call,),) = [[p] for p in buttons(tg)]
+    assert (call["chat_id"], call["message_id"]) == (CHANNEL, 1401)
+    ((button,),) = call["markup"]["inline_keyboard"]
+    assert button["text"] == "💬 Запитати про цю пару"
+    assert button["url"] == (
+        "https://t.me/viktoriaviktoriatg?text="
+        "%D0%92%D1%96%D1%82%D0%B0%D1%8E%21%20%D0%A6%D1%96%D0%BA%D0%B0%D0%B2%D0%B8%D1%82%D1%8C"
+        "%20%D1%86%D1%8F%20%D0%BF%D0%B0%D1%80%D0%B0%3A%20"
+        "https%3A%2F%2Ft.me%2Fc%2F2394827824%2F1401"
+    )
+    assert "viktoriaviktoriatg" in core.SIGNATURE  # одна константа на підпис і кнопку
+
+
+def test_ask_button_uses_public_username_and_asks_getchat_once(conn, bot, tg, upd, clock):
+    tg.chat_info = {"username": "viktoriashoes"}
+    publish_one(bot, tg, upd, clock)
+    clock.pass_(minutes=5)
+    tg.files["g"] = jpeg()
+    bot.handle(upd(message=photo(21, "g", caption=TEXT)))
+    clock.pass_(seconds=4)
+    bot.tick()
+    press(upd, bot, tg, draft_id=2)
+
+    first, second = buttons(tg)
+    assert unquote(first["markup"]["inline_keyboard"][0][0]["url"]).endswith(
+        "https://t.me/viktoriashoes/1401"
+    )
+    assert second["message_id"] == 1402
+    assert sum(1 for m, _ in tg.calls if m == "getChat") == 1
+
+
+def test_ask_button_error_never_breaks_publication_and_retries(conn, bot, tg, upd, clock):
+    tg.errors["setButton"] = TelegramError("мережа", uncertain=True)
+    publish_one(bot, tg, upd, clock)
+
+    assert state(conn) == "published"
+    assert len(tg.channel_posts) == 1
+    assert conn.execute("SELECT count(*) FROM posts").fetchone()[0] == 1
+    assert any(t.startswith("Опубліковано:") for t in tg.texts(SELLER))
+
+    tg.errors.clear()
+    bot.tick()  # ще рано
+    assert len(buttons(tg)) == 1
+    clock.pass_(seconds=31)
+    bot.tick()
+    assert len(buttons(tg)) == 2
+    clock.pass_(hours=1)
+    bot.tick()
+    assert len(buttons(tg)) == 2  # поставлено — більше не пробуємо
+    assert len(tg.channel_posts) == 1  # пост удруге — ніколи
+
+
+def test_ask_button_429_waits_retry_after_then_gives_up_to_owner(conn, bot, tg, upd, clock):
+    tg.errors["setButton"] = TelegramError("забагато", code=429, retry_after=90)
+    publish_one(bot, tg, upd, clock)
+    clock.pass_(seconds=60)
+    bot.tick()
+    assert len(buttons(tg)) == 1  # retry_after 90 с ще не минуло
+    for _ in range(5):
+        clock.pass_(minutes=15)
+        bot.tick()
+    assert len(buttons(tg)) == 4  # перша + 3 повтори, далі здаємось
+    assert any("кнопку" in t for t in tg.texts(OWNER))
+    assert len(tg.channel_posts) == 1
+
+
+def test_ask_button_not_modified_counts_as_done(conn, bot, tg, upd, clock):
+    tg.errors["setButton"] = TelegramError(
+        "400", code=400, description="Bad Request: message is not modified"
+    )
+    publish_one(bot, tg, upd, clock)
+    clock.pass_(hours=1)
+    bot.tick()
+    assert len(buttons(tg)) == 1
+
+
+def test_ask_button_redelivery_does_not_duplicate_post_or_button(conn, bot, tg, upd, clock):
+    send_post(bot, tg, upd, clock)
+    query = {
+        "id": "cb", "from": {"id": SELLER}, "data": "pub:1",
+        "message": {"message_id": last_preview_id(tg), "chat": chat()},
+    }  # fmt: skip
+    update = upd(callback_query=query)
+    bot.handle(update)
+    bot.handle(update)
+    bot.handle(upd(callback_query=query))
+
+    assert len(tg.channel_posts) == 1
+    assert len(buttons(tg)) == 1
+
+
+def test_ask_button_switched_off_no_button(conn, bot, tg, upd, clock, monkeypatch):
+    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
+    publish_one(bot, tg, upd, clock)
+
+    assert buttons(tg) == []
+    assert state(conn) == "published"
+
+
+def test_edit_after_our_button_changes_nothing(conn, tg, upd, clock, root, site_on):
+    """Telegram присилає `edited_channel_post` і після нашого редагування кнопки: той самий текст —
+    без дії (оновлення не йде в чергу сайту, у журналі нічого)."""
+    log = []
+    settings = Settings(CHANNEL, SELLER, OWNER, root, GROUP)
+    bot = Bot(conn, tg, settings, clock=clock, log=log.append, sleep=lambda s: None)
+    publish_one(bot, tg, upd, clock)
+    before = conn.execute("SELECT updated_at, text FROM site_jobs").fetchone()
+    log.clear()
+    clock.pass_(minutes=1)
+
+    same = {"chat": {"id": CHANNEL}, "message_id": 1401, "caption": tg.channel_posts[0][1]}
+    bot.handle(upd(edited_channel_post=same))
+
+    assert not any("змінено" in line for line in log)
+    assert tuple(conn.execute("SELECT updated_at, text FROM site_jobs").fetchone()) == tuple(before)

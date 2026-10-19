@@ -153,3 +153,21 @@ def test_media_group_is_album_reply_with_attachments():
     assert json.dumps(media) in text
     assert json.dumps({"message_id": 55}) in text
     assert 'name="p0"; filename="1.jpg"' in text and 'name="p1"; filename="2.jpg"' in text
+
+
+def test_set_markup_edits_reply_markup_with_url_button():
+    seen = []
+
+    def handler(request):
+        seen.append((request.url.path, json.loads(request.read())))
+        return httpx2.Response(200, json={"ok": True, "result": True})
+
+    markup = {"inline_keyboard": [[{"text": "💬", "url": "https://t.me/x?text=%D0%92"}]]}
+    telegram(handler).set_markup(-100, 7, markup)
+
+    assert seen == [
+        (
+            f"/bot{TOKEN}/editMessageReplyMarkup",
+            {"chat_id": -100, "message_id": 7, "reply_markup": markup},
+        )
+    ]
