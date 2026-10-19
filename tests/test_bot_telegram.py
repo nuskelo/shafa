@@ -155,19 +155,53 @@ def test_media_group_is_album_reply_with_attachments():
     assert 'name="p0"; filename="1.jpg"' in text and 'name="p1"; filename="2.jpg"' in text
 
 
-def test_set_markup_edits_reply_markup_with_url_button():
+def test_edit_caption_sends_caption_and_entities_as_json_without_parse_mode():
     seen = []
 
     def handler(request):
         seen.append((request.url.path, json.loads(request.read())))
         return httpx2.Response(200, json={"ok": True, "result": True})
 
-    markup = {"inline_keyboard": [[{"text": "💬", "url": "https://t.me/x?text=%D0%92"}]]}
-    telegram(handler).set_markup(-100, 7, markup)
+    entities = [
+        {"type": "text_link", "offset": 5, "length": 3, "url": "https://t.me/x?text=%D0%92"}
+    ]
+    telegram(handler).edit_caption(-100, 7, "<b>Кеди</b> & 👉", entities)
 
     assert seen == [
         (
-            f"/bot{TOKEN}/editMessageReplyMarkup",
-            {"chat_id": -100, "message_id": 7, "reply_markup": markup},
+            f"/bot{TOKEN}/editMessageCaption",
+            {
+                "chat_id": -100,
+                "message_id": 7,
+                "caption": "<b>Кеди</b> & 👉",
+                "caption_entities": entities,
+            },
         )
-    ]
+    ]  # без parse_mode: її текст не розбирається як розмітка
+
+
+def test_send_photo_entities_go_as_caption_entities_in_multipart():
+    seen = []
+
+    def handler(request):
+        seen.append(request.read().decode("utf-8", "replace"))
+        return httpx2.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    entities = [{"type": "text_link", "offset": 0, "length": 4, "url": "https://example.com"}]
+    telegram(handler).send_photo(-100, Upload("1.jpg", b"x"), "Кеди", entities=entities)
+
+    (body,) = seen
+    assert 'name="caption_entities"' in body and json.dumps(entities, ensure_ascii=False) in body
+    assert "parse_mode" not in body and "reply_markup" not in body
+
+
+def test_send_photo_without_entities_has_no_caption_entities():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.read()))
+        return httpx2.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    telegram(handler).send_photo(-100, "file-id", "Кеди")
+
+    assert seen == [{"chat_id": -100, "caption": "Кеди", "photo": "file-id"}]
