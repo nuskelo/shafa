@@ -67,8 +67,9 @@ class FakeTelegram:
         self._record("sendMessage", chat_id=chat_id, text=text, markup=markup)
         return {"message_id": self.next_id}
 
-    def send_photo(self, chat_id, photo, caption, markup=None):
-        self._record("sendPhoto", chat_id=chat_id, photo=photo, caption=caption, markup=markup)
+    def send_photo(self, chat_id, photo, caption, markup=None, entities=None):
+        self._record("sendPhoto", chat_id=chat_id, photo=photo, caption=caption, markup=markup,
+                     entities=entities)  # fmt: skip
         if chat_id == CHANNEL:
             self.channel_posts.append((photo, caption))
             return {"message_id": 1400 + len(self.channel_posts), "date": 1_791_960_000}
@@ -106,8 +107,9 @@ class FakeTelegram:
         self._record("getChat", chat_id=chat_id)
         return {"id": chat_id, **self.chat_info}
 
-    def set_markup(self, chat_id, message_id, markup):
-        self._record("setButton", chat_id=chat_id, message_id=message_id, markup=markup)
+    def edit_caption(self, chat_id, message_id, caption, entities=None):
+        self._record("editMessageCaption", chat_id=chat_id, message_id=message_id,
+                     caption=caption, entities=entities)  # fmt: skip
 
     def drop_buttons(self, chat_id, message_id):
         self._record("editMessageReplyMarkup", chat_id=chat_id, message_id=message_id)
@@ -202,29 +204,108 @@ def state(conn, draft_id=1):
 
 
 SIGN = "Пишіть сюди 👉 @viktoriaviktoriatg"
+SITE = "🛍 Більше взуття на сайті"
+MORE = "Більше фото в коментарях ⬇️"
+TAIL = f"{SIGN}\n{SITE}"  # кінець підпису одного фото
+TAIL_ALBUM = f"{TAIL}\n\n{MORE}"  # фото ≥ 2
 
 
 def test_caption_like_her_posts():
     text = "Кросівки Lowa 37 розміру. 1200грн"
-    assert core.caption_of([text]) == f"{text}\n#VS_37_розмір\n\n{SIGN}"
-    assert core.caption_of([text], 2) == (f"{text}\n#VS_37_розмір\n\n{SIGN}")
+    assert core.caption_of([text]) == f"{text}\n#VS_37_розмір\n\n{TAIL}"
+    assert core.caption_of([text], 2) == f"{text}\n#VS_37_розмір\n\n{TAIL_ALBUM}"
     assert core.caption_of(["  Кеди  ", "", "38 розмір\n"]) == (
-        f"Кеди\n38 розмір\n#VS_38_розмір\n\n{SIGN}"
+        f"Кеди\n38 розмір\n#VS_38_розмір\n\n{TAIL}"
     )
 
 
 def test_caption_does_not_duplicate_her_hashtag_or_signature():
-    assert core.caption_of([TEXT]) == f"{TEXT}\n\n{SIGN}"  # хештег уже є
+    assert core.caption_of([TEXT]) == f"{TEXT}\n\n{TAIL}"  # хештег уже є
     signed = f"Кеди 38 розмір. 800грн\n\n{SIGN}"
-    assert core.caption_of([signed]) == f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}"
+    assert core.caption_of([signed]) == f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{TAIL}"
     assert core.caption_of([f"Сумка шкіряна. 900грн\n#VS_сумки\n\n{SIGN}"], 3) == (
-        f"Сумка шкіряна. 900грн\n#VS_сумки\n\n{SIGN}"
+        f"Сумка шкіряна. 900грн\n#VS_сумки\n\n{TAIL_ALBUM}"
     )
 
 
 def test_caption_other_things_without_hashtag_and_unclear_size():
-    assert core.caption_of(["Рукавиці шкіряні. 300грн"]) == f"Рукавиці шкіряні. 300грн\n\n{SIGN}"
+    assert core.caption_of(["Рукавиці шкіряні. 300грн"]) == f"Рукавиці шкіряні. 300грн\n\n{TAIL}"
     assert core.caption_of(["Кросівки Nike. 1200грн"]) is None
+
+
+def test_caption_site_line_follows_signature_and_comments_line_is_last():
+    caption = core.caption_of(["Кеди 38 розмір. 800грн"], 2)
+    assert caption.split("\n")[-5:] == ["", SIGN, SITE, "", MORE]
+    assert core.caption_of(["Кеди 38 розмір. 800грн"], 1).endswith(f"{SIGN}\n{SITE}")
+    assert MORE not in core.caption_of(["Кеди 38 розмір. 800грн"], 1)
+
+
+def test_caption_site_line_from_forwarded_post_not_duplicated():
+    text = f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n{SITE}\n\n{MORE}"
+    caption = core.caption_of([text], 3)
+    assert caption.count(SITE) == 1 and caption.count(MORE) == 1
+    assert caption == f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{TAIL_ALBUM}"
+
+
+def test_caption_site_line_switched_off(monkeypatch):
+    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
+    caption = core.caption_of([f"Кеди 38 розмір. 800грн\n\n{SITE}"], 2)
+    assert SITE not in caption
+    assert caption.endswith(f"{SIGN}\n\n{MORE}")
+
+
+def utf16(text, offset, length):
+    data = text.encode("utf-16-le")
+    return data[offset * 2 : (offset + length) * 2].decode("utf-16-le")
+
+
+def test_entities_cover_whole_signature_and_site_lines_in_utf16():
+    # емодзі 🔥 і 🛍 — по 2 одиниці UTF-16: зміщення рахується не в символах
+    caption = core.caption_of(["🔥 Кеди 38 розмір. 800грн 🔥"], 2)
+    link = "https://t.me/c/2394827824/1400"
+    ask, site = core.caption_entities(caption, link)
+    assert utf16(caption, ask["offset"], ask["length"]) == SIGN
+    assert utf16(caption, site["offset"], site["length"]) == SITE
+    assert ask["type"] == site["type"] == "text_link"
+    assert site["url"] == core.SITE_URL
+    # у символах Python зміщення було б іншим — тест ловить рахунок «по символах»
+    assert caption.index(SIGN) != ask["offset"]
+
+
+def test_entities_ask_url_has_hello_and_post_link_percent_encoded():
+    caption = core.caption_of(["Кеди 38 розмір. 800грн"])
+    (ask, _) = core.caption_entities(caption, "https://t.me/viktoria/1400")
+    assert ask["url"].startswith("https://t.me/viktoriaviktoriatg?text=")
+    assert unquote(ask["url"].split("?text=")[1]) == (
+        "Вітаю! Цікавить ця пара: https://t.me/viktoria/1400"
+    )
+    assert " " not in ask["url"] and ":" not in ask["url"].split("?text=")[1]
+
+
+def test_entities_without_post_link_point_to_chat_only():
+    caption = core.caption_of(["Кеди 38 розмір. 800грн"])
+    (ask, _) = core.caption_entities(caption)
+    assert ask["url"] == "https://t.me/viktoriaviktoriatg"
+
+
+def test_entities_ignore_her_markup_characters_and_hashtag_stays_plain():
+    text = "Кеди <b>x</b> & Ко_Ко *y* [1](x). 38 розмір. 800грн"
+    caption = core.caption_of([text], 2)
+    assert text in caption  # її текст — як є, без екранування й розмітки
+    ents = core.caption_entities(caption, "https://t.me/c/1/2")
+    assert [e["type"] for e in ents] == ["text_link", "text_link"]  # хештег — не наша сутність
+    assert utf16(caption, ents[0]["offset"], ents[0]["length"]) == SIGN
+
+
+def test_entities_only_first_signature_line_and_switches(monkeypatch):
+    caption = core.caption_of([f"Кеди 38 розмір. 800грн\n\n{SIGN}\nДодатково"], 1)
+    ents = core.caption_entities(caption, "https://t.me/c/1/2")
+    assert len(ents) == 2 and caption.count("Пишіть сюди") == 1
+    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
+    (only,) = core.caption_entities(caption, "https://t.me/c/1/2")
+    assert only["url"] == core.SITE_URL
+    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
+    assert core.caption_entities(caption) == []
 
 
 def test_caption_length_counts_like_telegram():
@@ -254,7 +335,7 @@ def test_album_preview_then_publish(conn, bot, tg, upd, clock, root):
     preview = [(m, p) for m, p in tg.calls if m == "sendPhoto"][-1][1]
     assert preview["chat_id"] == SELLER and preview["photo"] == "f1"  # найбільший розмір першого
     assert preview["caption"] == core.caption_of([TEXT], 3)
-    assert "фото в коментарях" not in preview["caption"]
+    assert preview["caption"].endswith(f"{TAIL_ALBUM}")  # фото ≥ 2 — рядок про коментарі
     buttons = [b["callback_data"] for row in preview["markup"]["inline_keyboard"] for b in row]
     assert buttons == ["pub:1", "edit:1", "cancel:1"]
     assert tg.channel_posts == []  # без натискання нічого не публікується
@@ -264,6 +345,10 @@ def test_album_preview_then_publish(conn, bot, tg, upd, clock, root):
     ((photo_sent, caption),) = tg.channel_posts
     assert isinstance(photo_sent, Upload) and photo_sent.data == tg.files["f1"]
     assert caption == preview["caption"]  # прев'ю = канал
+    (sent,) = channel_sends(tg)
+    assert sent["markup"] is None  # кнопок під постом немає
+    assert sent["entities"] == core.caption_entities(caption)
+    assert preview["entities"] == sent["entities"]  # у прев'ю ті самі посилання, що в каналі
     assert state(conn) == "published"
     folder = root / "1401"
     assert sorted(p.name for p in folder.iterdir()) == ["1.jpg", "2.jpg", "3.jpg"]
@@ -584,9 +669,10 @@ def test_ten_photos_fine(conn, bot, tg, upd, clock):
 
 
 def long_post(length):
-    """Пост про кросівки, підпис якого (з хештегом і «Пишіть сюди») — рівно `length` символів."""
+    """Пост про кросівки (одне фото), підпис якого (хештег, «Пишіть сюди», рядок про сайт) —
+    рівно `length` символів за рахунком Telegram (UTF-16: 👉 і 🛍 — по 2)."""
     start = "Кросівки 38 розмір. "
-    extra = len("\n#VS_38_розмір\n\n" + core.SIGNATURE) + 1  # 👉 — 2 символи для Telegram
+    extra = core.caption_length(f"\n#VS_38_розмір\n\n{core.SIGNATURE}\n{core.SITE_TEXT}")
     return start + "я" * (length - extra - len(start))
 
 
@@ -729,7 +815,7 @@ def test_one_photo_no_comments(conn, bot, tg, upd, clock):
     published(bot, tg, upd, clock, files=1)
     bot.handle(upd(message=forwarded(77, 1401)))
     assert comments(conn) is None and tg.albums == []
-    assert "коментар" not in tg.channel_posts[0][1]
+    assert "коментар" not in tg.channel_posts[0][1]  # одне фото — рядка про коментарі нема
 
 
 def test_forward_redelivered_or_repeated_album_once(conn, bot, tg, upd, clock):
@@ -843,7 +929,7 @@ def test_live_bag_text_gets_bag_hashtag_in_preview_and_post(conn, bot, tg, upd, 
     send_post(bot, tg, upd, clock, files=3, text=BAG_TEXT)
 
     preview = [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]][-1]
-    assert preview["caption"] == (f"{BAG_TEXT}\n#VS_сумки\n\n{SIGN}")
+    assert preview["caption"] == (f"{BAG_TEXT}\n#VS_сумки\n\n{TAIL_ALBUM}")
     assert "Хештег: #VS_сумки." in preview_header(tg)
     press(upd, bot, tg)
     assert tg.channel_posts[0][1] == preview["caption"]
@@ -859,7 +945,7 @@ def test_unknown_thing_asks_then_her_no_hashtag_is_explicit(conn, bot, tg, upd, 
     bot.tick()
 
     preview = [p for m, p in tg.calls if m == "sendPhoto" and p["markup"]][-1]
-    assert preview["caption"] == f"Тест 6: щось гарне. 500грн\n\n{SIGN}"  # фраза не в пості
+    assert preview["caption"] == f"Тест 6: щось гарне. 500грн\n\n{TAIL}"  # фраза не в пості
     assert "Без хештега — як ти написала." in preview_header(tg)
 
 
@@ -971,8 +1057,9 @@ def test_forwarded_ready_post_no_duplicates(conn, bot, tg, upd, clock, files):
     (shown,) = previews(tg)
     caption = shown["caption"]
     assert caption.count("#VS_") == 1 and caption.count("Пишіть сюди") == 1
-    assert "фото в коментарях" not in caption
-    assert caption.startswith(f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}")
+    assert caption.count(SITE) == 1  # її рядка про сайт тут не було — наш один
+    assert caption.count("фото в коментарях") == (1 if files > 1 else 0)
+    assert caption.startswith(f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{TAIL}")
     assert "\n\n\n" not in caption
 
 
@@ -994,19 +1081,19 @@ def test_comments_line_in_the_middle_leaves_no_gap(conn, bot, tg, upd, clock):
     clock.pass_(seconds=4)
     bot.tick()
     (shown,) = previews(tg)
-    assert shown["caption"] == (f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}")
+    assert shown["caption"] == (f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{TAIL_ALBUM}")
 
 
 @pytest.mark.parametrize("old_line", ["Всі фото в коментарях ⬇️", "Більше фото в коментарях ⬇️"])
 def test_forwarded_comments_line_is_not_duplicated(conn, bot, tg, upd, clock, old_line):
-    """Старий рядок («Всі…» / «Більше…») з пересланого поста прибрано, новий не додається."""
+    """Старий рядок («Всі…» / «Більше…») з пересланого поста прибрано, наш — один, в кінці."""
     text = f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\n{old_line}"
     forwarded_post(upd, bot, tg, 10, "g", text, files=2)
     clock.pass_(seconds=4)
     bot.tick()
     (shown,) = previews(tg)
-    assert "фото в коментарях" not in shown["caption"]
-    assert shown["caption"].endswith(SIGN)
+    assert shown["caption"].count("фото в коментарях") == 1
+    assert shown["caption"].endswith(TAIL_ALBUM)
 
 
 def test_comments_line_between_paragraphs_leaves_no_gap(conn, bot, tg, upd, clock):
@@ -1054,7 +1141,7 @@ def test_edit_sends_only_her_text_then_new_text_new_preview(conn, bot, tg, upd, 
 
     assert state(conn) == "preview"
     new = previews(tg)[-1]
-    assert new["caption"] == (f"Черевики Ecco 39 розмір. 1700грн\n#VS_39_розмір\n\n{SIGN}")
+    assert new["caption"] == (f"Черевики Ecco 39 розмір. 1700грн\n#VS_39_розмір\n\n{TAIL_ALBUM}")
     press(upd, bot, tg)
     assert tg.channel_posts[0][1] == new["caption"]
 
@@ -1468,37 +1555,86 @@ def test_channel_refusal_not_queued_for_site(conn, bot, tg, upd, clock, site_on)
     assert site_jobs(conn) == []
 
 
-# --- Кнопка «Запитати про цю пару» (BOT-002) ---
+# --- Посилання в тексті замість кнопок (BOT-006) ---
 
 
-def buttons(tg):
-    return [p for m, p in tg.calls if m == "setButton"]
+def edits(tg):
+    """Виправлення підпису поста каналу (посилання «Запитати» з номером поста)."""
+    return [p for m, p in tg.calls if m == "editMessageCaption"]
 
 
-def publish_one(bot, tg, upd, clock):
-    send_post(bot, tg, upd, clock)
+def channel_sends(tg):
+    return [p for m, p in tg.calls if m == "sendPhoto" and p["chat_id"] == CHANNEL]
+
+
+def publish_one(bot, tg, upd, clock, files=3):
+    send_post(bot, tg, upd, clock, files=files)
     press(upd, bot, tg)
 
 
-def test_ask_button_under_new_post_private_channel_link(conn, bot, tg, upd, clock):
-    publish_one(bot, tg, upd, clock)
-
-    ((call,),) = [[p] for p in buttons(tg)]
-    assert (call["chat_id"], call["message_id"]) == (CHANNEL, 1401)
-    ask_row, site_row = call["markup"]["inline_keyboard"]
-    assert site_row == [{"text": "🛍 Більше взуття на сайті", "url": "https://viktoriashoes.com.ua"}]
-    (button,) = ask_row
-    assert button["text"] == "💬 Запитати про цю пару"
-    assert button["url"] == (
+def ask_link(post):
+    return (
         "https://t.me/viktoriaviktoriatg?text="
         "%D0%92%D1%96%D1%82%D0%B0%D1%8E%21%20%D0%A6%D1%96%D0%BA%D0%B0%D0%B2%D0%B8%D1%82%D1%8C"
-        "%20%D1%86%D1%8F%20%D0%BF%D0%B0%D1%80%D0%B0%3A%20"
-        "https%3A%2F%2Ft.me%2Fc%2F2394827824%2F1401"
+        "%20%D1%86%D1%8F%20%D0%BF%D0%B0%D1%80%D0%B0%3A%20" + post
     )
-    assert "viktoriaviktoriatg" in core.SIGNATURE  # одна константа на підпис і кнопку
 
 
-def test_ask_button_uses_public_username_and_asks_getchat_once(conn, bot, tg, upd, clock):
+def test_post_goes_with_chat_link_then_caption_gets_post_link(conn, bot, tg, upd, clock):
+    publish_one(bot, tg, upd, clock)
+
+    (sent,) = channel_sends(tg)
+    ask, site = sent["entities"]
+    assert ask["url"] == "https://t.me/viktoriaviktoriatg"  # номера поста ще немає
+    assert site["url"] == "https://viktoriashoes.com.ua"
+    (fix,) = edits(tg)
+    assert (fix["chat_id"], fix["message_id"]) == (CHANNEL, 1401)
+    assert fix["caption"] == sent["caption"]  # текст той самий, міняється лише посилання
+    ask, site = fix["entities"]
+    assert ask["url"] == ask_link("https%3A%2F%2Ft.me%2Fc%2F2394827824%2F1401")  # закритий канал
+    assert utf16(fix["caption"], ask["offset"], ask["length"]) == SIGN
+    assert utf16(fix["caption"], site["offset"], site["length"]) == SITE
+
+
+def test_no_buttons_under_the_post_and_no_reply_markup_calls_on_channel(conn, bot, tg, upd, clock):
+    publish_one(bot, tg, upd, clock)
+
+    (sent,) = channel_sends(tg)
+    assert sent["markup"] is None
+    assert not [
+        p
+        for m, p in tg.calls
+        if m in ("setButton", "editMessageReplyMarkup") and p.get("chat_id") == CHANNEL
+    ]
+    assert not hasattr(core, "ask_markup") and not hasattr(core, "PHOTO_SETTING")
+
+
+def test_album_comments_add_no_buttons_and_no_second_edit(conn, bot, tg, upd, clock):
+    publish_one(bot, tg, upd, clock)
+    bot.handle(upd(message=forwarded(77, 1401)))  # пересланий у групу пост → альбом
+    assert comments(conn) == "done"
+    assert len(edits(tg)) == 1  # «Коментарі» лишаються: кнопок не ставимо, підпис не чіпаємо
+    assert not [m for m, _ in tg.calls if m == "setButton"]
+
+
+def test_post_text_in_database_is_plain_without_markup(conn, bot, tg, upd, clock):
+    publish_one(bot, tg, upd, clock)
+
+    text = conn.execute("SELECT text FROM posts WHERE post_id = 1401").fetchone()[0]
+    assert text == edits(tg)[0]["caption"] == core.caption_of([TEXT], 3)
+    assert "<" not in text and "](" not in text  # без HTML і markdown
+    assert text.endswith(f"{TAIL_ALBUM}")
+
+
+def test_one_photo_post_has_site_line_but_no_comments_line(conn, bot, tg, upd, clock):
+    publish_one(bot, tg, upd, clock, files=1)
+
+    (sent,) = channel_sends(tg)
+    assert sent["caption"].endswith(TAIL) and MORE not in sent["caption"]
+    assert len(sent["entities"]) == 2
+
+
+def test_uses_public_username_and_asks_getchat_once(conn, bot, tg, upd, clock):
     tg.chat_info = {"username": "viktoriashoes"}
     publish_one(bot, tg, upd, clock)
     clock.pass_(minutes=5)
@@ -1508,16 +1644,14 @@ def test_ask_button_uses_public_username_and_asks_getchat_once(conn, bot, tg, up
     bot.tick()
     press(upd, bot, tg, draft_id=2)
 
-    first, second = buttons(tg)
-    assert unquote(first["markup"]["inline_keyboard"][0][0]["url"]).endswith(
-        "https://t.me/viktoriashoes/1401"
-    )
+    first, second = edits(tg)
+    assert unquote(first["entities"][0]["url"]).endswith("https://t.me/viktoriashoes/1401")
     assert second["message_id"] == 1402
     assert sum(1 for m, _ in tg.calls if m == "getChat") == 1
 
 
-def test_ask_button_error_never_breaks_publication_and_retries(conn, bot, tg, upd, clock):
-    tg.errors["setButton"] = TelegramError("мережа", uncertain=True)
+def test_caption_fix_error_never_breaks_publication_and_retries(conn, bot, tg, upd, clock):
+    tg.errors["editMessageCaption"] = TelegramError("мережа", uncertain=True)
     publish_one(bot, tg, upd, clock)
 
     assert state(conn) == "published"
@@ -1527,41 +1661,43 @@ def test_ask_button_error_never_breaks_publication_and_retries(conn, bot, tg, up
 
     tg.errors.clear()
     bot.tick()  # ще рано
-    assert len(buttons(tg)) == 1
+    assert len(edits(tg)) == 1
     clock.pass_(seconds=31)
     bot.tick()
-    assert len(buttons(tg)) == 2
+    assert len(edits(tg)) == 2
+    assert "t.me%2Fc%2F2394827824%2F1401" in edits(tg)[-1]["entities"][0]["url"]
     clock.pass_(hours=1)
     bot.tick()
-    assert len(buttons(tg)) == 2  # поставлено — більше не пробуємо
+    assert len(edits(tg)) == 2  # виправлено — більше не пробуємо
     assert len(tg.channel_posts) == 1  # пост удруге — ніколи
 
 
-def test_ask_button_429_waits_retry_after_then_gives_up_to_owner(conn, bot, tg, upd, clock):
-    tg.errors["setButton"] = TelegramError("забагато", code=429, retry_after=90)
+def test_caption_fix_429_waits_retry_after_then_gives_up_to_owner(conn, bot, tg, upd, clock):
+    tg.errors["editMessageCaption"] = TelegramError("забагато", code=429, retry_after=90)
     publish_one(bot, tg, upd, clock)
     clock.pass_(seconds=60)
     bot.tick()
-    assert len(buttons(tg)) == 1  # retry_after 90 с ще не минуло
+    assert len(edits(tg)) == 1  # retry_after 90 с ще не минуло
     for _ in range(5):
         clock.pass_(minutes=15)
         bot.tick()
-    assert len(buttons(tg)) == 4  # перша + 3 повтори, далі здаємось
-    assert any("кнопки" in t for t in tg.texts(OWNER))
-    assert len(tg.channel_posts) == 1
+    assert len(edits(tg)) == 4  # перша + 3 повтори, далі здаємось
+    assert any("Пишіть сюди" in t for t in tg.texts(OWNER))
+    assert state(conn) == "published" and len(tg.channel_posts) == 1
 
 
-def test_ask_button_not_modified_counts_as_done(conn, bot, tg, upd, clock):
-    tg.errors["setButton"] = TelegramError(
+def test_caption_fix_not_modified_counts_as_done(conn, bot, tg, upd, clock):
+    tg.errors["editMessageCaption"] = TelegramError(
         "400", code=400, description="Bad Request: message is not modified"
     )
     publish_one(bot, tg, upd, clock)
     clock.pass_(hours=1)
     bot.tick()
-    assert len(buttons(tg)) == 1
+    assert len(edits(tg)) == 1
+    assert not any("Пишіть сюди" in t for t in tg.texts(OWNER))
 
 
-def test_ask_button_redelivery_does_not_duplicate_post_or_button(conn, bot, tg, upd, clock):
+def test_redelivery_does_not_duplicate_post_or_caption_fix(conn, bot, tg, upd, clock):
     send_post(bot, tg, upd, clock)
     query = {
         "id": "cb", "from": {"id": SELLER}, "data": "pub:1",
@@ -1573,47 +1709,57 @@ def test_ask_button_redelivery_does_not_duplicate_post_or_button(conn, bot, tg, 
     bot.handle(upd(callback_query=query))
 
     assert len(tg.channel_posts) == 1
-    assert len(buttons(tg)) == 1
+    assert len(edits(tg)) == 1
 
 
-def test_ask_button_switched_off_no_button(conn, bot, tg, upd, clock, monkeypatch):
+def test_ask_switched_off_signature_stays_text_and_nothing_to_fix(
+    conn, bot, tg, upd, clock, monkeypatch
+):
+    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
+    publish_one(bot, tg, upd, clock)
+
+    (sent,) = channel_sends(tg)
+    assert SIGN in sent["caption"]
+    assert [e["url"] for e in sent["entities"]] == ["https://viktoriashoes.com.ua"]
+    assert edits(tg) == []  # посилання «Запитати» немає — виправляти нічого
+
+
+def test_site_switched_off_no_site_line_only_ask_link(conn, bot, tg, upd, clock, monkeypatch):
+    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
+    publish_one(bot, tg, upd, clock)
+
+    (sent,) = channel_sends(tg)
+    assert SITE not in sent["caption"] and SIGN in sent["caption"]
+    (ask,) = sent["entities"]
+    assert ask["url"] == "https://t.me/viktoriaviktoriatg"
+    (fix,) = edits(tg)
+    assert len(fix["entities"]) == 1 and "%3A%20" in fix["entities"][0]["url"]
+
+
+def test_both_off_plain_caption_without_entities(conn, bot, tg, upd, clock, monkeypatch):
     monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
     monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
     publish_one(bot, tg, upd, clock)
 
-    assert buttons(tg) == []
-    assert state(conn) == "published"
+    (sent,) = channel_sends(tg)
+    assert not sent["entities"] and SITE not in sent["caption"]
+    assert edits(tg) == [] and state(conn) == "published"
 
 
-def _rows(tg):
-    return [[b["text"] for r in c["markup"]["inline_keyboard"] for b in r] for c in buttons(tg)]
+def test_forwarded_ready_post_gets_links_once(conn, bot, tg, upd, clock):
+    ready = f"Кросівки Lowa 37 розміру. 1200грн\n#VS_37_розмір\n\n{SIGN}\n{SITE}\n\n{MORE}"
+    forwarded_post(upd, bot, tg, 10, "g", ready, files=2)
+    clock.pass_(seconds=4)
+    bot.tick()
+    press(upd, bot, tg)
+
+    (sent,) = channel_sends(tg)
+    assert sent["caption"].count(SITE) == 1 and sent["caption"].count(MORE) == 1
+    assert sent["caption"].count("Пишіть сюди") == 1 and len(sent["entities"]) == 2
 
 
-def test_site_button_off_leaves_only_ask(conn, bot, tg, upd, clock, monkeypatch):
-    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
-    publish_one(bot, tg, upd, clock)
-
-    assert _rows(tg) == [["💬 Запитати про цю пару"]]
-
-
-def test_ask_button_off_leaves_only_site(conn, bot, tg, upd, clock, monkeypatch):
-    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
-    publish_one(bot, tg, upd, clock)
-
-    assert _rows(tg) == [["🛍 Більше взуття на сайті"]]
-
-
-def test_both_buttons_off_no_keyboard(conn, bot, tg, upd, clock, monkeypatch):
-    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
-    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
-    publish_one(bot, tg, upd, clock)
-
-    assert buttons(tg) == []
-    assert state(conn) == "published"
-
-
-def test_edit_after_our_button_changes_nothing(conn, tg, upd, clock, root, site_on):
-    """Telegram присилає `edited_channel_post` і після нашого редагування кнопки: той самий текст —
+def test_edit_after_our_caption_fix_changes_nothing(conn, tg, upd, clock, root, site_on):
+    """Telegram присилає `edited_channel_post` і після нашого редагування підпису: той самий текст —
     без дії (оновлення не йде в чергу сайту, у журналі нічого)."""
     log = []
     settings = Settings(CHANNEL, SELLER, OWNER, root, GROUP)
@@ -1628,159 +1774,3 @@ def test_edit_after_our_button_changes_nothing(conn, tg, upd, clock, root, site_
 
     assert not any("змінено" in line for line in log)
     assert tuple(conn.execute("SELECT updated_at, text FROM site_jobs").fetchone()) == tuple(before)
-
-
-# --- Кнопка «📷 Більше фото тут» (BOT-005) ---
-
-PHOTO = "📷 Більше фото тут"
-
-
-def photo_rows(tg):
-    """Тексти й адреси кнопок кожного виклику `setButton`: [[(текст, url), …], …]."""
-    return [
-        [(b["text"], b["url"]) for r in c["markup"]["inline_keyboard"] for b in r]
-        for c in buttons(tg)
-    ]
-
-
-def first_album_id(tg):
-    return tg.album_first  # перше фото альбому в групі обговорення
-
-
-def test_photo_button_only_after_comments_done_and_goes_first(conn, bot, tg, upd, clock):
-    tg.chat_info = {"username": "viktoriashoes"}
-    published(bot, tg, upd, clock, files=3)
-    assert [[t for t, _ in row] for row in photo_rows(tg)] == [
-        ["💬 Запитати про цю пару", "🛍 Більше взуття на сайті"]  # альбому ще нема — дві кнопки
-    ]
-
-    bot.handle(upd(message=forwarded(77, 1401)))
-
-    first, second = photo_rows(tg)
-    assert [t for t, _ in second] == [PHOTO, "💬 Запитати про цю пару", "🛍 Більше взуття на сайті"]
-    assert second[0][1] == f"https://t.me/viktoriashoes/1401?comment={first_album_id(tg)}"
-    assert second[1:] == first  # решта кнопок — ті самі
-    assert [c["message_id"] for c in buttons(tg)] == [1401, 1401]
-
-
-def test_photo_button_url_private_channel_uses_c_link(conn, bot, tg, upd, clock):
-    published(bot, tg, upd, clock, files=2)
-    bot.handle(upd(message=forwarded(77, 1401)))
-
-    url = photo_rows(tg)[-1][0][1]
-    assert url == f"https://t.me/c/2394827824/1401?comment={first_album_id(tg)}"
-
-
-def test_photo_button_uses_first_of_album_not_last(conn, bot, tg, upd, clock):
-    published(bot, tg, upd, clock, files=3)
-    bot.handle(upd(message=forwarded(77, 1401)))
-
-    comment = photo_rows(tg)[-1][0][1].rsplit("=", 1)[1]
-    assert int(comment) == tg.album_first  # з трьох id альбому — найменший
-
-
-def test_one_photo_no_photo_button(conn, bot, tg, upd, clock):
-    published(bot, tg, upd, clock, files=1)
-    bot.handle(upd(message=forwarded(77, 1401)))
-
-    assert [[t for t, _ in row] for row in photo_rows(tg)] == [
-        ["💬 Запитати про цю пару", "🛍 Більше взуття на сайті"]
-    ]
-
-
-def test_album_failed_no_photo_button(conn, bot, tg, upd, clock):
-    published(bot, tg, upd, clock, files=3)
-    tg.errors["sendMediaGroup"] = TelegramError("ні", code=400)
-    bot.handle(upd(message=forwarded(77, 1401)))
-
-    assert comments(conn) == "failed"
-    assert len(buttons(tg)) == 1
-
-
-def test_photo_button_late_album_still_gets_button(conn, bot, tg, upd, clock):
-    published(bot, tg, upd, clock, files=3)
-    clock.pass_(minutes=3)
-    bot.tick()
-    assert comments(conn) == "late"
-    bot.handle(upd(message=forwarded(77, 1401)))
-
-    assert photo_rows(tg)[-1][0][0] == PHOTO
-
-
-def test_photo_button_retries_after_error_with_same_comment(conn, bot, tg, upd, clock):
-    published(bot, tg, upd, clock, files=3)
-    tg.errors["setButton"] = TelegramError("мережа", uncertain=True)
-    bot.handle(upd(message=forwarded(77, 1401)))
-    assert comments(conn) == "done"  # помилка кнопки альбом не ламає
-    n = len(buttons(tg))
-
-    tg.errors.clear()
-    clock.pass_(seconds=31)
-    bot.tick()
-
-    assert len(buttons(tg)) == n + 1
-    assert photo_rows(tg)[-1][0] == (
-        PHOTO,
-        f"https://t.me/c/2394827824/1401?comment={first_album_id(tg)}",
-    )
-    clock.pass_(hours=1)
-    bot.tick()
-    assert len(buttons(tg)) == n + 1  # поставлено — більше не пробуємо
-    assert len(tg.channel_posts) == 1 and len(tg.albums) == 1
-
-
-def test_photo_button_gives_up_to_owner(conn, bot, tg, upd, clock):
-    published(bot, tg, upd, clock, files=3)
-    tg.errors["setButton"] = TelegramError("забагато", code=429, retry_after=1)
-    bot.handle(upd(message=forwarded(77, 1401)))
-    for _ in range(5):
-        clock.pass_(minutes=15)
-        bot.tick()
-
-    assert sum("Більше фото" in t for t in tg.texts(OWNER)) == 1
-    assert comments(conn) == "done"
-
-
-def test_photo_button_not_modified_counts_as_done(conn, bot, tg, upd, clock):
-    published(bot, tg, upd, clock, files=3)
-    tg.errors["setButton"] = TelegramError(
-        "400", code=400, description="Bad Request: message is not modified"
-    )
-    bot.handle(upd(message=forwarded(77, 1401)))
-    n = len(buttons(tg))
-    clock.pass_(hours=1)
-    bot.tick()
-
-    assert len(buttons(tg)) == n
-
-
-def test_photo_button_pending_first_button_gets_all_three_at_once(conn, bot, tg, upd, clock):
-    """Перші кнопки ще чекають повтору, а альбом уже готовий — повтор ставить усі три."""
-    tg.errors["setButton"] = TelegramError("мережа", uncertain=True)
-    published(bot, tg, upd, clock, files=3)
-    tg.errors.clear()
-    bot.handle(upd(message=forwarded(77, 1401)))
-    clock.pass_(hours=1)
-    bot.tick()
-
-    assert photo_rows(tg)[-1][0][0] == PHOTO
-    assert len(buttons(tg)) == 2  # перша невдала + одна вдала з трьома
-
-
-def test_photo_button_switched_off_two_buttons_as_before(conn, bot, tg, upd, clock, monkeypatch):
-    monkeypatch.setenv("SHAFA_PHOTO_BUTTON", "ні")
-    published(bot, tg, upd, clock, files=3)
-    bot.handle(upd(message=forwarded(77, 1401)))
-
-    assert comments(conn) == "done"
-    assert len(buttons(tg)) == 1  # лише початкові «Запитати» і «Сайт»
-
-
-def test_photo_button_alone_when_others_off(conn, bot, tg, upd, clock, monkeypatch):
-    monkeypatch.setenv("SHAFA_ASK_BUTTON", "ні")
-    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
-    published(bot, tg, upd, clock, files=3)
-    assert buttons(tg) == []
-    bot.handle(upd(message=forwarded(77, 1401)))
-
-    assert [[t for t, _ in row] for row in photo_rows(tg)] == [[PHOTO]]
