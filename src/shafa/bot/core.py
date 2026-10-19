@@ -55,11 +55,10 @@ SITE_TEXT = "🛍 Більше взуття на сайті"
 SITE_SETTING = "SHAFA_SITE_BUTTON"  # друга кнопка; типово увімкнено, «ні» — вимкнути (BOT-003)
 ASK_SETTING = "SHAFA_ASK_BUTTON"  # кнопка під постом; типово увімкнено, «ні» — вимкнути (BOT-002)
 PHOTO_SETTING = "SHAFA_PHOTO_BUTTON"  # перша кнопка — коментарі з альбомом; типово так (BOT-005)
-PHOTO_TEXT = "📷 Більше фото"
+PHOTO_TEXT = "📷 Більше фото тут"
 ASK_TEXT = "💬 Запитати про цю пару"
 ASK_HELLO = "Вітаю! Цікавить ця пара: "
 ASK_RETRY = (timedelta(seconds=30), timedelta(minutes=2), timedelta(minutes=10))
-COMMENTS_LINE = "Більше фото в коментарях ⬇️"
 WINDOW = timedelta(minutes=2)  # D5
 ASK_WINDOW = timedelta(minutes=10)  # бот щось спитав — її відповідь чекаємо довше
 COMMENTS_WAIT = timedelta(minutes=2)  # пересланий у групу пост
@@ -183,8 +182,6 @@ def compose(texts: list[str], photos: int = 1) -> Composed:
         body = f"{body}\n{tag}"
     if not signed:
         body = f"{body}\n\n{SIGNATURE}"
-    if photos >= 2:
-        body = f"{body}\n\n{COMMENTS_LINE}"
     return Composed(body, note)
 
 
