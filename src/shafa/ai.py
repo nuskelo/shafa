@@ -365,9 +365,9 @@ def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, fl
         return Field("sizes", [], True, "немає у відповіді ШІ"), None
     allowed = catalog.sizes(path) if path else None
     if path and not allowed:
-        if sizes:
+        if sizes and catalog.section_kind(path) is not Kind.ACCESSORY:
             return Field("sizes", [], True, "у цього розділу розміру немає"), None
-        return Field("sizes", []), None
+        return Field("sizes", []), None  # CORE-011: в аксесуарів Шафа розміру не має — він в описі
     if not sizes:
         return Field("sizes", [], True, "немає розміру"), None
     if allowed and all(catalog.is_letter_size(p) for p in _letter_parts(sizes)):
@@ -603,14 +603,29 @@ def check_gender(value: Any, path: str | None, kind: Kind | None, text: str) -> 
 # CORE-005, `docs/rules.md` §9: матеріал верху — лише ці три і лише якщо названі в тексті.
 MATERIALS = ("Шкіра", "Замша", "Нубук")
 _FAKE_LEATHER = re.compile(r"штучн\w*\s+шкір|еко-?\s?шкір|шкірзам|кожзам|екокож", re.IGNORECASE)
+# CORE-011: рукавички, шарфи, шапки — «Матеріал» зі списку розділу, не лише шкіра; синоніми тексту.
+_MATERIAL_ALIASES = {"Вовна": ("Шерсть",)}
+
+
+def _material_in_text(choice: str, text: str) -> bool:
+    if any(in_text(alias, text) for alias in _MATERIAL_ALIASES.get(choice, ())):
+        return True
+    return all(in_text(word, text) for word in choice.split())
 
 
 def check_material(value: Any, path: str | None, post_text: str) -> Field:
-    """Будь-який інший матеріал (текстиль, сітка…) або не з тексту — поле порожнє, без жовтого."""
+    """Взуття та решта аксесуарів — лише Шкіра/Замша/Нубук; рукавички, шарфи, шапки — будь-який з
+    «Матеріал» розділу. Лише названі в тексті; інше — поле порожнє, без жовтого."""
     values = _as_list(value)
     if values is None:
         return Field("material_upper", [], True, "немає у відповіді ШІ")
-    kept = [m for v in values if (m := catalog.canonical(v, MATERIALS)) and in_text(m, post_text)]
+    spec = catalog.characteristic(path, "material_upper") if catalog.wide_material(path) else None
+    allowed = spec["choices"] if spec else MATERIALS
+    kept = [
+        m
+        for v in values
+        if (m := catalog.canonical(v, allowed)) and _material_in_text(m, post_text)
+    ]
     field = check_values("material_upper", list(dict.fromkeys(kept)), path)
     if "Шкіра" in field.value and _FAKE_LEATHER.search(post_text) and not field.yellow:
         return Field(field.name, field.value, True, "у тексті є штучна шкіра — перевір")
@@ -824,7 +839,7 @@ def check_answer(
 # 3 — CORE-009 (v1.7: 40, «можливо дитяча модель»), 4 — CORE-010 (v1.8: рукавички, шарфи, шапки).
 # Разом з нею піднімається `rules.RULES_VERSION` — тоді програма на старті перерахує Картки й
 # позначить, яким потрібне ШІ.
-PROMPT_VERSION = 4
+PROMPT_VERSION = 5
 
 # Слова назви лише з тексту (v1.6): (слово в назві, корінь у тексті) — «замшеві» є, коли в тексті «замша».
 _TITLE_WORDS = (
@@ -876,8 +891,23 @@ def _core010_changes(answer: dict[str, Any], text: str) -> bool:
     return group is not None and catalog.has_group(group) and not _text(answer.get("section"))
 
 
+def _core011_changes(answer: dict[str, Any], text: str) -> bool:
+    """v1.9: рукавички, шарфи, шапки — будь-який матеріал зі списку; стара відповідь знала лише шкіру."""
+    path = _text(answer.get("section"))
+    spec = catalog.characteristic(path, "material_upper") if catalog.wide_material(path) else None
+    if spec is None:
+        return False
+    given = {m.casefold() for m in _as_list(answer.get("material_upper")) or []}
+    return any(c.casefold() not in given and _material_in_text(c, text) for c in spec["choices"])
+
+
 # (версія, чи могла зміна інструкції цієї версії змінити відповідь)
-PROMPT_CHANGES = ((2, _qa001_changes), (3, _core009_changes), (4, _core010_changes))
+PROMPT_CHANGES = (
+    (2, _qa001_changes),
+    (3, _core009_changes),
+    (4, _core010_changes),
+    (5, _core011_changes),
+)
 
 
 def needs_ai(prompt_version: int, answer: dict[str, Any], post_text: str) -> bool:
