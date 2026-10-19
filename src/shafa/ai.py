@@ -358,6 +358,25 @@ def _check_letter_sizes(sizes: list[str], allowed: list[str]) -> Field:
     return Field("sizes", [by_upper[p] for p in shown])
 
 
+def accessory_sizes(text: str, new: bool, path: str) -> Field:
+    """Розмір аксесуара з окремим блоком «Виберіть размер» (CORE-012): літерний з тексту → кнопки.
+
+    Вживане — до двох («S/M» → S, M); нове — один (перший, жовте); понад два чи розмір поза
+    кнопками — не вгадуємо: порожньо (робот поставить «Інший»), жовте. Розміру в тексті немає —
+    порожньо без жовтого.
+    """
+    wanted = rules.letter_sizes(text)
+    by_upper = {c.upper(): c for c in catalog.size_block(path)["choices"]}
+    known = [by_upper[w] for w in wanted if w in by_upper]
+    if len(wanted) > 2:
+        return Field("sizes", [], True, "більше двох розмірів")
+    if wanted and len(known) < len(wanted):
+        return Field("sizes", known, True, "розміру немає серед кнопок Шафи для розділу")
+    if len(known) == 2 and new:
+        return Field("sizes", known[:1], True, NEW_ONE_SIZE)
+    return Field("sizes", known)
+
+
 def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, float | None]:
     """Розміри за списком Шафи для розділу (D6) і правилом ярлика (rules.md §7, D4)."""
     sizes = _strings(value)
@@ -365,6 +384,8 @@ def check_sizes(value: Any, path: str | None, post_text: str) -> tuple[Field, fl
         return Field("sizes", [], True, "немає у відповіді ШІ"), None
     allowed = catalog.sizes(path) if path else None
     if path and not allowed:
+        if catalog.size_block(path) and catalog.section_kind(path) is Kind.ACCESSORY:
+            return accessory_sizes(post_text, rules.condition(post_text) == rules.NEW, path), None
         if sizes and catalog.section_kind(path) is not Kind.ACCESSORY:
             return Field("sizes", [], True, "у цього розділу розміру немає"), None
         return Field("sizes", []), None  # CORE-011: в аксесуарів Шафа розміру не має — він в описі
