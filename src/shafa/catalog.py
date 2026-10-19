@@ -12,6 +12,8 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
+from shafa.robot import lang
+
 SNAPSHOT = Path(__file__).resolve().parent / "data" / "shafa-catalog.json"
 SEP = " / "
 
@@ -58,9 +60,23 @@ class Kind(StrEnum):
     ACCESSORY = "accessory"
 
 
+def _unify(data: dict[str, Any]) -> dict[str, Any]:
+    """Підписи й значення полів — українською, де таблиця знає пару (CORE-011).
+
+    Шафа віддає довідники мішаниною: у знімку 19.10 в ~100 полях «Материал», «Пол», «Полиэстер»
+    поруч з «Матеріал», «Стать». Без цього `characteristic()` не знаходить поле й робот мовчки
+    його не заповнює. Форма, яка російською, порівнюється через `robot.lang` (ROBOT-005).
+    """
+    for entry in data["sections"].values():
+        for item in entry["characteristics"]:
+            item["title"] = lang.ukrainian(item["title"])
+            item["choices"] = list(dict.fromkeys(lang.ukrainian(v) for v in item["choices"]))
+    return data
+
+
 @cache
 def snapshot() -> dict[str, Any]:
-    return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+    return _unify(json.loads(SNAPSHOT.read_text(encoding="utf-8")))
 
 
 def _key(value: str) -> str:
@@ -91,6 +107,21 @@ def has_group(group: str) -> bool:
     """У знімку є хоч один тип цієї групи («Аксесуари / Шарфи і хустки») — гілку вже збирали."""
     prefix = _key(normalize_section(group)) + " /"
     return any(_key(path).startswith(prefix) for path in sections())
+
+
+# CORE-010: рукавички, шарфи, шапки — свої групи розділів (дубль шукається лише в них, CORE-010).
+# CORE-011: у них «Матеріал» — широкий список, не лише шкіра (живий знімок 19.10).
+OWN_GROUPS = (
+    "Аксесуари / Рукавички та рукавиці",
+    "Аксесуари / Шарфи і хустки",
+    "Аксесуари / Головні убори",
+)
+
+
+def wide_material(path: str | None) -> bool:
+    """Розділ рукавичок, шарфів чи шапок — матеріал ставимо будь-який зі списку розділу."""
+    key = _key(normalize_section(path)) if path else ""
+    return any(key.startswith(_key(group) + " /") for group in OWN_GROUPS)
 
 
 def section(path: str | None) -> dict[str, Any] | None:

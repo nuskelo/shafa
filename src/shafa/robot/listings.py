@@ -214,11 +214,7 @@ def prices_close(ours: int | None, theirs: int | None) -> bool:
 
 # CORE-010: рукавички, шарфи й шапки шукають дубль лише між собою; решта аксесуарів (сумки,
 # гаманці, ремені) — разом, як раніше.
-OWN_GROUPS = (
-    "Аксесуари / Рукавички та рукавиці",
-    "Аксесуари / Шарфи і хустки",
-    "Аксесуари / Головні убори",
-)
+OWN_GROUPS = catalog.OWN_GROUPS
 
 
 def _bucket(name: str) -> str | None:

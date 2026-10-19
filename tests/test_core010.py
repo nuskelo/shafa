@@ -1,7 +1,8 @@
 """CORE-010: рукавички, шарфи, шапки — розділи «Аксесуари» (TD-033).
 
-Розділи в `fixtures/shafa-catalog.json` (7 останніх) зібрані вручну за назвами з Шафи, не з живого
-`--sync-catalog`: списки розмірів і варіантів — припущення, живий знімок їх уточнить.
+CORE-011: 7 розділів рукавичок, шарфів і шапок у `fixtures/shafa-catalog.json` тепер скопійовані з
+живого знімка 19.10 — розміру в них немає зовсім. Літерні розміри («S/M») лишились у коді на випадок,
+якщо Шафа їх колись додасть: ці тести підставляють такі розміри самі (`letter_sizes`).
 """
 
 import pytest
@@ -24,6 +25,14 @@ SCARVES = "Аксесуари / Шарфи і хустки / Шарфи"
 HATS = "Аксесуари / Головні убори / Шапки"
 
 GLOVES_TEXT = "Шкіряні рукавиці Tommy Hilfiger розмір M. В ідеальному стані. 900грн"
+
+
+@pytest.fixture
+def letter_sizes():
+    """Гіпотетичний знімок, де в рукавичок є літерні розміри (у живому 19.10 їх немає)."""
+    sizes = {"Міжнародний": ["XS", "S", "M", "L", "XL", "XXL"]}
+    for path in (GLOVES, MITTENS, GLOVES_NO_FINGERS):
+        catalog.snapshot()["sections"][path]["sizes"] = sizes
 
 
 def answer(text=GLOVES_TEXT, **changes):
@@ -95,10 +104,9 @@ def test_snapshot_has_new_sections():
     assert catalog.find_section(GLOVES.lower()) == GLOVES
 
 
-def test_letter_sizes_of_gloves_come_from_the_snapshot():
-    assert catalog.size_system(GLOVES) == "Міжнародний"
-    assert catalog.sizes(GLOVES) == ["XS", "S", "M", "L", "XL", "XXL"]
-    assert catalog.sizes(SCARVES) == []
+def test_accessories_have_no_sizes_in_the_snapshot():
+    for path in (GLOVES, MITTENS, GLOVES_NO_FINGERS, SCARVES, HATS):
+        assert catalog.size_system(path) is None and catalog.sizes(path) == []
     shoes = catalog.sizes("Жіночий одяг / Взуття / Кросівки")  # взуття не змінилось: лише числа
     assert shoes[0] == "34" and all(s[0].isdigit() for s in shoes)
 
@@ -114,7 +122,7 @@ def test_numeric_glove_sizes_work_like_shoe_sizes():
 def test_render_lists_new_sections_and_sizes_for_the_prompt():
     text = catalog.render()
     assert "Аксесуари / Рукавички та рукавиці / … : Рукавички, Рукавиці, Мітенки" in text
-    assert "Аксесуари / Рукавички та рукавиці: система «Міжнародний»: XS, S, M, L, XL, XXL" in text
+    assert "Аксесуари / Рукавички та рукавиці: розміру немає" in text
     assert "Аксесуари / Шарфи і хустки: розміру немає" in text
 
 
@@ -199,7 +207,7 @@ def test_ai_section_gloves_not_in_snapshot_is_yellow_not_silently_taken():
         ([], [], True),
     ],
 )
-def test_letter_sizes_checked_against_the_section_list(sizes, value, yellow):
+def test_letter_sizes_checked_against_the_section_list(letter_sizes, sizes, value, yellow):
     field = answer(sizes=sizes)["sizes"]
     assert (field.value, field.yellow) == (value, yellow)
 
@@ -209,9 +217,11 @@ def test_scarf_has_no_size_and_no_yellow_for_it():
     assert fields["sizes"].value == [] and not fields["sizes"].yellow
 
 
-def test_size_for_a_section_without_sizes_is_yellow():
-    fields = answer("Шарф Burberry. 900грн", section=SCARVES, sizes=["M"])
-    assert fields["sizes"].yellow
+def test_size_for_an_accessory_without_sizes_is_dropped_silently():
+    """CORE-011: «S/M» лишається в описі, поле порожнє й не жовте."""
+    for section, text in ((SCARVES, "Шарф Burberry M. 900грн"), (GLOVES, GLOVES_TEXT)):
+        field = answer(text, section=section, sizes=["S", "M"])["sizes"]
+        assert (field.value, field.yellow) == ([], False)
 
 
 @pytest.mark.parametrize(
@@ -223,7 +233,8 @@ def test_size_for_a_section_without_sizes_is_yellow():
         ("Жіночі рукавички M. 900грн", "Для чоловіків", "Для жінок", False),
         ("Рукавички шкіряні M. 900грн", "Для жінок", "Для жінок", False),
         ("Рукавички шкіряні M. 900грн", None, "Для жінок", False),
-        ("Рукавички шкіряні M. 900грн", "Унісекс", "Унісекс", False),
+        # у живому списку «Стать» «Унісекс» немає — вирішує людина (до 3 значень на Шафі)
+        ("Рукавички шкіряні M. 900грн", "Унісекс", "Унісекс", True),
         ("Рукавички шкіряні M. 900грн", "Для чоловіків", "Для чоловіків", True),
     ],
 )
@@ -343,15 +354,14 @@ def approved_gloves(conn, root, text=GLOVES_TEXT, **fields):
     return review.load_card(conn, item_id)
 
 
-def test_plan_for_gloves_has_section_letter_sizes_and_gender(conn, root):
-    steps, notes = plan(approved_gloves(conn, root), root)
+def test_plan_for_gloves_has_section_gender_and_no_size(conn, root):
+    steps, notes = plan(approved_gloves(conn, root, sizes=[]), root)
     got = {(s.kind, s.label): s.value for s in steps}
 
     assert got[("category", "Розділ")] == ["Аксесуари", "Рукавички та рукавиці", "Рукавички"]
     category = next(s for s in steps if s.kind == "category")
-    assert category.target == "aksesuary/rukavychky-rukavytsi/rukavychky"
-    assert got[("size_system", "Розмір")] == "Міжнародний"
-    assert got[("sizes", "Розмір")] == ["M"]
+    assert category.target == "rukavychky-rukavytsi/rukavychky"
+    assert not {k for k, _ in got} & {"size_system", "sizes"}
     assert got[("choice", "Стать")] == ["Для чоловіків"]
     assert got[("choice", "Матеріал")] == ["Шкіра"]
     assert got[("choice", "Сезон")] == ["Демісезон"]
@@ -365,12 +375,20 @@ def test_plan_for_scarf_has_no_size_steps(conn, root):
     steps, _ = plan(card, root)
     kinds = {s.kind for s in steps}
     assert "size_system" not in kinds and "sizes" not in kinds
-    assert (
-        next(s for s in steps if s.kind == "category").target == "aksesuary/sharfy-khustky/sharfy"
+    assert next(s for s in steps if s.kind == "category").target == "sharfy-khustky/sharfy"
+
+
+def test_gloves_card_without_size_is_not_blocked_for_size(conn, root):
+    item_id = add_card(
+        conn,
+        root,
+        blank=[ai.Field("section", GLOVES), ai.Field("sizes", [])],
+        text=GLOVES_TEXT,
     )
+    assert review.load_card(conn, item_id).approve_block() != "no_sizes"
 
 
-def test_gloves_card_without_size_cannot_be_approved(conn, root):
+def test_letter_sizes_of_gloves_still_block_approval_when_the_list_exists(conn, root, letter_sizes):
     item_id = add_card(
         conn,
         root,
@@ -381,19 +399,6 @@ def test_gloves_card_without_size_cannot_be_approved(conn, root):
 
 
 # --- Охоронець ROBOT-007: нові значення знімка відомі таблиці ---
-
-
-def test_letter_sizes_and_system_names_of_accessories_are_known_to_the_table():
-    unknown = []
-    for path, entry in catalog.snapshot()["sections"].items():
-        if catalog.section_kind(path) is not catalog.Kind.ACCESSORY:
-            continue
-        for system, names in entry["sizes"].items():
-            unknown += [f"{path}: група {system}"] * (not lang.covered(system))
-            unknown += [
-                f"{path}: {n}" for n in names if catalog.is_letter_size(n) and not lang.covered(n)
-            ]
-    assert unknown == []
 
 
 def test_guard_covers_gender_values_of_new_sections():
@@ -416,23 +421,34 @@ def test_gloves_steps_run_on_the_form_without_special_cases(conn, root):
     from shafa.robot.form import execute
     from test_robot_form import FakeDriver
 
+    steps, _ = plan(approved_gloves(conn, root, sizes=[]), root)
+    driver = FakeDriver(None)
+
+    execute(steps, driver)
+
+    assert ("category", "rukavychky-rukavytsi/rukavychky", "Аксесуари",
+            "Рукавички та рукавиці", "Рукавички") in driver.calls  # fmt: skip
+    assert not [c for c in driver.calls if "Розмір" in c]
+    assert ("pick", "Стать", "Для чоловіків") in driver.calls
+
+
+def test_letter_sizes_are_picked_on_the_form_when_the_list_exists(conn, root, letter_sizes):
+    from shafa.robot.form import execute
+    from test_robot_form import FakeDriver
+
     steps, _ = plan(approved_gloves(conn, root), root)
     driver = FakeDriver(None)
 
     execute(steps, driver)
 
-    assert ("category", "aksesuary/rukavychky-rukavytsi/rukavychky", "Аксесуари",
-            "Рукавички та рукавиці", "Рукавички") in driver.calls  # fmt: skip
     assert ("pick", "Розмір", "Міжнародний") in driver.calls
     assert ("pick", "Розмір", "M") in driver.calls
-    assert ("pick", "Стать", "Для чоловіків") in driver.calls
 
 
 def test_letter_sizes_match_on_the_form_regardless_of_case():
     from shafa.robot.form import among
 
     assert among("xl", ["S", "M", "XL"]) and not among("XXL", ["S", "M", "XL"])
-    assert among("Международный", ["Міжнародний"])
 
 
 def test_duplicates_of_gloves_are_searched_among_gloves_only():
@@ -443,14 +459,12 @@ def test_duplicates_of_gloves_are_searched_among_gloves_only():
         gloves
         == group_slugs(MITTENS)
         == {
-            "aksesuary/rukavychky-rukavytsi/rukavychky",
-            "aksesuary/rukavychky-rukavytsi/rukavytsi",
-            "aksesuary/rukavychky-rukavytsi/mitenky",
+            "rukavychky-rukavytsi/rukavychky",
+            "rukavychky-rukavytsi/rukavytsi",
+            "rukavychky-rukavytsi/mitenky",
         }
     )
-    assert group_slugs(SCARVES) == {
-        "aksesuary/sharfy-khustky/sharfy",
-        "aksesuary/sharfy-khustky/khustky",
-    }
+    assert {"sharfy-khustky/sharfy", "sharfy-khustky/khustky"} <= group_slugs(SCARVES)
+    assert not group_slugs(SCARVES) & gloves
     bags = group_slugs("Аксесуари / Сумки та рюкзаки / Сумки")
     assert "vsi-sumky/sumky" in bags and not bags & gloves

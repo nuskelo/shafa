@@ -361,7 +361,8 @@ def test_accessory_fields():
         material_upper=["Шкіра", "Замша"],
     )
     assert not fields["section"].yellow
-    assert (fields["sizes"].value, fields["sizes"].reason) == ([], "у цього розділу розміру немає")
+    # CORE-011: в аксесуарів розміру на Шафі немає — зайвий прибрано без жовтого
+    assert (fields["sizes"].value, fields["sizes"].yellow) == ([], False)
     assert fields["gender"].value == "Для жінок"
     # CORE-005: «Замша» не названа в тексті — відкинуто, без жовтого
     assert (fields["material_upper"].value, fields["material_upper"].yellow) == (["Шкіра"], False)
