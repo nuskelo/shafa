@@ -61,13 +61,16 @@ class Kind(StrEnum):
 
 
 def _unify(data: dict[str, Any]) -> dict[str, Any]:
-    """Підписи й значення полів — українською, де таблиця знає пару (CORE-011).
+    """Підписи й значення полів і назви систем розмірів — українською, де таблиця знає пару (CORE-011).
 
     Шафа віддає довідники мішаниною: у знімку 19.10 в ~100 полях «Материал», «Пол», «Полиэстер»
     поруч з «Матеріал», «Стать». Без цього `characteristic()` не знаходить поле й робот мовчки
     його не заповнює. Форма, яка російською, порівнюється через `robot.lang` (ROBOT-005).
     """
     for entry in data["sections"].values():
+        entry["sizes"] = lang.size_groups(
+            entry["sizes"]
+        )  # CORE-013: «Европейский» → «Європейський»
         for item in entry["characteristics"]:
             item["title"] = lang.ukrainian(item["title"])
             item["choices"] = list(dict.fromkeys(lang.ukrainian(v) for v in item["choices"]))
