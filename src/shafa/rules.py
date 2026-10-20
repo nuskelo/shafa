@@ -58,6 +58,7 @@ SIGNATURE = re.compile(r"Пишіть сюди\s*👉?\s*@\w+", re.IGNORECASE)
 # в коментарях» — не частина опису товару.
 COMMENTS = re.compile(r"^\s*(всі|більше|додаткові)\s+фото\s+в\s+коментар\w*\W*$", re.IGNORECASE)
 SITE_LINE = re.compile(r"^\s*🛍\s*більше\s+взуття\s+на\s+сайті\s*(?:👈\s*)?\W*$", re.IGNORECASE)
+SHOP_LINE = re.compile(r"^\s*viktoria\s+shoes\s*(?:👈\s*)?\W*$", re.IGNORECASE)  # BOT-008
 MENTION = re.compile(r"(?<!\w)@\w+")
 LINK = re.compile(r"(?:https?://|www\.|t\.me/)\S+", re.IGNORECASE)
 PHONE = re.compile(r"(?<![\d+])(?:\+?38[\s-]?)?\(?0\d{2}\)?[\s-]?\d{3}[\s-]?\d{2}[\s-]?\d{2}(?!\d)")
@@ -84,7 +85,12 @@ def without_service_lines(text: str) -> str:
     lines = [
         line
         for line in text.split("\n")
-        if not (COMMENTS.match(line) or SITE_LINE.match(line) or SIGNATURE.search(line))
+        if not (
+            COMMENTS.match(line)
+            or SITE_LINE.match(line)
+            or SHOP_LINE.match(line)
+            or SIGNATURE.search(line)
+        )
     ]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
