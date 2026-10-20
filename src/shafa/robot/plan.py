@@ -90,18 +90,44 @@ def required_gaps(path: str, steps: list[Step]) -> list[str]:
     return gaps
 
 
+@dataclass(frozen=True)
+class Precheck:
+    """Що скаже робот про Картку ще до схвалення (QA-002): `error` — не опублікує, `notes` — пропустить."""
+
+    error: str | None
+    notes: list[str]
+
+
+def precheck(card: Card, root: Path | None) -> Precheck:
+    """Та сама перевірка, що в `plan()`, але без вимоги «Схвалено» й без `approve_block`.
+
+    Лише знімок і Картка — без мережі й ШІ. Картка без розділу у знімку — не тут: це
+    `approve_block`. `root=None` — наявність файлів фото не перевіряється."""
+    if card.path is None:
+        return Precheck(None, [])
+    try:
+        return Precheck(None, _build(card, root)[1])
+    except PlanError as error:
+        return Precheck(str(error), [])
+
+
 def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
     """Кроки для форми і нотатки (що не заповнено й чому)."""
     if card.status != Status.APPROVED:
         raise PlanError("Картка не схвалена")
     if block := card.approve_block():
         raise PlanError(f"Картка не готова: {block}")
+    return _build(card, root)
+
+
+def _build(card: Card, root: Path | None) -> tuple[list[Step], list[str]]:
     path = card.path
     f = {name: view.value for name, view in card.fields.items()}
     notes: list[str] = []
 
-    photos = [item_folder(root, card.folder_name) / p.file_name for p in card.photos]
-    missing = [p.name for p in photos if not p.is_file()]
+    folder = item_folder(root, card.folder_name) if root is not None else Path()
+    photos = [folder / p.file_name for p in card.photos]
+    missing = [p.name for p in photos if root is not None and not p.is_file()]
     if not photos or missing:
         raise PlanError("Немає фото: " + (", ".join(missing) or "папка порожня"))
     if not f["title"]:
