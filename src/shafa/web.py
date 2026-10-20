@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import jinja2
 from PIL import UnidentifiedImageError
 
-from shafa import ai, batch, catalog, config, db, dup, fill, options, photos, review, site
+from shafa import ai, batch, catalog, config, db, dup, fill, health, options, photos, review, site
 from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
@@ -37,6 +37,7 @@ from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
 from shafa.scan import STICKY, rescan_folder, scan
 
+HEALTH_EVERY = 30  # секунд: «Перевірити ще раз» не частіше
 COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
 
 HOST = "127.0.0.1"
@@ -111,6 +112,9 @@ MESSAGES = {
     "rehearse_cannot": "Пробний прогін зараз не запустити: немає Схвалених або робот ще запускається",
     "rehearse_fake": "У підставному режимі пробного прогону немає",
     "rehearse_setup": "Пробний прогін не запущено: неправильне налаштування кількості Карток",
+    "health_started": "Перевіряю — результат з'явиться на панелі за кілька секунд",
+    "health_running": "Перевірка вже йде",
+    "health_wait": "Щойно перевіряли — зачекайте пів хвилини",
     "ai_started": "Оновлюю: шукаю нові папки й відправляю на ШІ — результат з'явиться на панелі",
     "ai_busy": "ШІ вже працює — зачекайте хвилину",
     "refill_started": "Перезаповнюю: картки пішли на ШІ пакетом — результати зазвичай до години, "
@@ -214,6 +218,16 @@ class AiState:
 
 
 @dataclass
+class HealthView:
+    """Блок самоперевірки на панелі: `code` — running / none / ok / problems."""
+
+    code: str
+    at: str = ""
+    rows: list[health.Check] = field(default_factory=list)  # червоні, потім жовті
+    ok: int = 0
+
+
+@dataclass
 class BotState:
     """Панель: стан процесу бота."""
 
@@ -253,6 +267,7 @@ class App:
         bot_spawner: Callable[[list[str]], object] = _spawn_bot,
         bot_lock: Path | None = None,
         on_quit: Callable[[], list[str]] | None = None,
+        health_check: Callable[[], list[health.Check]] | None = None,
     ) -> None:
         self.db_path = db_path
         self.root = root
@@ -274,6 +289,11 @@ class App:
         self.bot_spawner = bot_spawner
         self.bot_lock = bot_lock
         self.on_quit = on_quit  # «Вийти» — лише коли програму запущено з ярлика
+        self.health_check = health_check or self._real_health
+        self.health_lock = threading.Lock()
+        self.health_running = False
+        self.health_started: float | None = None
+        self.health_result: tuple[str, list[health.Check]] | None = None
         self.env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(PACKAGE / "templates"),
             autoescape=True,
@@ -338,6 +358,8 @@ class App:
             return self.refill_page(request)
         if path == "/refill" and request.method == "POST":
             return self.refill_post(request)
+        if path == "/health" and request.method == "POST":
+            return self.health_post(request)
         if path == "/bot" and request.method == "POST":
             return self.bot_post(request)
         if path == "/settings" and get:
@@ -388,6 +410,7 @@ class App:
             "ai": self.ai_state(conn),
             "bot": self.bot_state(conn),
             "site": self.site_state(conn),
+            "health": self.health_view(),
             "can_quit": self.on_quit is not None,
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
@@ -487,6 +510,54 @@ class App:
             f"Папок {result.folders}, у «Проблемах» {len(result.problems)}."
         )
         return self.settings_page(request, message=message)
+
+    # --- Самоперевірка (UI-003) ---
+
+    def _real_health(self) -> list[health.Check]:
+        return health.run_all(config.data_dir(), self.root, deps=health.real_deps())
+
+    def start_health(self, throttle: bool = True, delay: float = 0.0) -> str:
+        """Запустити перевірку у фоні. Повертає код повідомлення: `health_started`,
+        `health_running` (вже йде) або `health_wait` (кнопку — не частіше ніж раз на 30 с).
+        `delay` — почекати перед перевіркою (на старті бот ще підіймається)."""
+        with self.health_lock:
+            if self.health_running:
+                return "health_running"
+            started = self.health_started
+            if throttle and started is not None and self.clock() - started < HEALTH_EVERY:
+                return "health_wait"
+            self.health_running = True
+            self.health_started = self.clock()
+
+        def job() -> None:
+            try:
+                if delay:
+                    time.sleep(delay)
+                checks = self.health_check()
+                self.health_result = (datetime.now().astimezone().isoformat(), checks)
+            except Exception:  # noqa: BLE001 — перевірка не повинна валити програму
+                traceback.print_exc()
+            finally:
+                self.health_running = False
+
+        self.run(job)
+        return "health_started"
+
+    def health_view(self) -> HealthView:
+        if self.health_running:
+            return HealthView("running")
+        if self.health_result is None:
+            return HealthView("none")
+        at, checks = self.health_result
+        rows = [c for c in checks if c.status == health.FAIL]
+        rows += [c for c in checks if c.status == health.WARN]
+        ok = sum(1 for c in checks if c.status == health.OK)
+        return HealthView("problems" if rows else "ok", at, rows, ok)
+
+    def health_post(self, request: Request) -> Response:
+        back = safe_back((request.form.get("back") or [""])[0])
+        sep = "&" if "?" in back else "?"
+        return redirect(f"{back}{sep}msg={self.start_health()}")
 
     # --- Бот ---
 
@@ -720,8 +791,8 @@ class App:
         conn = self.connect()
         try:
             html = self.env.get_template("panel.html").render(
-                token=self.token, robot=self.robot_state(conn), ai=self.ai_state(conn),
-                bot=self.bot_state(conn), site=self.site_state(conn),
+                token=self.token, local=local_time, robot=self.robot_state(conn),
+                ai=self.ai_state(conn), bot=self.bot_state(conn), site=self.site_state(conn), health=self.health_view(),
                 back=safe_back(request.arg("back")), fake=self.fake_shafa,
             )  # fmt: skip
         finally:
