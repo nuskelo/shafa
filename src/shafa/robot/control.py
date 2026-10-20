@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from shafa import config
-from shafa.robot import lock, publish
+from shafa.robot import lock, publish, rehearse
 
 ITEM_MINUTES = 4  # орієнтовно: стільки триває один товар (форма + фото + клік)
 LOG_NAME = "robot-run.log"
@@ -30,6 +30,7 @@ TEXTS = {
     "stopping": "Стоп: чекаю, поки допишеться поточний товар",
     "login_needed": "Робот не увійшов на Шафу — потрібно увійти",
     "login_open": "Відкрито вікно входу на Шафу — увійдіть і закрийте вікно (або кнопка нижче)",
+    "rehearsing": "Йде пробний прогін: форма заповнюється, але нічого не публікується",
     "busy": "Робот зайнятий іншою справою (Власник щось перевіряє)",
     "crashed": "Робот зупинився несподівано — натисніть «Старт», щоб продовжити",
     "failed": "Робот не запустився",
@@ -69,6 +70,8 @@ class State:
     # CORE-005: почато сьогодні (старих, нових) і межі на день
     started: publish.Groups = field(default_factory=lambda: publish.Groups(0, 0))
     limits: publish.Groups = field(default_factory=lambda: publish.Groups(0, 0))
+    rehearsal: str = ""  # QA-003: підсумок останнього пробного прогону
+    rehearsal_problems: int = 0
 
     @property
     def groups_text(self) -> str:
@@ -127,6 +130,8 @@ def state(
             wait = _minutes_left(in_work, now)
     elif busy and busy.get("mode") == "login":
         code = "login_open"
+    elif busy and busy.get("mode") == "rehearse":
+        code = "rehearsing"
     elif busy:
         code = "busy"
     elif starting:
@@ -155,6 +160,8 @@ def state(
     buttons = []
     if idle:
         buttons.append("start")
+        if approved:
+            buttons.append("rehearse")
     if code == "running":
         buttons += ["pause", "stop"]
     if code in ("pausing", "paused"):
@@ -172,8 +179,19 @@ def state(
         last_text = LAST.get(last["stop_code"] or "", "") or (last["stop_reason"] or "")
         if last["stop_code"] == "done" and last["problems"]:  # не всі Схвалені опубліковано
             last_text = f"Опубліковано {last['published']}, у Проблемах {last['problems']}"
+    summary = rehearse.last_summary()
     return State(code, text, today, day_limit, approved, can_start, why_not, wait, last_text,
-                 buttons, started, limits or publish.Groups(0, 0))  # fmt: skip
+                 buttons, started, limits or publish.Groups(0, 0),
+                 summary["summary"] if summary else "",
+                 int(summary.get("problems") or 0) if summary else 0)  # fmt: skip
+
+
+def log_line(text: str, log: Path | None = None) -> None:
+    """Рядок із часом у журнал робота (нічний пробний прогін: запущено / пропущено)."""
+    log = log or log_path()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with open(log, "a", encoding="utf-8") as out:
+        out.write(f"{datetime.now().astimezone():%Y-%m-%d %H:%M:%S} {text}\n")
 
 
 def command(args: list[str], program: str = "robot") -> list[str]:

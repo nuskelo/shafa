@@ -32,7 +32,7 @@ from shafa import ai, batch, catalog, config, db, dup, fill, options, photos, re
 from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
-from shafa.robot import browser, control, lock, publish
+from shafa.robot import browser, control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
 from shafa.scan import STICKY, rescan_folder, scan
@@ -106,6 +106,11 @@ MESSAGES = {
     "robot_login_done": "Закриваю вікно входу — за кілька секунд можна натискати «Старт»",
     "robot_no_login_window": "Вікно входу вже закрито",
     "robot_fake_login": "У підставному режимі вхід на Шафу не потрібен",
+    "rehearse_started": "Пробний прогін запускається — за хвилину з'явиться вікно Chrome",
+    "rehearse_busy": "Робот зайнятий (йде публікація чи інша справа) — пробний прогін після неї",
+    "rehearse_cannot": "Пробний прогін зараз не запустити: немає Схвалених або робот ще запускається",
+    "rehearse_fake": "У підставному режимі пробного прогону немає",
+    "rehearse_setup": "Пробний прогін не запущено: неправильне налаштування кількості Карток",
     "ai_started": "Оновлюю: шукаю нові папки й відправляю на ШІ — результат з'явиться на панелі",
     "ai_busy": "ШІ вже працює — зачекайте хвилину",
     "refill_started": "Перезаповнюю: картки пішли на ШІ пакетом — результати зазвичай до години, "
@@ -736,6 +741,8 @@ class App:
                 args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
                 self._spawn(args + (["--fake-shafa"] if self.fake_shafa else []))
                 return redirect(f"{back}{sep}msg=robot_started")
+            if action == "rehearse":
+                return self._rehearse(conn, back, sep)
             if action == "login":
                 if self.fake_shafa:
                     return redirect(f"{back}{sep}msg=robot_fake_login")
@@ -758,6 +765,22 @@ class App:
             return text(400, "Невідома дія")
         finally:
             conn.close()
+
+    def _rehearse(self, conn, back: str, sep: str) -> Response:
+        """«Перевірити завтрашні» (QA-003): той самий замок, що й публікація — разом ніколи."""
+        if self.fake_shafa:
+            return redirect(f"{back}{sep}msg=rehearse_fake")
+        if lock.busy(self.lock_file):
+            return redirect(f"{back}{sep}msg=rehearse_busy")
+        if "rehearse" not in self.robot_state(conn).buttons:
+            return redirect(f"{back}{sep}msg=rehearse_cannot")
+        try:
+            count = rehearse.count_setting()
+        except rehearse.SetupError:
+            return redirect(f"{back}{sep}msg=rehearse_setup")
+        args = ["--rehearse", "--db", str(self.db_path), "--root", str(self.root)]
+        self._spawn([*args, "--count", str(count)])
+        return redirect(f"{back}{sep}msg=rehearse_started")
 
     def _spawn(self, args: list[str]) -> None:
         self.process = self.spawner(args)

@@ -4,6 +4,7 @@
     <strong>{{ robot.text }}</strong>
     <span class="robot-counts">{{ robot.groups_text }} · Схвалених {{ robot.approved }}</span>
     {% if robot.last and "start" in robot.buttons %}<span class="robot-last">Останній запуск: {{ robot.last }}</span>{% endif %}
+    {% if robot.rehearsal and "start" in robot.buttons %}<span class="robot-last">{{ robot.rehearsal }}{% if robot.rehearsal_problems %} · <a href="/problem">Проблеми</a>{% endif %}</span>{% endif %}
   </div>
   <form method="post" action="/robot" class="robot-buttons">
     <input type="hidden" name="token" value="{{ token }}">
@@ -11,6 +12,9 @@
     {% if "start" in robot.buttons %}
     <button name="action" value="start" class="approve"{% if not robot.can_start %} disabled{% endif %}>Старт</button>
     {% if robot.why_not %}<span class="why">{{ robot.why_not }}</span>{% endif %}
+    {% endif %}
+    {% if "rehearse" in robot.buttons %}
+    <button name="action" value="rehearse">Перевірити завтрашні</button>
     {% endif %}
     {% if "pause" in robot.buttons %}<button name="action" value="pause">Пауза</button>{% endif %}
     {% if "resume" in robot.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
