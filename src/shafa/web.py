@@ -68,6 +68,7 @@ STICKY_TITLES = {  # проблеми публікації — простими 
     "publish_error": "Шафа не прийняла товар",
     "possible_duplicate": "Схожий товар уже є на Шафі",
     "already_published": "Цей пост уже опубліковано з іншої папки",
+    "shafa_declined": "Шафа відхилила оголошення після публікації",
 }
 MESSAGES = {
     "saved": "Збережено",
@@ -88,6 +89,7 @@ MESSAGES = {
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
     "recheck_new": "Папку перевірено: усе добре, Картка чекає на ШІ",
     "recheck_problem": "Папку перевірено: проблема лишилась",
+    "on_shafa_block": "Цей товар уже є на Шафі — повертати його на перевірку й публікувати вдруге не можна",
     "sticky": "Спершу перевірте Шафу і скористайтеся кнопками нижче",
     "on_shafa": "Картку перенесено в Опубліковані",
     "bad_link": "Це не посилання на Шафу. Вставте посилання на товар з shafa.ua або його номер",
@@ -144,6 +146,7 @@ PROBLEM_HINTS = {
     "ai_error": "ШІ не заповнило бланк. «Перевірити ще раз» поверне Картку в чергу на ШІ.",
     "publish_uncertain": "Робот натиснув «Додати річ», але не дочекався відповіді. Перевірте на Шафі, чи товар з'явився. Робот сам не повторює.",
     "possible_duplicate": "Схожий товар уже є на Шафі або цей пост уже опубліковано. Повторне оголошення заборонене правилами Шафи.",
+    "shafa_declined": "Шафа перевірила оголошення вже після публікації й відхилила його. Відкрийте його на Шафі й виправте вручну або приберіть Картку в Архів. Робот цей товар вдруге не публікує.",
     "publish_error": "Шафа не прийняла товар (текст помилки вище). Перевірте Шафу й скажіть Власнику.",
     "robot_logged_out": "Робот не увійшов на Шафу. Власник: python -m shafa robot --login. «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_brand_missing": "Бренд є у довіднику Шафи, але робот його не знайшов. Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
@@ -893,7 +896,7 @@ class App:
                 return text(404, "Картку не знайдено")
             bad = {name for name in request.query.get("bad", []) if name in review.SPEC}
             row = conn.execute(
-                "SELECT duplicate_url, duplicate_name, shafa_url FROM items WHERE id = ?",
+                "SELECT duplicate_url, duplicate_name, shafa_url, shafa_id FROM items WHERE id = ?",
                 (item_id,),
             ).fetchone()
             check = self._precheck(card)
@@ -907,6 +910,7 @@ class App:
                 ai_verdict=dup.verdict_text(card.problem_text),
                 duplicate_photo=self._duplicate_file(item_id).is_file(),
                 shafa_url=shafa_link(row["shafa_url"]),
+                has_shafa_id=row["shafa_id"] is not None,
                 my_items=MY_ITEMS,
                 sticky=STICKY,
                 sticky_titles=STICKY_TITLES,
@@ -945,7 +949,7 @@ class App:
                     return redirect(back + "?msg=saved")
             if action in review.ACTIONS:
                 message = review.act(conn, item_id, action, self.root)
-                if message in review.APPROVE_BLOCKS or message == "stale":
+                if message in review.APPROVE_BLOCKS or message in ("stale", review.ON_SHAFA):
                     return redirect(f"{back}?msg={message}")
                 return redirect(f"/{card.status}?msg={message}")
             decisions = {

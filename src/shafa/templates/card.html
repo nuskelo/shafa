@@ -94,6 +94,13 @@
         <input type="hidden" name="token" value="{{ token }}">
         <button name="action" value="not_on_shafa">На Шафі немає → у Схвалені</button>
       </form>
+      {% elif card.problem_code == "shafa_declined" %}
+      <p>{{ card.problem_text }}</p>
+      <form method="post" action="/item/{{ card.id }}" class="decide">
+        <input type="hidden" name="token" value="{{ token }}">
+        {% if shafa_url %}<a href="{{ shafa_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a>{% endif %}
+        <button name="action" value="to_archive" class="reject">В архів</button>
+      </form>
       {% elif card.problem_code == "possible_duplicate" %}
       <div class="duplicate">
         {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
@@ -191,7 +198,7 @@
         {% if robot_error %}<p class="block">Схвалити не можна: робот не зможе опублікувати.</p>{% endif %}
         {% elif card.status == "approved" %}
         <button name="action" value="unapprove">Скасувати схвалення</button>
-        {% elif card.status == "archived" %}
+        {% elif card.status == "archived" and not has_shafa_id %}
         <button name="action" value="restore">Повернути</button>
         {% endif %}
       </div>
