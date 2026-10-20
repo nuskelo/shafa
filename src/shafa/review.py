@@ -492,11 +492,21 @@ ACTIONS = {
 }
 
 
+ON_SHAFA = "on_shafa_block"  # ROBOT-011: у Картки є `shafa_id` — товар уже на Шафі
+
+
+def _on_shafa(conn: sqlite3.Connection, item_id: int) -> bool:
+    row = conn.execute("SELECT shafa_id FROM items WHERE id = ?", (item_id,)).fetchone()
+    return row is not None and row[0] is not None
+
+
 def act(conn: sqlite3.Connection, item_id: int, action: str, root: Path | None = None) -> str:
     """Змінити статус Картки. Повертає код повідомлення (див. `web.MESSAGES`).
 
     `root` — Головна папка: з нею «Схвалити» ще й перевіряє, що робот Картку опублікує (QA-002)."""
     source, target, done = ACTIONS[action]
+    if action in ("approve", "restore") and _on_shafa(conn, item_id):
+        return ON_SHAFA  # ROBOT-011: що вже опубліковано, у чергу публікації не повертається
     if action == "approve":
         card = load_card(conn, item_id)
         block = card.approve_block() if card and card.status == source else None

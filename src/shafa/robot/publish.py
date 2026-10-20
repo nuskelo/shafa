@@ -217,6 +217,7 @@ def queue_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         """
         SELECT items.id, items.folder_name FROM items LEFT JOIN posts USING (post_id)
         WHERE items.status = ? AND items.purged_at IS NULL
+          AND items.shafa_id IS NULL  -- ROBOT-011: що вже є на Шафі, вдруге не публікуємо ніколи
         ORDER BY items.folder_name LIKE 'borh-%', items.queue_pos IS NULL, items.queue_pos,
                  posts.date IS NULL, posts.date, items.id
         """,
@@ -276,11 +277,13 @@ def from_bot(conn: sqlite3.Connection, post_id: int) -> bool:
 
 
 def already_published(conn: sqlite3.Connection, item_id: int, post_id: int | None) -> str | None:
-    """Назва іншої папки, з якої цей пост уже публікувався (D3), або None."""
+    """Назва іншої папки, з якої цей пост уже публікувався (D3), або None. Картка, що вже має
+    `shafa_id`, рахується опублікованою, навіть коли Шафа її відхилила (ROBOT-011)."""
     if post_id is None:
         return None
     row = conn.execute(
-        "SELECT folder_name FROM items WHERE post_id = ? AND id != ? AND status IN (?, ?)",
+        "SELECT folder_name FROM items WHERE post_id = ? AND id != ? "
+        "AND (status IN (?, ?) OR shafa_id IS NOT NULL)",
         (post_id, item_id, Status.PUBLISHED, Status.PUBLISHING),
     ).fetchone()
     return row[0] if row else None
@@ -418,8 +421,10 @@ class Run:
         today: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         presence: Callable[[int], str] | None = None,
         judge: Callable[..., dup.Verdict] | None = None,
+        load_declined: Callable[[Any], list[listings_mod.Listing]] | None = None,
     ) -> None:
         self.conn, self.root, self.session = conn, root, session
+        self.load_declined = load_declined  # ROBOT-011: лише вкладка «Відхилені» (None — не читати)
         self.presence = presence  # SITE-002: чи пост ще є в каналі (`bot.presence`)
         self.judge = judge  # DUP-001: ШІ порівнює схоже оголошення з Карткою (`dup.Judge`)
         self.make_driver, self.load_listings = make_driver, load_listings
@@ -533,11 +538,30 @@ class Run:
         listings = listings_mod.stored(self.conn, days)
         if listings is not None:
             self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)} (знімок)")
+            self._declined(None)  # знімок може бути старий — «Відхилені» читаємо щоразу
             return listings
         listings = self.load_listings(self.session)
         listings_mod.store(self.conn, listings)
         self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)}")
+        self._declined(listings)  # повне читання вже містить вкладку «Відхилені»
         return listings
+
+    def _declined(self, listings: list[listings_mod.Listing] | None) -> None:
+        """ROBOT-011: відхилені Шафою Картки → «Проблеми». Не прочиталось — запис у журнал,
+        сесія йде далі (це не причина зупинки)."""
+        if listings is None:
+            if self.load_declined is None:
+                return
+            try:
+                listings = self.load_declined(self.session)
+            except Exception as error:  # noqa: BLE001 — сесія важливіша за цю звірку
+                self.log(
+                    f"Відхилені Шафою не прочитано ({type(error).__name__}: {str(error)[:200]}) — "
+                    "сесія йде далі"
+                )
+                return
+        declined = [x for x in listings if x.state == listings_mod.DECLINED]
+        listings_mod.mark_declined(self.conn, declined, self.log)
 
     def _found_photo(self, card: review.Card, found: listings_mod.Listing) -> bytes | None:
         """Фото схожого оголошення: для ШІ й для екрана (`photos_dir/<id>.jpg`). Немає — None."""
@@ -1022,9 +1046,10 @@ def other_item(conn: sqlite3.Connection, item_id: int) -> str:
 
 
 def to_archive(conn: sqlite3.Connection, item_id: int) -> str:
-    """«Справді дубль → в Архів» (і для «пост уже опубліковано»): прибирається через 7 днів."""
+    """«Справді дубль → в Архів» (і для «пост уже опубліковано», і для відхилених Шафою, ROBOT-011):
+    прибирається через 7 днів."""
     done = _decide(
-        conn, item_id, ("possible_duplicate", "already_published"),
+        conn, item_id, ("possible_duplicate", "already_published", listings_mod.DECLINED_CODE),
         "status = ?, archived_at = ?", (Status.ARCHIVED, now()),
     )  # fmt: skip
     return "duplicate_archived" if done else "stale"
