@@ -25,11 +25,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from shafa import catalog, config, review, rules
+from shafa import catalog, config, dup, review, rules
 from shafa.bot.presence import GONE
 from shafa.db import Status, now
 from shafa.fill import STALE_RULES
-from shafa.folders import PUBLISHED_DIR, is_old
+from shafa.folders import PUBLISHED_DIR, is_old, item_folder
 from shafa.robot import listings as listings_mod
 from shafa.robot import lock
 from shafa.robot.browser import NO_LOGIN
@@ -218,6 +218,11 @@ def queue(conn: sqlite3.Connection) -> list[int]:
 
 POST_DELETED = "post_deleted"
 POST_DELETED_TEXT = "Пост видалено з каналу — продано"
+# DUP-001: що ШІ сказав про схоже оголошення (показує екран, див. `dup.verdict_text`)
+ARCHIVED_DUPLICATE = "Уже є на Шафі: {url} — {why}"
+SIMILAR_NO = "Схоже: {url} — ШІ: інша пара ({why})"
+UNSURE_ASKED = ". ШІ не впевнений: {why}"
+UNSURE_NOT_ASKED = ". ШІ не порівняв: {why}"
 
 
 def from_bot(conn: sqlite3.Connection, post_id: int) -> bool:
@@ -368,9 +373,11 @@ class Run:
         rand: Callable[[float, float], float] = random.uniform,
         today: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         presence: Callable[[int], str] | None = None,
+        judge: Callable[..., dup.Verdict] | None = None,
     ) -> None:
         self.conn, self.root, self.session = conn, root, session
         self.presence = presence  # SITE-002: чи пост ще є в каналі (`bot.presence`)
+        self.judge = judge  # DUP-001: ШІ порівнює схоже оголошення з Карткою (`dup.Judge`)
         self.make_driver, self.load_listings = make_driver, load_listings
         self.screens, self.held, self.log = screens, held, log
         self.fetch_photo, self.photos_dir = fetch_photo, photos_dir
@@ -474,22 +481,89 @@ class Run:
         self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)}")
         return listings
 
-    def _duplicate(self, report: Report, card: review.Card, found: listings_mod.Listing) -> None:
-        """Схоже оголошення — у Проблеми з назвою, посиланням і (якщо вдалося) фото для екрана."""
-        self._problem(report, card, Status.APPROVED, "possible_duplicate",
-                      f"На Шафі вже є схоже оголошення: «{found.name}» — {found.url}")  # fmt: skip
+    def _found_photo(self, card: review.Card, found: listings_mod.Listing) -> bytes | None:
+        """Фото схожого оголошення: для ШІ й для екрана (`photos_dir/<id>.jpg`). Немає — None."""
+        if self.photos_dir is None and self.judge is None:
+            return None
+        body = self.fetch_photo(found.photo) if found.photo else None
+        if self.photos_dir is not None:
+            target = self.photos_dir / f"{card.id}.jpg"
+            target.unlink(missing_ok=True)  # старе фото іншого схожого — геть
+            if body:
+                self.photos_dir.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(body)
+        return body
+
+    def _first_photo(self, card: review.Card) -> Path | None:
+        """Перше фото Картки — те, що піде на Шафу головним."""
+        if not card.photos:
+            return None
+        path = item_folder(self.root, card.folder_name) / card.photos[0].file_name
+        return path if path.is_file() else None
+
+    def _similar(
+        self, report: Report, card: review.Card, found: listings_mod.Listing
+    ) -> tuple[bool, str | None]:
+        """Схоже оголошення (DUP-001): ШІ дивиться фото й текст. Повертає (публікувати?, примітка).
+
+        `no` — публікуємо з приміткою; `yes` — Картка в Архів; `unsure`, помилка, немає фото чи
+        бюджету, ШІ не підключено — «Проблема» `possible_duplicate`, як і було: вирішує людина.
+        """
+        body = self._found_photo(card, found)
+        verdict = None
+        if self.judge is not None:
+            verdict = self.judge(card, found, self._first_photo(card), body)
+            self.log(f"Пост {card.post_id}: схоже оголошення {found.url} — ШІ: "
+                     f"{verdict.same}, {verdict.why}")  # fmt: skip
+        if verdict is not None and verdict.same == dup.NO:
+            note = SIMILAR_NO.format(url=found.url, why=verdict.why)
+            report.notes.append(f"Пост {card.post_id}: {note}")
+            self._link_found(card, found)
+            return True, note
+        if verdict is not None and verdict.same == dup.YES:
+            self._archive_duplicate(report, card, found, verdict)
+            return False, None
+        self._duplicate(report, card, found, verdict)
+        return False, None
+
+    def _link_found(self, card: review.Card, found: listings_mod.Listing) -> None:
         with self.conn:
             self.conn.execute(
                 "UPDATE items SET duplicate_url = ?, duplicate_name = ? WHERE id = ?",
                 (found.url, found.name, card.id),
             )
-        if self.photos_dir is None:
-            return
-        target = self.photos_dir / f"{card.id}.jpg"
-        target.unlink(missing_ok=True)  # старе фото іншого схожого — геть
-        if found.photo and (body := self.fetch_photo(found.photo)):
-            self.photos_dir.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(body)
+
+    def _archive_duplicate(
+        self, report: Report, card: review.Card, found: listings_mod.Listing, verdict: dup.Verdict
+    ) -> None:
+        """ШІ впевнений, що та сама річ: не публікуємо, Картка в Архів (повернути можна як завжди)."""
+        text = ARCHIVED_DUPLICATE.format(url=found.url, why=verdict.why)
+        with self.conn:
+            cursor = self.conn.execute(
+                "UPDATE items SET status = ?, archived_at = ?, problem_code = ?, "
+                "problem_text = ?, duplicate_url = ?, duplicate_name = ?, updated_at = ? "
+                "WHERE id = ? AND status = ?",
+                (Status.ARCHIVED, now(), dup.CODE, text, found.url, found.name, now(), card.id,
+                 Status.APPROVED),
+            )  # fmt: skip
+        if cursor.rowcount == 1:
+            report.notes.append(f"Пост {card.post_id}: {text} — у Архіві")
+            self.log(f"Пост {card.post_id}: {text} — у Архіві, не публікую")
+
+    def _duplicate(
+        self,
+        report: Report,
+        card: review.Card,
+        found: listings_mod.Listing,
+        verdict: dup.Verdict | None = None,
+    ) -> None:
+        """Схоже оголошення — у Проблеми з назвою, посиланням, (якщо вдалося) фото для екрана і
+        словами ШІ, чому він не вирішив."""
+        text = f"На Шафі вже є схоже оголошення: «{found.name}» — {found.url}"
+        if verdict is not None:
+            text += (UNSURE_ASKED if verdict.asked else UNSURE_NOT_ASKED).format(why=verdict.why)
+        self._problem(report, card, Status.APPROVED, "possible_duplicate", text)
+        self._link_found(card, found)
 
     def _wait_command(self, session_id: int) -> Stop | None:
         """Стоп → причина; Пауза → чекати, доки не скасують."""
@@ -646,9 +720,11 @@ class Run:
         checked = self.conn.execute(
             "SELECT duplicate_ok_at FROM items WHERE id = ?", (card.id,)
         ).fetchone()[0]  # «Це інший товар» — Продавчиня вже перевірила
+        similar = None  # примітка «схоже, але ШІ: інша пара» — піде в Картку при публікації
         if not checked and (duplicate := card_duplicate(card, listings)):
-            self._duplicate(report, card, duplicate)
-            return None
+            go, similar = self._similar(report, card, duplicate)
+            if not go:
+                return None
 
         with self.conn:  # для екрана: «чекаю, поки допишеться поточний товар (~N хв)»
             self.conn.execute(
@@ -684,10 +760,16 @@ class Run:
         if attempts := self.session.publish_attempts():
             raise RuntimeError(f"Заблоковано спроби публікації до кліку: {attempts}")
 
-        return self._submit(report, card, driver, notes, listings)
+        return self._submit(report, card, driver, notes, listings, similar)
 
     def _submit(
-        self, report: Report, card: review.Card, driver: Driver, notes: list[str], listings: list
+        self,
+        report: Report,
+        card: review.Card,
+        driver: Driver,
+        notes: list[str],
+        listings: list,
+        similar: str | None = None,
     ):
         stamp = now()
         with self.conn:  # запис ДО кліку: після обриву Картка не повториться
@@ -719,9 +801,19 @@ class Run:
             with self.conn:
                 self.conn.execute(
                     "UPDATE items SET status = ?, shafa_id = ?, shafa_url = ?, published_at = ?, "
-                    "problem_code = NULL, problem_text = NULL, updated_at = ? "
+                    "problem_code = ?, problem_text = ?, updated_at = ? "
                     "WHERE id = ? AND status = ?",
-                    (Status.PUBLISHED, result.product_id, url, now(), now(), card.id, pub),
+                    (
+                        Status.PUBLISHED,
+                        result.product_id,
+                        url,
+                        now(),
+                        dup.NOTE_CODE if similar else None,
+                        similar,
+                        now(),
+                        card.id,
+                        pub,
+                    ),
                 )
             report.published.append((card.post_id, url))
             self.log(f"Пост {card.post_id}: опубліковано {url}")

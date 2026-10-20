@@ -506,6 +506,14 @@ def act(conn: sqlite3.Connection, item_id: int, action: str) -> str:
             """,
             (target, archived_at, now(), item_id, source),
         )
+        if action == "restore" and cursor.rowcount == 1:
+            # DUP-001: ШІ відправив Картку в Архів як дубль, а вона її повертає — значить, це інший
+            # товар: на схожі оголошення Картка більше не перевіряється (інакше ШІ знову б сказав «так»)
+            conn.execute(
+                "UPDATE items SET duplicate_ok_at = ?, problem_code = NULL, problem_text = NULL "
+                "WHERE id = ? AND problem_code = 'duplicate'",
+                (now(), item_id),
+            )
     return done if cursor.rowcount == 1 else "stale"
 
 

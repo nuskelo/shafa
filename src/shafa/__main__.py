@@ -275,6 +275,7 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
                     lambda s: listings.load(s, log=log), form.screens_dir(), held, log=log,
                     fetch_photo=lambda url: listings.fetch_photo(session, url),
                     photos_dir=duplicates_dir(args.db), presence=channel_presence(root, log),
+                    judge=duplicate_judge(conn),
                 ).start(limit, day_limit)  # fmt: skip
             except KeyboardInterrupt:  # звіт сесії вже надруковано
                 return 130
@@ -308,6 +309,17 @@ def _fake_publish(p, args, held, root, limit: int, day_limit: int, log) -> int:
         session.close()
         server.close()
     return 0
+
+
+def duplicate_judge(conn):
+    """ШІ, що порівнює схоже оголошення з Карткою (DUP-001). Ключ береться лише в момент запиту;
+    не налаштовано чи бюджет не прочитано — ШІ не питаємо, Картка йде в «Проблеми» як раніше."""
+    from shafa import dup
+
+    def budget_left() -> int:
+        return batch.budget_left(conn, datetime.now().astimezone(), batch.limits())
+
+    return dup.Judge(conn, lambda: ai.make_client(config.api_key()), budget_left)
 
 
 def channel_presence(root: Path, log):
