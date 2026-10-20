@@ -68,26 +68,26 @@ def test_timeout_on_category_is_retried_and_published(env):
     assert report.reason == "черга закінчилась"
 
 
-def test_three_timeouts_stop_with_human_text_and_card_stays_approved(env):
+def test_three_timeouts_make_a_problem_with_human_text_and_session_goes_on(env):
     item = add(env)
     flaky(env, fails=99, error=PlaywrightTimeout("Timeout 30000ms exceeded."))
 
     report = env.run()
 
     assert env.session.opened == 4 and env.driver.categories == 3  # 3 спроби
-    assert report.code == "slow"
-    assert report.reason == (
-        "Шафа довго не відповідала — робот спробував 3 рази і зупинився. Натисніть «Старт» пізніше."
+    assert report.code == "done"  # ROBOT-010: Картка в Проблемах, сесія не зупиняється
+    assert state(env.conn, item) == (Status.PROBLEM, "robot_slow")
+    text = row(env.conn, item)["problem_text"]
+    assert text == (
+        "Шафа довго не відповідала на цій Картці — натисніть «Перевірити ще раз», "
+        "робот спробує ще раз"
     )
-    assert "Timeout" not in report.reason
-    assert state(env.conn, item) == (Status.APPROVED, None)  # Картка схвалена, без проблеми
+    assert "Timeout" not in text
     assert row(env.conn, item)["publish_started_at"] is None
     assert publish.started_today(env.conn, env.today) == 0  # ліміт доби не зачеплено
     assert env.driver.submits == []
     assert sum(env.sleeps) == pytest.approx(sum(publish.RETRY_PAUSE))  # дві паузи, не три
     assert sum("Timeout 30000ms" in line for line in env.lines) >= 3  # сирий текст — у журналі
-    stop = env.conn.execute("SELECT stop_code, stop_reason FROM sessions").fetchone()
-    assert (stop[0], stop[1]) == ("slow", report.reason)
 
 
 def test_network_error_is_retried_too(env):

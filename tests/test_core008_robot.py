@@ -322,7 +322,7 @@ def test_missing_size_field_logs_what_is_on_the_form_and_does_not_guess(env):  #
     report = env.run()
 
     assert state(env.conn, item) == (Status.PROBLEM, "robot_field_missing")
-    assert report.code == "site"
+    assert report.code == "done"  # ROBOT-010: Картка в Проблемах, сесія не зупиняється
     assert any(
         "Розмір: Європейський" in line and "на формі — у блоці: Український, US" in line
         for line in env.lines

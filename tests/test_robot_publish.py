@@ -244,7 +244,7 @@ def test_errors_from_shafa_are_publish_error(env):
     report = env.run()
     assert state(env.conn, item) == (Status.PROBLEM, "publish_error")
     assert "Ціна вище ринкової" in row(env.conn, item)["problem_text"]
-    assert report.reason == "Шафа не прийняла товар"
+    assert report.code == "done"  # ROBOT-010: Картка в Проблемах, сесія не зупиняється
 
 
 @pytest.mark.parametrize(
@@ -254,7 +254,7 @@ def test_errors_from_shafa_are_publish_error(env):
         (Submitted(False), "robot_not_sent"),
     ],
 )
-def test_not_sent_is_certain_and_stops(env, result, code):
+def test_not_sent_is_certain(env, result, code):
     item = add(env)
     env.results.append(result)
     env.run()
@@ -541,31 +541,28 @@ def test_no_form_mid_run_leaves_card_approved(env):
 
 
 @pytest.mark.parametrize(
-    ("missing", "code", "reason"),
-    [
-        ("Сезон", "robot_field_missing", "поле не знайдено — мабуть, Шафа змінила форму"),
-        ("фото", "robot_photos", "не всі фото завантажились"),
-    ],
+    ("missing", "code"),
+    [("Сезон", "robot_field_missing"), ("фото", "robot_photos")],
 )
-def test_form_trouble_is_problem_and_stop(env, monkeypatch, missing, code, reason):
+def test_form_trouble_is_problem_and_next_card_goes_on(env, monkeypatch, missing, code):
     first = add(env, "1342", 1342)
     second = add(env, "1400", 1400, "2025-05-01T10:00:00")
-    errors = {
-        "Сезон": FieldMissing("Сезон"),
-        "фото": PhotosShort("1 з 2"),
-    }
+    errors = {"Сезон": FieldMissing("Сезон"), "фото": PhotosShort("1 з 2")}
+    calls = []
 
-    def fail(steps, driver, strict):
+    def fail(steps, driver, strict):  # перша Картка — помилка, друга — як є
         assert strict
-        raise errors[missing]
+        calls.append(1)
+        if len(calls) == 1:
+            raise errors[missing]
+        return []
 
     monkeypatch.setattr(publish, "execute", fail)
     report = env.run()
     assert state(env.conn, first) == (Status.PROBLEM, code)
-    assert state(env.conn, second) == (Status.APPROVED, None)
-    assert report.reason == reason
-    assert report.code == {"Сезон": "site", "фото": "photos"}[missing]
-    assert env.driver.submits == []
+    assert state(env.conn, second)[0] == Status.PUBLISHED
+    assert report.code == "done"
+    assert env.driver.submits == [Status.PUBLISHING]  # клік лише на другій
 
 
 def test_blocked_publish_attempt_before_click_is_emergency(env):
@@ -766,9 +763,7 @@ def test_session_stop_code_for_screen(env, monkeypatch, setup, code):
         if setup == "no_form":
             env.session.logins = [browser.NO_FORM]
         if setup == "site":
-            monkeypatch.setattr(
-                publish, "execute", lambda *a, **k: (_ for _ in ()).throw(FieldMissing("Сезон"))
-            )
+            env.raises = FieldMissing("Додати річ")  # кнопки немає — причина загальна
         if setup == "uncertain":
             env.results.append(Submitted(True))
         if setup == "sleep":
