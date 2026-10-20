@@ -240,7 +240,8 @@ def uncertain_card(env, title="Уги UGG замшеві 40 розміру"):  #
 def snapshot(env, name, url="https://shafa.ua/uk/item/4242-x"):  # noqa: F811
     with env.conn:
         env.conn.execute(
-            "INSERT INTO my_listings VALUES (4242, ?, 'UGG', 'x', '[]', ?, '[]', 1000, NULL, 'x')",
+            "INSERT INTO my_listings (id, name, brand, slug, sizes, url, colors, price, photo, added_at) "
+            "VALUES (4242, ?, 'UGG', 'x', '[]', ?, '[]', 1000, NULL, 'x')",
             (name, url),
         )
 
