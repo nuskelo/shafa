@@ -1,3 +1,32 @@
+<section class="ai health health-{{ health.code }}" aria-live="polite">
+  <div class="robot-state">
+    {% if health.code == "running" %}
+    <strong>Перевіряю…</strong>
+    {% elif health.code == "none" %}
+    <strong>Самоперевірка ще не проходила</strong>
+    {% elif health.code == "ok" %}
+    <strong>Все гаразд</strong>
+    <span class="robot-counts">перевірено {{ local(health.at) }}</span>
+    {% else %}
+    <strong>Є що виправити</strong>
+    <span class="robot-counts">перевірено {{ local(health.at) }} · решта ({{ health.ok }}) — гаразд</span>
+    {% endif %}
+  </div>
+  {% if health.rows %}
+  <ul class="health-rows">
+    {% for row in health.rows %}
+    <li class="health-{{ row.status }}"><strong>{{ row.name }}:</strong> {{ row.text }}{% if row.fix %} <span class="health-fix">Що зробити: {{ row.fix }}</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  {% if health.code != "running" %}
+  <form method="post" action="/health" class="robot-buttons">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <button>Перевірити ще раз</button>
+  </form>
+  {% endif %}
+</section>
 <section class="robot robot-{{ robot.code }}" aria-live="polite">
   {% if fake %}<p class="fake">ПІДСТАВНА ШАФА — тест, нічого не публікується на справжній сайт</p>{% endif %}
   <div class="robot-state">

@@ -39,6 +39,10 @@ def no_real_settings(tmp_path_factory, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     # Тека даних (замок робота, журнал) — тимчасова: тести не бачать справжньої.
     monkeypatch.setenv("SHAFA_DATA_DIR", str(tmp_path_factory.mktemp("дані")))
+    # UI-003: самоперевірка при запуску ходила б у мережу — у тестах її роблять лише підставні Deps.
+    from shafa import web
+
+    monkeypatch.setattr(web.App, "_real_health", lambda self: [])
 
 
 @pytest.fixture

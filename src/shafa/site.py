@@ -202,8 +202,8 @@ class Site:
             _names_post(data),
         ) from None
 
-    def subcategories(self) -> list[dict]:
-        data = self._request("GET", "/subcategories")
+    def subcategories(self, timeout: float = TIMEOUT) -> list[dict]:
+        data = self._request("GET", "/subcategories", timeout=timeout)
         return [s for s in data if isinstance(s, dict)] if isinstance(data, list) else []
 
     def put_fields(self, post_id: int, fields: dict) -> dict:

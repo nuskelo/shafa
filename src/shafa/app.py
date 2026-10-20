@@ -20,6 +20,7 @@ from shafa.robot import control, lock, publish, rehearse
 LOCK_NAME = "ui.lock"
 URL_NAME = "ui.url"
 DB_NAME = "shafa.sqlite"
+HEALTH_DELAY = 5.0  # секунд: бот щойно запущений окремим процесом, дамо йому підійматись
 
 
 def db_path() -> Path:
@@ -138,6 +139,7 @@ def start(
         ).start()
         if app.start_bot() == "bot_started":
             print("Бот запускається окремим процесом (журнал — bot-run.log у теці даних)")
+        app.start_health(throttle=False, delay=HEALTH_DELAY)  # у фоні: екран не чекає перевірки
         open_browser(url)
         try:
             serve(server)

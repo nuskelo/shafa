@@ -177,6 +177,12 @@ dialog p { margin: 0.3rem 0 0; text-align: center; font-size: 0.9rem; }
 .ai { display: flex; flex-wrap: wrap; gap: 0.6rem 1.5rem; align-items: center; padding: 0.4rem 1.5rem 0.6rem; max-width: 1400px; margin: 0 auto; border-top: 1px solid var(--line); }
 .ai-busy strong { color: var(--green); }
 .ai-note { font-size: 0.9rem; }
+.health-ok > .robot-state strong { color: var(--green); }
+.health-problems > .robot-state strong { color: var(--red); }
+.health-rows { flex-basis: 100%; margin: 0; padding-left: 1.2rem; }
+.health-fail strong { color: var(--red); }
+.health-warn strong { color: #8a5a00; }
+.health-fix { display: block; font-size: 0.9rem; }
 .bot-running strong { color: var(--green); }
 .bot-failed strong { color: var(--red); }
 .ai-retry { margin-top: 1rem; display: flex; gap: 0.8rem; align-items: center; }

@@ -9,6 +9,8 @@
 старший 7 днів) або оцінка без запитів; `fill --db … --collect` — забрати готові результати.
 `python -m shafa fill --db … --refill N [M …]` — «Перезаповнити» лише ці пости, без ШІ (CORE-010).
 `python -m shafa ui --db … --root … [--port P] [--no-browser]` — екран перевірки в браузері.
+`python -m shafa health [--json]` — самоперевірка (UI-003): база, папка, диск, ключі, бот, сайт,
+вхід робота; без браузера, нічого не міняє; код виходу 1, якщо є «помилка».
 `python -m shafa robot --login | --sync-catalog | --dry-fill --db … --post N [--post M …]` — робот
 Шафи: ручний вхід Власника, знімок довідників, заповнення форми БЕЗ публікації (до 3 Карток).
 `python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
@@ -163,6 +165,8 @@ def build_parser() -> argparse.ArgumentParser:
     cmd = commands.add_parser("app", help="програма з ярлика: екран, бот, один екземпляр")
     cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
     cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
+    cmd = commands.add_parser("health", help="самоперевірка: що працює, а що ні (UI-003)")
+    cmd.add_argument("--json", action="store_true", help="вивести як JSON")
     commands.add_parser("quit", help="закрити програму: екран і бота (для оновлення)")
     commands.add_parser("setup", help="майстер налаштування на її ноутбуці (секрети приховано)")
     cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
@@ -669,6 +673,19 @@ def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     return 0
 
 
+def run_health(args: argparse.Namespace) -> int:
+    import json
+
+    from shafa import app, health
+
+    checks = health.run_all(config.data_dir(), app.root_dir(), deps=health.real_deps())
+    if args.json:
+        print(json.dumps([dataclasses.asdict(c) for c in checks], ensure_ascii=False, indent=2))
+    else:
+        print(health.render(checks))
+    return 1 if health.has_failures(checks) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -692,6 +709,8 @@ def main(argv: list[str] | None = None) -> int:
 
         opener = (lambda url: None) if args.no_browser else webbrowser.open
         return app.start(opener, args.port)
+    if args.command == "health":
+        return run_health(args)
     if args.command == "setup":
         from shafa import wizard
 
