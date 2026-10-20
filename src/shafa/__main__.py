@@ -177,12 +177,22 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--sync-catalog", action="store_true", help="оновити знімок довідників")
     mode.add_argument("--dry-fill", action="store_true", help="заповнити форму, не публікувати")
     mode.add_argument("--publish", action="store_true", help="ОПУБЛІКУВАТИ схвалені на Шафі")
+    mode.add_argument(
+        "--rehearse", action="store_true",
+        help="пробний прогін (QA-003): форма заповнюється, нічого не публікується; помилки — в «Проблеми»",
+    )  # fmt: skip
     mode.add_argument("--pause", action="store_true", help="пауза публікації після товару")
     mode.add_argument("--resume", action="store_true", help="продовжити після паузи")
     mode.add_argument("--stop", action="store_true", help="зупинити публікацію після товару")
     cmd.add_argument("--db", type=Path, help="файл бази SQLite")
     _add_root(cmd)
-    cmd.add_argument("--post", type=int, action="append", help="номер поста (до 3 разів)")
+    cmd.add_argument(
+        "--post", type=int, action="append", help="номер поста (dry-fill — до 3, rehearse — до 30)"
+    )
+    cmd.add_argument(
+        "--sections", action="store_true", help="з --rehearse: по одній Картці з кожного розділу"
+    )
+    cmd.add_argument("--count", type=int, help="з --rehearse: скільки Карток (типово 5, до 30)")
     cmd.add_argument("--limit", type=int, help="скільки опублікувати (не більше ліміту доби)")
     # Підставна Шафа (UI-002, D5): лише тести й «мавпа»; у довідці не показується.
     cmd.add_argument("--fake-shafa", action="store_true", help=argparse.SUPPRESS)
@@ -216,7 +226,7 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     from shafa.robot import form, lock, publish
 
     root, limit, day_limit = None, 0, 0
-    if args.publish or args.dry_fill:
+    if args.publish or args.dry_fill or args.rehearse:
         root = _root(parser, args)
         if args.db is None or not args.db.is_file():
             parser.error(f"Базу не знайдено: {args.db}")
@@ -230,10 +240,16 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             parser.error(f"--limit від 1 до {day_limit} (ліміт доби)")
     if args.fake_shafa and not args.publish:
         parser.error("--fake-shafa лише разом із --publish")
+    if (args.sections or args.count is not None) and not args.rehearse:
+        parser.error("--sections і --count — лише з --rehearse")
+    if args.rehearse:
+        _check_rehearse(parser, args)
     if args.dry_fill and (not args.post or len(args.post) > form.MAX_CARDS):
         parser.error(f"--post від 1 до {form.MAX_CARDS} разів")
 
-    mode = next(m for m in ("login", "sync_catalog", "dry_fill", "publish") if getattr(args, m))
+    mode = next(
+        m for m in ("login", "sync_catalog", "dry_fill", "publish", "rehearse") if getattr(args, m)
+    )
     try:  # замок — до профілю Chrome і до будь-яких змін у базі (D1)
         held = lock.acquire(mode.replace("_", "-"))
     except lock.Busy as error:
@@ -248,7 +264,7 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
     from playwright.sync_api import sync_playwright
 
-    from shafa.robot import browser, form, listings, publish, sync
+    from shafa.robot import browser, form, listings, publish, rehearse, sync
 
     def log(line: str) -> None:
         print(line, flush=True)
@@ -262,7 +278,14 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
             print({"closed": "Вікно закрито.", "done": "Вікно закрито кнопкою «Я увійшов».",
                    "timeout": "15 хв минуло — вікно закрито."}[why], flush=True)  # fmt: skip
             return 0
-        session = browser.Session(p, allow_upload=args.dry_fill, publish=args.publish)
+        cards = None
+        if args.rehearse:  # Картки — до Chrome: порожній прогін вікна не відкриває
+            cards = _rehearse_cards(args, root, log)
+            if not cards:
+                return 0
+        session = browser.Session(
+            p, allow_upload=args.dry_fill or args.rehearse, publish=args.publish
+        )
         try:
             if args.sync_catalog:
                 snapshot = sync.crawl(session, sync.CACHE, log=log)
@@ -272,6 +295,11 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
                 return 0
             conn = db.connect(args.db)
             try:
+                if args.rehearse:
+                    rehearse.rehearse(
+                        conn, root, cards, session, form.PageDriver, form.screens_dir(), log=log
+                    )
+                    return 0
                 if args.dry_fill:
                     form.dry_fill(
                         conn, root, args.post, session, form.PageDriver, form.screens_dir(), log=log
@@ -291,6 +319,46 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
         finally:
             session.close()
     return 0
+
+
+def _check_rehearse(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    from shafa.robot import rehearse
+
+    if args.sections and args.post:
+        parser.error("--sections і --post разом не можна")
+    if args.post and len(args.post) > rehearse.REHEARSE_MAX:
+        parser.error(f"--post — не більше {rehearse.REHEARSE_MAX} разів")
+    if args.count is None:
+        try:
+            args.count = rehearse.count_setting()
+        except rehearse.SetupError as error:
+            parser.error(str(error))
+    if not 1 <= args.count <= rehearse.REHEARSE_MAX:
+        parser.error(f"--count від 1 до {rehearse.REHEARSE_MAX}")
+
+
+def _rehearse_cards(args, root, log) -> list[int]:
+    """Які Картки проходить пробний прогін; порожньо — нічого робити (вікно Chrome не потрібне)."""
+    from shafa.robot import publish, rehearse
+
+    conn = db.connect(args.db)
+    try:
+        if args.post:
+            cards, missing = rehearse.pick_posts(conn, args.post)
+            for post_id in missing:
+                log(f"Пост {post_id}: Картки немає")
+        elif args.sections:
+            cards = rehearse.pick_sections(conn, root, args.count)
+        else:
+            cards = rehearse.pick_tomorrow(conn, datetime.now().astimezone(), args.count)
+    except publish.SetupError as error:
+        log(f"Пробний прогін не запущено: {error}")
+        return []
+    finally:
+        conn.close()
+    if not cards:
+        log("Пробний прогін: немає Карток для перевірки")
+    return cards
 
 
 def _fake_publish(p, args, held, root, limit: int, day_limit: int, log) -> int:
