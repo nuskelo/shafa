@@ -65,8 +65,11 @@ PAUSE = (60.0, 180.0)  # с між товарами
 ATTEMPTS = 3  # спроб заповнити Картку до кліку «Додати річ»: перша й 2 повтори (ROBOT-009)
 RETRY_PAUSE = (30.0, 60.0)  # с перед повтором
 SLOW_TEXT = (
-    "Шафа довго не відповідала — робот спробував {n} рази і зупинився. Натисніть «Старт» пізніше."
+    "Шафа довго не відповідала на цій Картці — натисніть «Перевірити ще раз», робот спробує ще раз"
 )
+STREAK_ROW = 3  # Карток з помилкою поспіль — схоже, причина загальна (ROBOT-010)
+STREAK_SESSION = 5  # Карток з помилкою за сесію
+STREAK_TEXT = "{n} {what} не вдались ({codes}) — схоже, загальна причина. Скажіть Власнику"
 TICK = 5.0  # с: як часто під час паузи перевіряється Стоп
 SLEEP_JUMP = 60.0  # с: «тік» став довшим — ноутбук засинав
 ITEM_URL = "https://shafa.ua/uk/item/{id}-shafa"  # Шафа переводить на справжню адресу (301)
@@ -98,10 +101,19 @@ def is_transient(error: BaseException) -> bool:
 @dataclass(frozen=True)
 class Stop:
     """Чому сесія закінчилась. `code` — для екрана: done, limit, stop, login, no_form, sleep, site,
-    photos, slow, error, interrupted (і crash — сесію закрив recover після падіння)."""
+    photos, slow, streak, error, interrupted (і crash — сесію закрив recover після падіння)."""
 
     code: str
     text: str
+
+
+@dataclass(frozen=True)
+class Failed:
+    """ROBOT-010: Картка не вдалась (вже в «Проблемах»), сесія йде далі. `clicked` — «Додати річ»
+    уже натиснули: публікація почата й іде в ліміт доби."""
+
+    code: str
+    clicked: bool = False
 
 
 class SetupError(Exception):
@@ -125,7 +137,7 @@ class Report:
             )
         ]
         lines += [f"  ✓ пост {post}: {url}" for post, url in self.published]
-        lines += [f"  ! пост {post}: {text} ({code})" for post, code, text in self.problems]
+        lines += [f"  ! Пост {post}: {code} — {text}" for post, code, text in self.problems]
         lines += [f"  · {note}" for note in self.notes]
         return "\n".join(lines)
 
@@ -443,12 +455,15 @@ class Run:
 
         driver = self.make_driver(self.session)
         done, previous, held_back = 0, None, False
+        streak, failed = [], []  # ROBOT-010: коди Карток з помилкою — поспіль і за сесію
         for row in rows:
             if done >= allowed:
                 return Stop("limit", "ліміт" + (" доби" if allowed < limit else " запуску"))
             if (stop := self._wait_command(report.session_id)) is not None:
                 return stop
-            if previous is True and (stop := self._pause(report.session_id)) is not None:
+            if (previous is True or isinstance(previous, Failed)) and (
+                stop := self._pause(report.session_id)
+            ) is not None:
                 return stop
             # Межі — щоразу знову: зміна налаштувань діє з наступної Картки, доба може змінитись.
             try:
@@ -462,6 +477,17 @@ class Run:
             previous = self._one(report, row["id"], driver, listings)
             if previous is True:
                 done += 1
+                streak.clear()
+            elif isinstance(previous, Failed):
+                done += previous.clicked  # клік почав публікацію — він у ліміті доби
+                streak.append(previous.code)
+                failed.append(previous.code)
+                if len(streak) >= STREAK_ROW:
+                    return Stop("streak", STREAK_TEXT.format(
+                        n=len(streak), what="Картки поспіль", codes=", ".join(streak)))  # fmt: skip
+                if len(failed) >= STREAK_SESSION:
+                    return Stop("streak", STREAK_TEXT.format(
+                        n=len(failed), what="Карток за сесію", codes=", ".join(failed)))  # fmt: skip
             elif isinstance(previous, Stop):
                 return previous
         if held_back:
@@ -657,11 +683,11 @@ class Run:
 
     def _fill(
         self, report: Report, card: review.Card, driver: Driver, steps: list
-    ) -> list[str] | Stop:
+    ) -> list[str] | Stop | Failed:
         """Відкрити форму й заповнити її. Тимчасовий збій (тайм-аут, обрив) до кліку «Додати річ» —
         форма заново й та сама Картка, до `ATTEMPTS` спроб з паузою (ROBOT-009). Усі спроби невдалі —
-        зупинка зі своїм текстом, Картка лишається схваленою, у ліміт доби не йде (його рахує клік).
-        Повторів після кліку немає ніколи — сюди клік не доходить."""
+        Картка в «Проблемах» `robot_slow`, сесія йде далі (ROBOT-010); у ліміт доби не йде (його
+        рахує клік). Повторів після кліку немає ніколи — сюди клік не доходить."""
         for attempt in range(1, ATTEMPTS + 1):
             if (stop := self._open_form(card)) is not None:
                 if stop.code == "login":
@@ -688,13 +714,15 @@ class Run:
             if (stop := self._pause(report.session_id, RETRY_PAUSE)) is not None:
                 return stop
         shot = self._shot(card, "збій")
-        self.log(f"Пост {card.post_id}: Картка лишилась у Схвалених. Екран: {shot.name}")
-        return Stop("slow", SLOW_TEXT.format(n=ATTEMPTS))
+        self.log(f"Пост {card.post_id}: {ATTEMPTS} спроби невдалі. Екран: {shot.name}")
+        self._problem(report, card, Status.APPROVED, "robot_slow", SLOW_TEXT)
+        return Failed("robot_slow")
 
     def _one(
         self, report: Report, item_id: int, driver: Driver, listings: list
-    ) -> bool | Stop | None:
-        """Одна Картка. True — опубліковано; Stop — причина зупинки; None — далі."""
+    ) -> bool | Stop | Failed | None:
+        """Одна Картка. True — опубліковано; Failed — Картка в «Проблемах», сесія йде далі; Stop —
+        причина зупинки; None — Картку пропущено без спроби."""
         card = review.load_card(self.conn, item_id)
         if card is None or card.status != Status.APPROVED:
             return None
@@ -743,7 +771,7 @@ class Run:
                 )
             if dump := save_markup(error, shot):
                 self.log(f"Пост {card.post_id}: розмітка поля «{error.field}» — {dump}")
-            return Stop("site", "поле не знайдено — мабуть, Шафа змінила форму")
+            return Failed("robot_field_missing")
         except BrandMissing as error:
             # Бренд є у довіднику, а наживо не знайшовся — збій робота, не Картки: далі наступна
             self._brand_miss(card, driver)
@@ -751,8 +779,8 @@ class Run:
             return None
         except PhotosShort as error:
             self._problem(report, card, ok, "robot_photos", str(error))
-            return Stop("photos", "не всі фото завантажились")
-        if isinstance(filled, Stop):
+            return Failed("robot_photos")
+        if isinstance(filled, Stop | Failed):
             return filled
         notes += filled
         if getattr(driver, "brand_miss", None):
@@ -837,11 +865,11 @@ class Run:
             self._problem(report, card, pub, "robot_not_sent",
                           "Форма не надіслалась — мабуть, Шафа вимагає поле, якого робот не знає. "
                           f"Екран: {shot.name}")  # fmt: skip
-            return Stop("site", "форма не надіслалась")
+            return Failed("robot_not_sent", clicked=True)
         if result.errors:
             self._problem(report, card, pub, "publish_error",
                           "Шафа не прийняла товар: " + "; ".join(result.errors))  # fmt: skip
-            return Stop("error", "Шафа не прийняла товар")
+            return Failed("publish_error", clicked=True)
         self.log(f"Пост {card.post_id}: немає певної відповіді Шафи за {SUBMIT_WAIT} с "
                  f"({result.failure or 'немає id у відповіді'}). Адреса: {self._url()}. "
                  f"Екран: {shot}")  # fmt: skip
