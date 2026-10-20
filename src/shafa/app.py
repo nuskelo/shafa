@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from shafa import config, db, fill, photos, places, review, web
-from shafa.robot import lock, publish
+from shafa.robot import control, lock, publish, rehearse
 
 LOCK_NAME = "ui.lock"
 URL_NAME = "ui.url"
@@ -78,6 +78,19 @@ def quit_all(kill: Callable[[int, int], None] = os.kill) -> list[str]:
     return done
 
 
+def nightly(path: Path) -> rehearse.Nightly:
+    """Нічний пробний прогін (QA-003): раз на добу, лише коли програма відкрита й робот вільний."""
+    root = root_dir()
+    return rehearse.Nightly(
+        command=lambda count: [
+            "--rehearse", "--db", str(path), "--root", str(root), "--count", str(count),
+        ],
+        spawn=control.spawn,
+        busy=lock.busy,
+        log=control.log_line,
+    )  # fmt: skip
+
+
 def start(
     open_browser: Callable[[str], object] = webbrowser.open,
     port: int = web.DEFAULT_PORT,
@@ -119,12 +132,17 @@ def start(
         url = f"http://{web.HOST}:{app.port}/"
         url_file.write_text(url, encoding="utf-8")
         print(f"Екран перевірки: {url}")
+        night_stop = threading.Event()
+        threading.Thread(
+            target=nightly(path).run, args=(night_stop,), daemon=True, name="rehearse-nightly"
+        ).start()
         if app.start_bot() == "bot_started":
             print("Бот запускається окремим процесом (журнал — bot-run.log у теці даних)")
         open_browser(url)
         try:
             serve(server)
         finally:
+            night_stop.set()
             server.server_close()
     finally:
         url_file.unlink(missing_ok=True)
