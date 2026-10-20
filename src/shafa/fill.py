@@ -11,7 +11,7 @@ from typing import Any
 
 from PIL import UnidentifiedImageError
 
-from shafa import ai, review, rules, scan
+from shafa import ai, catalog, review, rules, scan
 from shafa.db import Status, now
 from shafa.folders import item_folder
 from shafa.photos import PreparedPhoto, prepare
@@ -422,6 +422,92 @@ def recheck(conn: sqlite3.Connection, item_ids: list[int] | None = None) -> int:
             save_blank(conn, item_id, fields)
             done += 1
     return done
+
+
+# Проблеми публікації, після яких Картка могла вже вийти на Шафу, — не чіпаємо (CORE-013).
+_MAYBE_PUBLISHED = ("publish_uncertain", "possible_duplicate", "already_published")
+
+
+@dataclass(frozen=True)
+class SizesResult:
+    fixed: list[int]  # номери постів Карток, яким повернули розмір (у `review`)
+    still_empty: list[
+        int
+    ]  # номери постів: розділ має розміри, а відповідь ШІ їх не містить — лишили як є
+
+
+def sizes_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Картки з порожнім розміром у розділі, де розмір є (CORE-013: знімок давав «Европейский»,
+    `catalog.sizes` шукав «Європейський» і бланк лишався без розміру). `review`, схвалені й
+    проблеми, крім тих, що могли вже вийти на Шафу; без ручної правки розміру."""
+    marks = ", ".join("?" * len(_MAYBE_PUBLISHED))
+    rows = conn.execute(
+        f"""
+        SELECT items.id, items.post_id, section.value AS section FROM items
+        JOIN blanks AS sizes ON sizes.item_id = items.id AND sizes.field = 'sizes'
+        JOIN blanks AS section ON section.item_id = items.id AND section.field = 'section'
+        WHERE items.post_id IS NOT NULL AND items.purged_at IS NULL
+          AND items.id NOT IN ({IN_BATCH})
+          AND (sizes.value IS NULL OR sizes.value IN ('null', '[]'))
+          AND (items.status IN (?, ?)
+               OR (items.status = ? AND COALESCE(items.problem_code, '') NOT IN ({marks})))
+          AND NOT EXISTS (SELECT 1 FROM edits
+                          WHERE edits.item_id = items.id AND edits.field = 'sizes')
+        ORDER BY items.id
+        """,
+        (Status.REVIEW, Status.APPROVED, Status.PROBLEM, *_MAYBE_PUBLISHED),
+    ).fetchall()
+    return [r for r in rows if catalog.sizes(json.loads(r["section"]) or "")]
+
+
+def recheck_sizes(conn: sqlite3.Connection, dry_run: bool = False) -> SizesResult:
+    """Бланк з уже збереженої відповіді ШІ — без запиту й без нового `RULES_VERSION` (CORE-013).
+
+    Лише Картки з `sizes_candidates`. Схвалені й проблеми повертаються в `review` (автоматично
+    не публікуються); `edits` не чіпаються. `dry_run` — лише порахувати."""
+    rows = sizes_candidates(conn)
+    fixed: list[int] = []
+    still_empty: list[int] = []
+    with conn:
+        for row in rows:
+            item_id = row["id"]
+            text = conn.execute(
+                "SELECT posts.text FROM items JOIN posts USING (post_id) WHERE items.id = ?",
+                (item_id,),
+            ).fetchone()
+            if text is None:
+                continue
+            names = [
+                r[0]
+                for r in conn.execute(
+                    "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
+                )
+            ]
+            answer, version, rebuilt = _stored_answer(conn, item_id)
+            fields = ai.check_answer(
+                answer, names, text[0], rules.edit_text(edits_of(conn, item_id))
+            )
+            if not next(f.value for f in fields if f.name == "sizes"):
+                still_empty.append(row["post_id"])
+                continue
+            fixed.append(row["post_id"])
+            if dry_run:
+                continue
+            problem = scan.text_problem(text[0])
+            if problem is None and no_section(fields):
+                problem = ("no_section", NO_SECTION_TEXT)
+            status, code, why = (
+                (Status.PROBLEM, *problem) if problem else (Status.REVIEW, None, None)
+            )
+            conn.execute(
+                "UPDATE items SET status = ?, problem_code = ?, problem_text = ?, updated_at = ? "
+                "WHERE id = ?",
+                (status, code, why, now(), item_id),
+            )
+            needs = code != "many_items" and ai.needs_ai(version, answer, text[0])
+            save_answer(conn, item_id, answer, version, rebuilt, needs)
+            save_blank(conn, item_id, fields)
+    return SizesResult(fixed, still_empty)
 
 
 def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
