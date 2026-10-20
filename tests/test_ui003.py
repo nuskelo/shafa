@@ -91,7 +91,9 @@ def ready(tmp_path, monkeypatch):
     root = tmp_path / "Робочий стіл" / "Шафа"
     root.mkdir(parents=True)
     catalog = tmp_path / "catalog.json"
-    catalog.write_text(json.dumps({"checked": str((NOW - timedelta(days=5)).date())}))
+    catalog.write_text(
+        json.dumps({"checked": str((NOW - timedelta(days=5)).date())}), encoding="utf-8"
+    )
     (data / "robot-profile" / "Default").mkdir(parents=True)
     (data / "robot-profile" / "Default" / "Cookies").write_bytes(b"x")
     monkeypatch.setenv("ANTHROPIC_API_KEY", SECRET)
@@ -336,12 +338,12 @@ def test_login_check_never_opens_a_browser(ready, monkeypatch):
 @pytest.mark.parametrize(("days", "status"), [(0, OK), (30, OK), (31, WARN)])
 def test_catalog_age(ready, days, status):
     stamp = str((NOW - timedelta(days=days)).date())
-    ready.catalog.write_text(json.dumps({"checked": stamp}))
+    ready.catalog.write_text(json.dumps({"checked": stamp}), encoding="utf-8")
     assert ready.run()["Довідники Шафи"].status == status
 
 
 def test_catalog_unreadable_is_warn(ready):
-    ready.catalog.write_text("не json")
+    ready.catalog.write_text("не json", encoding="utf-8")
     assert ready.run()["Довідники Шафи"].status == WARN
 
 
