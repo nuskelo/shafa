@@ -6,6 +6,7 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 from PIL import Image, ImageOps
 
@@ -34,12 +35,21 @@ def image_tokens(width: int, height: int) -> int:
 
 def prepare(path: Path, max_side: int = MAX_SIDE) -> PreparedPhoto:
     """Фото, повернуте за EXIF і зменшене до `max_side` по довгій стороні."""
-    with Image.open(path) as original:
+    return _prepare(path, path.name, max_side)
+
+
+def prepare_bytes(data: bytes, name: str, max_side: int = MAX_SIDE) -> PreparedPhoto:
+    """Те саме для фото в пам'яті (скачане з Шафи); не картинка — виняток Pillow."""
+    return _prepare(io.BytesIO(data), name, max_side)
+
+
+def _prepare(source: Path | BinaryIO, name: str, max_side: int) -> PreparedPhoto:
+    with Image.open(source) as original:
         image = ImageOps.exif_transpose(original).convert("RGB")
     image.thumbnail((max_side, max_side))
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=JPEG_QUALITY)
-    return PreparedPhoto(path.name, buffer.getvalue(), image.width, image.height)
+    return PreparedPhoto(name, buffer.getvalue(), image.width, image.height)
 
 
 # Мініатюри для екрана перевірки. Кеш — у теці даних програми (поруч із базою), не в папках з фото.
