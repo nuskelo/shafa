@@ -354,7 +354,7 @@ def test_route_remembers_api_requests(monkeypatch):
 
 def test_category_choice_waits_for_autofill():
     class Session:
-        page = type("P", (), {"wait_for_load_state": lambda self, state: None})()
+        page = type("P", (), {"wait_for_load_state": lambda self, state, timeout=None: None})()
         waited = False
 
         def choose_category(self, parts, slug):

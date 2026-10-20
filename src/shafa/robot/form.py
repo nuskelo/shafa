@@ -25,6 +25,8 @@ UPLOAD_TIMEOUT = 120  # с на всі фото
 
 
 SUBMIT_TIMEOUT = 60  # с на відповідь Шафи після «Додати річ»; без певної відповіді — «Перевірте»
+# с: скільки чекати «мережа стихла» після розділу (на Шафі фонові запити не вщухають)
+IDLE_WAIT = 10
 
 
 class FieldMissing(Exception):
@@ -154,6 +156,8 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
                     notes.append(f"бренд {step.value} не в списку Шафи — лишено порожнім")
         elif step.kind in ("condition", "size_system"):
             notes += driver.pick(step.label, [step.value]) or []
+        elif step.kind == "choice" and not step.required:
+            notes += optional(driver, step)
         elif step.kind in ("sizes", "size_block", "colors", "choice"):
             notes += driver.pick(step.label, step.value) or []
         elif step.kind == "untouched":
@@ -162,6 +166,22 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
             raise ValueError(f"Невідомий крок {step.kind}")
     driver.verify()  # Шафа могла переписати вже заповнене — перед публікацією ще раз звіряємо
     return notes
+
+
+def optional(driver: Driver, step: Step) -> list[str]:
+    """Необов'язкова характеристика («Додаткові характеристики», без * на Шафі): не знайшли поле чи
+    значення — не зупиняємо сесію, пропускаємо й пишемо примітку (ROBOT-009). Список варіантів з
+    форми лишається в примітці — для діагностики."""
+    try:
+        return driver.pick(step.label, step.value) or []
+    except FieldMissing as error:
+        if cleanup := getattr(driver, "abandon", None):
+            cleanup(step.label)
+        why = f" ({error.details})" if error.details else ""
+        wanted = ", ".join(step.value)
+        return [
+            f"Необов'язкове поле «{step.label}» не заповнено: на формі не знайдено {wanted}{why}"
+        ]
 
 
 # --- Вибір у полі (ROBOT-003) ---
@@ -630,8 +650,24 @@ class PageDriver:
             self.session.choose_category(parts, slug)
         except LookupError as error:
             raise FieldMissing(f"Розділ: {error}") from error
-        self.page.wait_for_load_state("networkidle")
+        self._network_idle()
         self.session.wait_autofill()  # Шафа сама заповнює характеристики — дочекатися кінця
+
+    def _network_idle(self) -> None:
+        """Коротке очікування «мережа стихла»: Шафа постійно щось питає, тож тайм-аут — не помилка
+        (ROBOT-009). Далі `wait_autofill` і пошук поля чекають самі."""
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+        try:
+            self.page.wait_for_load_state("networkidle", timeout=IDLE_WAIT * 1000)
+        except PlaywrightTimeout:
+            pass
+
+    def abandon(self, label: str) -> None:
+        """Поле пропущено (необов'язкове, ROBOT-009): закрити відкритий список і прибрати набране."""
+        mark = self._find(label)
+        if mark is not None:
+            PageWidget(self, label, mark).close()
 
     def _widget(self, label: str) -> PageWidget:
         self._block(label)

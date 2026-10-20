@@ -62,6 +62,11 @@ BRAND_BROKEN = (
 )
 SHOT_WAIT = 10  # с: скріншот важкої сторінки (реклама) не має зависати робота
 PAUSE = (60.0, 180.0)  # с між товарами
+ATTEMPTS = 3  # спроб заповнити Картку до кліку «Додати річ»: перша й 2 повтори (ROBOT-009)
+RETRY_PAUSE = (30.0, 60.0)  # с перед повтором
+SLOW_TEXT = (
+    "Шафа довго не відповідала — робот спробував {n} рази і зупинився. Натисніть «Старт» пізніше."
+)
 TICK = 5.0  # с: як часто під час паузи перевіряється Стоп
 SLEEP_JUMP = 60.0  # с: «тік» став довшим — ноутбук засинав
 ITEM_URL = "https://shafa.ua/uk/item/{id}-shafa"  # Шафа переводить на справжню адресу (301)
@@ -75,10 +80,25 @@ UNCERTAIN = (
 )
 
 
+def is_transient(error: BaseException) -> bool:
+    """Тимчасовий збій сайту чи мережі (тайм-аут, обрив, сторінка не довантажилась): форму можна
+    відкрити заново. Закритий браузер чи помилка в коді — ні (ROBOT-009)."""
+    if isinstance(error, TimeoutError | ConnectionError):
+        return True
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    except ImportError:
+        return False
+    if isinstance(error, PlaywrightTimeout):
+        return True
+    return isinstance(error, PlaywrightError) and "net::" in str(error)
+
+
 @dataclass(frozen=True)
 class Stop:
     """Чому сесія закінчилась. `code` — для екрана: done, limit, stop, login, no_form, sleep, site,
-    photos, error, interrupted (і crash — сесію закрив recover після падіння)."""
+    photos, slow, error, interrupted (і crash — сесію закрив recover після падіння)."""
 
     code: str
     text: str
@@ -477,9 +497,9 @@ class Run:
             self.sleep(TICK)
         return Stop("stop", "Стоп") if what == "stop" else None
 
-    def _pause(self, session_id: int) -> Stop | None:
-        """Пауза людини між товарами; Стоп і сон ноутбука перериває її."""
-        left = self.rand(*PAUSE)
+    def _pause(self, session_id: int, span: tuple[float, float] = PAUSE) -> Stop | None:
+        """Пауза людини між товарами (чи перед повтором); Стоп і сон ноутбука перериває її."""
+        left = self.rand(*span)
         while left > 0:
             step = min(TICK, left)
             started = self.clock()
@@ -561,6 +581,42 @@ class Run:
         self.log(f"Шафа не показала форму «Додати товар»: {opened.detail()}. Екран: {shot}")
         return Stop("no_form", f"Шафа не показала форму ({opened.detail()})")
 
+    def _fill(
+        self, report: Report, card: review.Card, driver: Driver, steps: list
+    ) -> list[str] | Stop:
+        """Відкрити форму й заповнити її. Тимчасовий збій (тайм-аут, обрив) до кліку «Додати річ» —
+        форма заново й та сама Картка, до `ATTEMPTS` спроб з паузою (ROBOT-009). Усі спроби невдалі —
+        зупинка зі своїм текстом, Картка лишається схваленою, у ліміт доби не йде (його рахує клік).
+        Повторів після кліку немає ніколи — сюди клік не доходить."""
+        for attempt in range(1, ATTEMPTS + 1):
+            if (stop := self._open_form(card)) is not None:
+                if stop.code == "login":
+                    self._problem(
+                        report,
+                        card,
+                        Status.APPROVED,
+                        "robot_logged_out",
+                        "Робот не увійшов на Шафу",
+                    )
+                return stop  # «немає форми» — Картка не винна, лишається у Схвалених
+            driver.reset()  # texts/lists/typed/brand_miss — лише цієї Картки (ROBOT-008)
+            try:
+                return execute(steps, driver, strict=True)
+            except Exception as error:
+                if not is_transient(error):
+                    raise
+                self.log(
+                    f"Пост {card.post_id}: тимчасовий збій, спроба {attempt} з {ATTEMPTS}: "
+                    f"{type(error).__name__}: {str(error)[:300]}. Адреса: {self._url()}"
+                )
+            if attempt == ATTEMPTS:
+                break
+            if (stop := self._pause(report.session_id, RETRY_PAUSE)) is not None:
+                return stop
+        shot = self._shot(card, "збій")
+        self.log(f"Пост {card.post_id}: Картка лишилась у Схвалених. Екран: {shot.name}")
+        return Stop("slow", SLOW_TEXT.format(n=ATTEMPTS))
+
     def _one(
         self, report: Report, item_id: int, driver: Driver, listings: list
     ) -> bool | Stop | None:
@@ -599,13 +655,8 @@ class Run:
                 "UPDATE sessions SET item_started_at = ? WHERE id = ?", (now(), report.session_id)
             )
 
-        if (stop := self._open_form(card)) is not None:
-            if stop.code == "login":
-                self._problem(report, card, ok, "robot_logged_out", "Робот не увійшов на Шафу")
-            return stop  # «немає форми» — Картка не винна, лишається у Схвалених
-        driver.reset()  # texts/lists/typed/brand_miss — лише цієї Картки (ROBOT-008)
         try:
-            notes += execute(steps, driver, strict=True)
+            filled = self._fill(report, card, driver, steps)
         except FieldMissing as error:
             shot = self._shot(card, "нема-поля")
             self._problem(report, card, ok, "robot_field_missing",
@@ -625,6 +676,9 @@ class Run:
         except PhotosShort as error:
             self._problem(report, card, ok, "robot_photos", str(error))
             return Stop("photos", "не всі фото завантажились")
+        if isinstance(filled, Stop):
+            return filled
+        notes += filled
         if getattr(driver, "brand_miss", None):
             self._brand_miss(card, driver)  # бренду немає ні у знімку, ні наживо: публікуємо
         if attempts := self.session.publish_attempts():
