@@ -9,6 +9,7 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from shafa import ai, catalog, rules
@@ -471,7 +472,9 @@ def save(
 
 
 # Чому «Схвалити» заборонене (коди повідомлень, див. `Card.approve_block`).
+PRECHECK = "precheck"  # QA-002: робот Картку не опублікує — текст на самій Картці
 APPROVE_BLOCKS = (
+    PRECHECK,
     "section_yellow",
     "no_section",
     "section_unknown",
@@ -489,14 +492,21 @@ ACTIONS = {
 }
 
 
-def act(conn: sqlite3.Connection, item_id: int, action: str) -> str:
-    """Змінити статус Картки. Повертає код повідомлення (див. `web.MESSAGES`)."""
+def act(conn: sqlite3.Connection, item_id: int, action: str, root: Path | None = None) -> str:
+    """Змінити статус Картки. Повертає код повідомлення (див. `web.MESSAGES`).
+
+    `root` — Головна папка: з нею «Схвалити» ще й перевіряє, що робот Картку опублікує (QA-002)."""
     source, target, done = ACTIONS[action]
     if action == "approve":
         card = load_card(conn, item_id)
         block = card.approve_block() if card and card.status == source else None
         if block:
             return block
+        if card and card.status == source:
+            from shafa.robot import plan  # plan імпортує review
+
+            if plan.precheck(card, root).error:
+                return PRECHECK
     archived_at = now() if target == Status.ARCHIVED else None
     with conn:
         cursor = conn.execute(

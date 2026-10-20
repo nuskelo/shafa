@@ -155,6 +155,16 @@
       {% endif %}
       {% endif %}
 
+      {% if robot_error %}
+      <p class="robot-error">Робот не зможе опублікувати: {{ robot_error }}</p>
+      {% endif %}
+      {% if robot_notes %}
+      <div class="robot-notes">
+        <p>Робот пропустить:</p>
+        <ul>{% for n in robot_notes %}<li>{{ n }}</li>{% endfor %}</ul>
+      </div>
+      {% endif %}
+
       {% for f in card.visible if f.spec.widget != "order" %}
       <div class="field{% if f.yellow %} yellow{% endif %}{% if f.spec.name in bad %} bad{% endif %}">
         <label for="f-{{ f.spec.name }}">{{ f.spec.label }}</label>
@@ -175,9 +185,10 @@
       <div class="actions">
         {% if card.status == "review" %}
         <button name="action" value="save">Зберегти</button>
-        <button name="action" value="approve" class="approve">Схвалити</button>
+        <button name="action" value="approve" class="approve"{% if robot_error %} disabled title="Робот не зможе опублікувати"{% endif %}>Схвалити</button>
         <button name="action" value="reject" class="reject">Відхилити</button>
         {% if block %}<p class="block">{{ block }}</p>{% endif %}
+        {% if robot_error %}<p class="block">Схвалити не можна: робот не зможе опублікувати.</p>{% endif %}
         {% elif card.status == "approved" %}
         <button name="action" value="unapprove">Скасувати схвалення</button>
         {% elif card.status == "archived" %}

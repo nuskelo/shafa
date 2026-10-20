@@ -201,3 +201,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .duplicate img { width: 160px; max-width: 40%; height: auto; border-radius: 6px; }
 
 .badge.old-rules { background: #e6e6e6; color: #555; }
+.badge.robot-error { background: #fdecea; border-color: var(--red); color: var(--red); }
+p.robot-error { margin: 0 0 1rem; padding: 0.5rem 0.8rem; border: 2px solid var(--red); border-radius: 6px; background: #fdecea; color: var(--red); font-weight: 600; }
+.robot-notes { margin: 0 0 1rem; padding: 0.5rem 0.8rem; border-radius: 6px; background: var(--yellow); border: 2px solid var(--yellow-line); font-weight: 600; }
+.robot-notes p { margin: 0; }
+.robot-notes ul { margin: 0.2rem 0 0; padding-left: 1.2rem; }
