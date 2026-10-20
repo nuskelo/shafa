@@ -204,7 +204,8 @@ def state(conn, draft_id=1):
 
 
 SIGN = "Пишіть сюди 👉 @viktoriaviktoriatg"
-SITE = "🛍 Більше взуття на сайті 👈"
+SITE = "🛍 Більше взуття на сайті\nViktoria Shoes 👈"
+OLD_SITE = "🛍 Більше взуття на сайті 👈"  # формат до BOT-008 — старі пости в каналі
 MORE = "Додаткові фото в коментарях ⬇️"
 TAIL = f"{SIGN}\n\n{SITE}"  # кінець підпису одного фото
 TAIL_ALBUM = f"{TAIL}\n\n{MORE}"  # фото ≥ 2
@@ -235,7 +236,7 @@ def test_caption_other_things_without_hashtag_and_unclear_size():
 
 def test_caption_site_line_follows_signature_and_comments_line_is_last():
     caption = core.caption_of(["Кеди 38 розмір. 800грн"], 2)
-    assert caption.split("\n")[-6:] == ["", SIGN, "", SITE, "", MORE]
+    assert caption.split("\n")[-7:] == ["", SIGN, "", *SITE.split("\n"), "", MORE]
     assert core.caption_of(["Кеди 38 розмір. 800грн"], 1).endswith(f"{SIGN}\n\n{SITE}")
     assert MORE not in core.caption_of(["Кеди 38 розмір. 800грн"], 1)
 
@@ -1777,3 +1778,46 @@ def test_edit_after_our_caption_fix_changes_nothing(conn, tg, upd, clock, root, 
 
     assert not any("змінено" in line for line in log)
     assert tuple(conn.execute("SELECT updated_at, text FROM site_jobs").fetchone()) == tuple(before)
+
+
+# --- BOT-008: «Viktoria Shoes» у посиланні на сайт ---
+
+
+def test_bot008_site_block_is_two_lines_one_link_without_neighbours():
+    caption = core.caption_of(["🔥 Кеди 38 розмір. 800грн"], 2)
+    assert SITE == "🛍 Більше взуття на сайті\nViktoria Shoes 👈"
+    assert f"\n\n{SITE}\n\n{MORE}" in caption
+    ents = [
+        e for e in core.caption_entities(caption, "https://t.me/c/1/2") if e["url"] == core.SITE_URL
+    ]
+    (site,) = ents  # одна сутність на обидва рядки
+    assert utf16(caption, site["offset"], site["length"]) == SITE  # без порожніх рядків і сусідів
+    assert core.caption_length(SITE) == site["length"]
+
+
+def test_bot008_old_one_line_site_is_replaced_not_duplicated():
+    text = f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{SIGN}\n\n{OLD_SITE}\n\n{MORE}"
+    caption = core.caption_of([text], 3)
+    assert caption == f"Кеди 38 розмір. 800грн\n#VS_38_розмір\n\n{TAIL_ALBUM}"
+    assert "Viktoria Shoes" in caption and caption.count("Більше взуття") == 1
+
+
+def test_bot008_old_format_alone_still_one_link():
+    old = f"Кеди 38 розмір\n\n{SIGN}\n\n{OLD_SITE}"
+    (_, site) = core.caption_entities(old)
+    assert utf16(old, site["offset"], site["length"]) == OLD_SITE
+
+
+def test_bot008_own_text_drops_both_formats():
+    for block in (SITE, OLD_SITE):
+        assert (
+            core.own_text([f"Кеди 38 розмір. 800грн\n\n{SIGN}\n\n{block}"])
+            == "Кеди 38 розмір. 800грн"
+        )
+
+
+def test_bot008_switched_off_has_neither_line(monkeypatch):
+    monkeypatch.setenv("SHAFA_SITE_BUTTON", "ні")
+    caption = core.caption_of([f"Кеди 38 розмір. 800грн\n\n{SITE}"], 2)
+    assert "Viktoria Shoes" not in caption and "Більше взуття" not in caption
+    assert all(e["url"] != core.SITE_URL for e in core.caption_entities(caption))

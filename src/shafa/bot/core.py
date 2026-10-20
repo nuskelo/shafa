@@ -33,7 +33,7 @@ BOT-006: кнопок під постом немає (з ними Telegram хо�
 тексті підпису (`caption_entities`, UTF-16): ціле «Пишіть сюди 👉 @…» — посилання «Запитати про цю
 пару» (текст для поля вводу містить посилання на пост, яке відоме лише після `sendPhoto`, тож пост
 іде з посиланням на чат, а `editMessageCaption` ставить правильне; помилка правки пост не ламає),
-«🛍 Більше взуття на сайті 👈» (ціле, з 👈) — посилання на сайт, «Додаткові фото в коментарях ⬇️» —
+«🛍 Більше взуття на сайті⏎Viktoria Shoes 👈» (два рядки, одне посилання; BOT-008) — посилання на сайт, «Додаткові фото в коментарях ⬇️» —
 звичайний рядок. BOT-007: між «Пишіть сюди…» і рядком сайту — порожній рядок. У базі (`posts.text`) — простий текст, як бачить покупець.
 """
 
@@ -58,7 +58,7 @@ from shafa.db import now
 SELLER_USERNAME = "viktoriaviktoriatg"
 SIGNATURE = f"Пишіть сюди 👉 @{SELLER_USERNAME}"  # як у її постах (звірено з Експортом)
 SITE_URL = "https://viktoriashoes.com.ua"
-SITE_TEXT = "🛍 Більше взуття на сайті 👈"
+SITE_TEXT = "🛍 Більше взуття на сайті\nViktoria Shoes 👈"
 COMMENTS_TEXT = "Додаткові фото в коментарях ⬇️"  # лише коли фото ≥ 2
 SITE_SETTING = (
     "SHAFA_SITE_BUTTON"  # рядок-посилання на сайт; типово так, «ні» — без нього (BOT-006)
@@ -154,6 +154,7 @@ class Settings:
 NO_TAG = re.compile(r"^\s*без\s+хеш\s*тег\w*\s*[.!]?\s*$", re.IGNORECASE)
 COMMENTS = rules.COMMENTS
 SITE_LINE = rules.SITE_LINE
+SHOP_LINE = rules.SHOP_LINE
 
 
 @dataclass(frozen=True)
@@ -166,7 +167,7 @@ class Composed:
 
 
 def compose(texts: list[str], photos: int = 1) -> Composed:
-    """Підпис: текст → хештег → «Пишіть сюди…» → «🛍 Більше взуття на сайті 👈» → «Додаткові фото в
+    """Підпис: текст → хештег → «Пишіть сюди…» → «🛍 Більше взуття на сайті⏎Viktoria Shoes 👈» → «Додаткові фото в
     коментарях» (фото ≥ 2). Хештег чи підпис уже є — не дублюємо. Хештег не визначено — питання,
     не мовчання; рядок «без хештега» від неї — явна згода без хештега (у пост він не йде)."""
     lines = "\n".join(t.strip() for t in texts if t and t.strip()).split("\n")
@@ -176,7 +177,12 @@ def compose(texts: list[str], photos: int = 1) -> Composed:
     lines = [
         line
         for line in lines
-        if not (NO_TAG.match(line) or COMMENTS.match(line) or SITE_LINE.match(line))
+        if not (
+            NO_TAG.match(line)
+            or COMMENTS.match(line)
+            or SITE_LINE.match(line)
+            or SHOP_LINE.match(line)
+        )
     ]
     body = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     if not body:
@@ -244,14 +250,25 @@ def caption_entities(caption: str, link: str | None = None) -> list[dict]:
     Без розмітки HTML: її текст може містити `<`, `&`, `_` — нічого не ламається."""
     found: list[dict] = []
     offset, asked = 0, False
-    for line in caption.split("\n"):
+    lines = caption.split("\n")
+    skip = False
+    for i, line in enumerate(lines):
         length = caption_length(line)
-        if not asked and rules.SIGNATURE.search(line):
+        if skip:  # другий рядок блоку сайту вже в посиланні
+            skip = False
+        elif not asked and rules.SIGNATURE.search(line):
             asked = True
             if ask_enabled():
                 found.append(link_entity(offset, length, ask_url(link)))
         elif SITE_LINE.match(line) and site_enabled():
+            # BOT-008: «🛍 Більше взуття на сайті» + «Viktoria Shoes 👈» — одне посилання на два рядки
+            if i + 1 < len(lines) and SHOP_LINE.match(lines[i + 1]):
+                length += 1 + caption_length(lines[i + 1])
+                skip = True
             found.append(link_entity(offset, length, SITE_URL))
+            if skip:
+                offset += length - caption_length(lines[i + 1])
+                continue
         offset += length + 1
     return found
 
@@ -1232,6 +1249,7 @@ def own_text(texts: list[str]) -> str:
             rules.SIGNATURE.search(line)
             or COMMENTS.match(line)
             or SITE_LINE.match(line)
+            or SHOP_LINE.match(line)
             or NO_TAG.match(line)
             or re.fullmatch(r"\s*(#VS_\S+\s*)+", line, re.IGNORECASE)
         )

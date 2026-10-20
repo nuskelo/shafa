@@ -226,7 +226,14 @@ def test_code_fields_price_as_in_telegram_insole_and_text_without_service_lines(
     }  # fmt: skip
 
 
-@pytest.mark.parametrize("site_line", ["🛍 Більше взуття на сайті 👈", "🛍 Більше взуття на сайті"])
+@pytest.mark.parametrize(
+    "site_line",
+    [
+        "🛍 Більше взуття на сайті 👈",
+        "🛍 Більше взуття на сайті",
+        "🛍 Більше взуття на сайті\nViktoria Shoes 👈",
+    ],
+)
 @pytest.mark.parametrize(
     "comments",
     ["Додаткові фото в коментарях ⬇️", "Більше фото в коментарях ⬇️", "Всі фото в коментарях ⬇️"],
