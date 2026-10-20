@@ -32,6 +32,7 @@ class Step:
     value: Any = None
     target: str | None = None  # name поля (kind="text") або slug розділу (kind="category")
     known: bool = False  # kind="brand": бренд є у знімку довідників Шафи
+    required: bool = True  # kind="choice": поле з * на Шафі; без * — не знайшли, то пропускаємо
 
 
 def _number(text: str) -> float | None:
@@ -143,20 +144,24 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
         if skipped:
             notes.append(f"{spec['title']}: немає у списку Шафи — {', '.join(skipped)}")
         if good:
-            steps.append(Step("choice", spec["title"], good[: spec["max"]]))
+            steps.append(
+                Step("choice", spec["title"], good[: spec["max"]], required=spec["required"])
+            )
 
     teen = catalog.characteristic(path, "teen")
     if teen and f["teen"] is not None:
-        steps.append(Step("choice", teen["title"], [catalog.TEEN[f["teen"]]]))
+        steps.append(
+            Step("choice", teen["title"], [catalog.TEEN[f["teen"]]], required=teen["required"])
+        )
     membrane = catalog.characteristic(path, "membrane")
     value = catalog.canonical(f["membrane"] or "", membrane["choices"]) if membrane else None
     if value:
-        steps.append(Step("choice", membrane["title"], [value]))
+        steps.append(Step("choice", membrane["title"], [value], required=membrane["required"]))
     insole = catalog.characteristic(path, "insole")
     if insole and f["insole"]:
         chosen = insole_choices(f["insole"], insole["choices"], insole["max"])
         if chosen:
-            steps.append(Step("choice", insole["title"], chosen))
+            steps.append(Step("choice", insole["title"], chosen, required=insole["required"]))
         else:
             notes.append(f"Довжина устілки {f['insole']}: немає у списку Шафи для розділу")
     filled = {s.label for s in steps if s.kind == "choice"}

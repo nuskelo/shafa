@@ -137,7 +137,12 @@ def test_missing_field_stops_run_and_moves_card_to_problems(conn, root, tmp_path
     session = FakeSession()
 
     shots, lines = run(
-        conn, root, [1342, 1349], session, lambda s: FakeDriver(s, "Сезон"), tmp_path
+        conn,
+        root,
+        [1342, 1349],
+        session,
+        lambda s: FakeDriver(s, "Колір"),  # обов'язкове: Сезон тепер лише нотатка
+        tmp_path,
     )
 
     assert shots == []
@@ -149,10 +154,10 @@ def test_missing_field_stops_run_and_moves_card_to_problems(conn, root, tmp_path
     assert tuple(row.fetchone()) == (
         Status.PROBLEM,
         "robot_field_missing",
-        "Робот не знайшов на Шафі поле «Сезон»",
+        "Робот не знайшов на Шафі поле «Колір»",
     )
     assert status(conn, second) == Status.APPROVED
-    assert "не знайдено поле «Сезон»" in lines[0]
+    assert "не знайдено поле «Колір»" in lines[0]
 
 
 def test_no_login_stops_without_touching_cards(conn, root, tmp_path):
