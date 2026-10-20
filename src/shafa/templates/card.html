@@ -100,6 +100,7 @@
         <div>
           {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
           {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
+          {% if ai_verdict %}<p class="note">{{ ai_verdict }}</p>{% endif %}
         </div>
       </div>
       <form method="post" action="/item/{{ card.id }}" class="decide">
@@ -123,6 +124,16 @@
         <input type="hidden" name="token" value="{{ token }}">
         <button name="action" value="recheck">Перевірити ще раз</button>
       </form>
+    </div>
+    {% endif %}
+    {% if card.problem_code in ("duplicate", "duplicate_checked") and card.status in ("archived", "published") %}
+    <div class="duplicate">
+      {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
+      <div>
+        <p class="note">{{ card.problem_text }}</p>
+        {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
+        {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
+      </div>
     </div>
     {% endif %}
     {% if card.status == "published" and shafa_url %}

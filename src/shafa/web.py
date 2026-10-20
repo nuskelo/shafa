@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import jinja2
 from PIL import UnidentifiedImageError
 
-from shafa import ai, batch, catalog, config, db, fill, options, photos, review, site
+from shafa import ai, batch, catalog, config, db, dup, fill, options, photos, review, site
 from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
@@ -798,6 +798,7 @@ class App:
                 **self._chrome(conn, request),
                 duplicate_url=shafa_link(row["duplicate_url"]),
                 duplicate_name=row["duplicate_name"],
+                ai_verdict=dup.verdict_text(card.problem_text),
                 duplicate_photo=self._duplicate_file(item_id).is_file(),
                 shafa_url=shafa_link(row["shafa_url"]),
                 my_items=MY_ITEMS,
