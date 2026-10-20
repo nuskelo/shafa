@@ -69,10 +69,12 @@ def section_entry(catalog_response: dict, slug: str) -> tuple[dict, list[str]]:
     """Відповідь `WEB_ProductFormCatalog` → (опис розділу, бренди)."""
     data = catalog_response["data"]
     catalog = data["catalog"]
-    sizes = {
-        g["name"].replace("🇺🇦", "").strip(): [s["name"] for s in g["sizes"]]
-        for g in catalog.get("sizeGroups") or []
-    }
+    sizes = lang.size_groups(
+        {
+            g["name"].replace("🇺🇦", "").strip(): [s["name"] for s in g["sizes"]]
+            for g in catalog.get("sizeGroups") or []
+        }
+    )
     entry = {
         "id": catalog["id"],
         "slug": slug,

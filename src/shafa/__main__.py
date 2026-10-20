@@ -145,6 +145,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ПОСТ",
         help="«Перезаповнити» лише ці пости (потім — «Оновити» чи --batch); ШІ тут не викликається",
     )
+    cmd.add_argument(
+        "--recheck-sizes",
+        action="store_true",
+        help="повернути розмір Карткам, де він зник (CORE-013); з --dry-run — лише показати; без ШІ",
+    )
     cmd = commands.add_parser("bot", help="Telegram-бот: пост → прев'ю → канал + папка з фото")
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
@@ -455,7 +460,25 @@ def run_refill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
     return 0
 
 
+def run_recheck_sizes(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    conn = db.connect(args.db)
+    try:
+        result = fill.recheck_sizes(conn, dry_run=args.dry_run)
+    finally:
+        conn.close()
+    verb = "Буде повернуто розмір" if args.dry_run else "Розмір повернуто, Картки в «Перевірити»"
+    print(f"{verb}: " + (", ".join(map(str, result.fixed)) or "нікому"))
+    if result.still_empty:
+        print("Розміру немає й у відповіді ШІ (потрібне «Перезаповнити»), не чіпав:")
+        print("  " + ", ".join(map(str, result.still_empty)))
+    return 0
+
+
 def run_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if args.recheck_sizes:
+        return run_recheck_sizes(parser, args)
     if args.refill:
         return run_refill(parser, args)
     if args.batch or args.collect or args.estimate:

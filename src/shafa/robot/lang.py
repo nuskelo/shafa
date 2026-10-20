@@ -388,6 +388,19 @@ def ukrainian(text: str) -> str:
     return text if index is None else GROUPS[index][0]
 
 
+def size_groups(sizes: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Назви систем розмірів — українською («Европейский» → «Європейський», CORE-013).
+
+    Шафа віддає їх мішаниною; `catalog.size_system` шукає українські. Якщо в розділі трапилися обидва
+    написання однієї системи — розміри зливаються без повторів.
+    """
+    result: dict[str, list[str]] = {}
+    for name, names in sizes.items():
+        merged = result.setdefault(ukrainian(name), [])
+        merged.extend(n for n in names if n not in merged)
+    return result
+
+
 def key(text: str) -> str:
     """Ключ порівняння: однаковий для всіх написань однієї назви; для невідомих — сам текст."""
     index = _INDEX.get(_norm(text))
