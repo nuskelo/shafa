@@ -228,6 +228,38 @@ def queue(conn: sqlite3.Connection) -> list[int]:
     return [r[0] for r in queue_rows(conn)]
 
 
+def take(
+    rows: list[sqlite3.Row], started: Groups, limits: Groups, allowed: int
+) -> list[sqlite3.Row]:
+    """Які Картки з черги візьме сесія, якщо кожна вдасться: по порядку, без закритих на день груп,
+    не більше `allowed`. Спільне для `Run._loop` і пробного прогону (QA-003)."""
+    taken, old, new = [], started.old, started.new
+    for row in rows:
+        if len(taken) >= allowed:
+            break
+        if not group_open(row["folder_name"], Groups(old, new), limits):
+            continue
+        taken.append(row)
+        if is_old(row["folder_name"]):
+            old += 1
+        else:
+            new += 1
+    return taken
+
+
+def session_queue(
+    conn: sqlite3.Connection, today: datetime, limit: int, day_limit: int
+) -> list[sqlite3.Row]:
+    """Картки, які візьме наступна справжня сесія. Сьогоднішні ліміти вже вичерпано — рахуємо
+    наступну добу з нуля (пробний прогін «на завтра»)."""
+    rows = queue_rows(conn)
+    limits = group_limits()
+    allowed = min(limit, day_limit - started_today(conn, today))
+    if allowed > 0 and (taken := take(rows, started_groups(conn, today), limits, allowed)):
+        return taken
+    return take(rows, Groups(0, 0), limits, min(limit, day_limit))
+
+
 POST_DELETED = "post_deleted"
 POST_DELETED_TEXT = "Пост видалено з каналу — продано"
 # DUP-001: що ШІ сказав про схоже оголошення (показує екран, див. `dup.verdict_text`)
@@ -442,7 +474,7 @@ class Run:
         if not rows:
             return Stop("done", "черга порожня")
         limits, started = group_limits(), started_groups(self.conn, today)
-        if not any(group_open(r["folder_name"], started, limits) for r in rows):
+        if not take(rows, started, limits, allowed):
             return Stop("limit", f"на сьогодні все: {started.text(limits)}")
         if (stop := self._open_form(None)) is not None:
             return stop

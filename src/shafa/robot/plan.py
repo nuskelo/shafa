@@ -111,6 +111,13 @@ def precheck(card: Card, root: Path | None) -> Precheck:
         return Precheck(str(error), [])
 
 
+def rehearsal_plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
+    """Кроки для пробного прогону (QA-003): як `plan()`, але Картка може бути ще «На перевірку»."""
+    if card.path is None:
+        raise PlanError("Картка без розділу")
+    return _build(card, root)
+
+
 def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
     """Кроки для форми і нотатки (що не заповнено й чому)."""
     if card.status != Status.APPROVED:
