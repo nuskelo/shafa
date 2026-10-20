@@ -22,7 +22,7 @@
       {% endif %}
       <span class="info">
         <span class="name">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</span>
-        {% if current == "problem" or (current == "archived" and card.problem_code == "post_deleted") %}
+        {% if current == "problem" or (current == "archived" and card.problem_code in ("post_deleted", "duplicate")) %}
         <span class="problem">{{ card.problem_text }}</span>
         {% else %}
         <span class="details">{{ [(card.fields["price"].value ~ " грн") if card.fields["price"].value, card.fields["section"].value] | select | join(" · ") }}</span>
