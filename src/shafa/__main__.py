@@ -11,6 +11,8 @@
 `python -m shafa ui --db … --root … [--port P] [--no-browser]` — екран перевірки в браузері.
 `python -m shafa health [--json]` — самоперевірка (UI-003): база, папка, диск, ключі, бот, сайт,
 вхід робота; без браузера, нічого не міняє; код виходу 1, якщо є «помилка».
+`python -m shafa report [--day YYYY-MM-DD]` — текст щоденного звіту Власнику (BOT-009); лише друкує,
+нічого не надсилає.
 `python -m shafa robot --login | --sync-catalog | --dry-fill --db … --post N [--post M …]` — робот
 Шафи: ручний вхід Власника, знімок довідників, заповнення форми БЕЗ публікації (до 3 Карток).
 `python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
@@ -26,7 +28,7 @@ import argparse
 import dataclasses
 import sys
 import webbrowser
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from shafa import ai, batch, config, db, fill, photos, review, rules, web
@@ -167,6 +169,8 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
     cmd = commands.add_parser("health", help="самоперевірка: що працює, а що ні (UI-003)")
     cmd.add_argument("--json", action="store_true", help="вивести як JSON")
+    cmd = commands.add_parser("report", help="щоденний звіт Власнику: лише друкує (BOT-009)")
+    cmd.add_argument("--day", help="доба YYYY-MM-DD (типово сьогодні, місцевий час)")
     commands.add_parser("quit", help="закрити програму: екран і бота (для оновлення)")
     commands.add_parser("setup", help="майстер налаштування на її ноутбуці (секрети приховано)")
     cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
@@ -686,6 +690,27 @@ def run_health(args: argparse.Namespace) -> int:
     return 1 if health.has_failures(checks) else 0
 
 
+def run_report(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from shafa import app
+    from shafa.bot import report
+
+    today = datetime.now().astimezone().date()
+    try:
+        day = date.fromisoformat(args.day) if args.day else today
+    except ValueError:
+        parser.error("--day: потрібна дата YYYY-MM-DD, наприклад 2026-10-21")
+    path = app.db_path()
+    if not path.is_file():
+        print("Бази даних ще немає — запустіть програму з ярлика")
+        return 1
+    conn = db.connect(path)
+    try:
+        print(report.build(conn, config.data_dir(), day, late=day != today))
+    finally:
+        conn.close()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -711,6 +736,8 @@ def main(argv: list[str] | None = None) -> int:
         return app.start(opener, args.port)
     if args.command == "health":
         return run_health(args)
+    if args.command == "report":
+        return run_report(parser, args)
     if args.command == "setup":
         from shafa import wizard
 

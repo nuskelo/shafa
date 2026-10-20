@@ -43,7 +43,7 @@ import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -51,6 +51,7 @@ from urllib.parse import quote
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import config, rules, site
+from shafa.bot import report
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
@@ -78,6 +79,7 @@ DOWNLOAD_MAX = 20 * 1024 * 1024  # Bot API: бот завантажує файл
 CHANNEL_PHOTO_MAX = 10 * 1024 * 1024  # Bot API: фото завантаженням до 10 МБ
 CHANNEL_SIDE = 2560  # якщо оригінал не влазить у ліміти фото — зменшуємо копію для каналу
 
+REPORT_COMMAND = "/zvit"  # звіт за сьогодні зараз; лише від Власника (BOT-009)
 PUBLISH = "pub"
 CANCEL = "cancel"
 EDIT = "edit"
@@ -277,6 +279,12 @@ def link_entity(offset: int, length: int, url: str) -> dict:
     return {"type": "text_link", "offset": offset, "length": length, "url": url}
 
 
+def is_command(text: str, command: str) -> bool:
+    """«/zvit», «/zvit@ім'я_бота» і «/zvit щось» — це команда; «/zvitt» — ні."""
+    word = text.strip().split(maxsplit=1)[0]
+    return word.split("@", 1)[0].lower() == command
+
+
 def local_date(unix: int) -> str:
     """Дата Telegram → місцевий час без поясу, як в Експорті (D7)."""
     return datetime.fromtimestamp(unix, UTC).astimezone().strftime("%Y-%m-%dT%H:%M:%S")
@@ -331,6 +339,10 @@ class Bot:
         self._username: str | None = None  # публічне ім'я каналу; "" — немає (кеш після getChat)
         # пост → (спроб було, наступна, підпис): посилання «Запитати» ще не виправлено
         self._links: dict[int, tuple[int, datetime, str]] = {}
+        # BOT-009: за яку добу звіт Власнику вже надіслано і коли пробувати знову після помилки
+        self._report_last: date | None | bool = False  # False — ще не читали файл
+        self._report_retry: datetime | None = None
+        self._report_bad: str | None = None  # неправильне значення, про яке вже написали
 
     # --- Надсилання без падінь (відповідь не дійшла — не привід ламати обробку) ---
 
@@ -410,7 +422,10 @@ class Bot:
         part, refusal = self._part(message)
         if text and text.strip().startswith("/") and part is None:
             self._mark(update_id)
-            self.say(chat_id, TEXTS["help"])
+            if chat_id == self.settings.owner_chat and is_command(text, REPORT_COMMAND):
+                self._report_now(chat_id)  # позначку «надіслано» не міняє
+            else:
+                self.say(chat_id, TEXTS["help"])
             return
         if refusal or (part is None and not text):
             self._mark(update_id)
@@ -538,6 +553,55 @@ class Bot:
         self._comments_overdue(now_)
         self._retry_links(now_)
         self._summaries()
+        self._daily_report(now_)
+
+    # --- Щоденний звіт Власнику (BOT-009) ---
+
+    def _report_text(self, day: date) -> str:
+        late = day != self.clock().astimezone().date()
+        return report.build(self.conn, config.data_dir(), day, late=late)
+
+    def _report_now(self, chat_id: int) -> None:
+        """`/zvit`: звіт за сьогодні зараз. Позначку «надіслано» не чіпає."""
+        try:
+            text = self._report_text(self.clock().astimezone().date())
+        except Exception as error:  # noqa: BLE001 — звіт не валить бота
+            self.log(f"Звіт: {type(error).__name__}: {str(error)[:200]}")
+            self.say(chat_id, "Не вдалося скласти звіт — подивись журнал бота.")
+            return
+        self.say(chat_id, text)
+
+    def _daily_report(self, now_: datetime) -> None:
+        """Раз на добу о `SHAFA_REPORT_AT` — звіт Власнику. Ноутбук спав — при першому `tick` тієї
+        ж доби; пропущену добу — один раз «за вчора». Помилка Telegram — позначки немає, нова спроба
+        не раніше ніж за 10 хв. Помилка звіту бота не зупиняє."""
+        owner = self.settings.owner_chat
+        if owner is None or (self._report_retry and now_ < self._report_retry):
+            return
+        try:
+            at = report.at_time(self._report_log)
+            if at is None:
+                return
+            data_dir = config.data_dir()
+            if self._report_last is False:
+                self._report_last = report.last_sent(data_dir)
+            day = report.due(now_, self._report_last or None, at)
+            if day is None:
+                return
+            if self.say(owner, self._report_text(day)) is None:
+                self._report_retry = now_ + report.RETRY
+                return
+            # в пам'яті — навіть якщо файл не запишеться: вдруге не надішлемо
+            self._report_last, self._report_retry = day, None
+            report.mark_sent(data_dir, day, now_)
+        except Exception as error:  # noqa: BLE001
+            self._report_retry = now_ + report.RETRY
+            self.log(f"Звіт: {type(error).__name__}: {str(error)[:200]}")
+
+    def _report_log(self, text: str) -> None:
+        if text != self._report_bad:
+            self._report_bad = text
+            self.log(text)
 
     def _parts(self, draft_id: int) -> list[sqlite3.Row]:
         return self.conn.execute(
