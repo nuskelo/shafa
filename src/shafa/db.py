@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class Status(StrEnum):
@@ -394,9 +394,16 @@ CREATE TABLE ai_answers (
 );
 """
 
+# Версія 15 (ROBOT-011): з якої вкладки «Мої речі» товар (`ACTIVE`/`MODERATED`/`DECLINED`; NULL —
+# знімок до ROBOT-011) і причина відхилення Шафою (NULL — відповідь її не дала).
+LISTING_STATE = """
+ALTER TABLE my_listings ADD COLUMN state TEXT;
+ALTER TABLE my_listings ADD COLUMN reason TEXT;
+"""
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
-    9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD, 13: ANSWERS,
+    9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD, 13: ANSWERS, 14: LISTING_STATE,
 }  # fmt: skip
 
 

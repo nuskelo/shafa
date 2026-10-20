@@ -296,6 +296,7 @@ def mark_refill(conn: sqlite3.Connection, item_ids: list[int]) -> int:
                 UPDATE items SET status = ?, problem_code = ?, problem_text = ?,
                                  refill_at = ?, updated_at = ?
                 WHERE id = ? AND post_id IS NOT NULL AND id NOT IN ({IN_BATCH})
+                  AND shafa_id IS NULL
                   AND (status = ? OR (status = ? AND problem_code IN ('ai_error', 'no_section')))
                 """,
                 (status, code, text, refill_at, now(), item_id, Status.REVIEW, Status.PROBLEM),

@@ -17,12 +17,12 @@ import json
 import re
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
-from shafa import catalog, config
+from shafa import catalog, config, db
 from shafa.robot import browser
 
 FEED_OP = "WEB_MyClothesProductsFeed"
@@ -39,6 +39,11 @@ PRICE_GAP = 0.4  # ціни різняться більше ніж на 40 % —
 DAYS_SETTING = "SHAFA_LISTINGS_DAYS"  # перечитувати «Мої речі» кожні N днів
 DAYS_DEFAULT = 7
 DAYS_RANGE = (1, 30)
+DECLINED = "DECLINED"
+DECLINED_CODE = (
+    "shafa_declined"  # `items.problem_code`: Шафа відхилила вже опубліковане (ROBOT-011)
+)
+NO_REASON = "причину не вказано"
 PHOTOS_DIR = "duplicates"  # фото схожих оголошень для екрана — у теці даних поруч із базою
 
 
@@ -57,6 +62,8 @@ class Listing:
     colors: tuple[str, ...] = ()
     price: int | None = None
     photo: str | None = None  # адреса фото на Шафі
+    state: str | None = None  # вкладка кабінету: ACTIVE / MODERATED / DECLINED (ROBOT-011)
+    reason: str | None = None  # чому відхилено; None — відповідь причини не дала
 
 
 def _price(value: Any) -> int | None:
@@ -303,12 +310,13 @@ def _row(listing: Listing, stamp: str) -> tuple:
         listing.id, listing.name, listing.brand, listing.slug,
         json.dumps(list(listing.sizes), ensure_ascii=False), listing.url,
         json.dumps(list(listing.colors), ensure_ascii=False), listing.price, listing.photo, stamp,
+        listing.state, listing.reason,
     )  # fmt: skip
 
 
 _INSERT = (
     "INSERT OR REPLACE INTO my_listings (id, name, brand, slug, sizes, url, colors, price, photo, "
-    "added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    "added_at, state, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
 
@@ -339,6 +347,8 @@ def stored(
             tuple(json.loads(r["colors"])),
             r["price"],
             r["photo"],
+            r["state"],
+            r["reason"],
         )
         for r in conn.execute("SELECT * FROM my_listings ORDER BY id")
     ]
@@ -404,43 +414,97 @@ def _feeds(response: Any) -> list[dict]:
     ]
 
 
+def _read_tab(
+    session: browser.Session, tab: str, url: str, keys: set[str] | None = None
+) -> dict[int, Listing]:
+    """Одна вкладка кабінету: прокрутка до кінця, всі товари (з `state` = вкладка). Лише читання.
+    `keys` (необов'язково) — куди скласти назви полів вузла відповіді (без значень)."""
+    page = session.page
+    pages: list[tuple[list[Listing], bool, int]] = []
+
+    def collect(response: Any) -> None:
+        try:
+            for body in _feeds(response):
+                pages.append(parse_feed(body))
+                if keys is not None:
+                    for edge in body["data"]["viewer"]["products"]["edges"][:1]:
+                        keys.update(edge["node"])
+        except (KeyError, TypeError, ValueError):
+            pass  # чужа чи зламана відповідь — нижче звіримо кількість
+
+    page.on("response", collect)
+    try:
+        page.goto(url, wait_until="load")
+        browser.pause(3.0, 4.0)
+        seen, stall = 0, 0
+        while not pages or pages[-1][1]:
+            if stall >= STALL_ROUNDS:
+                break
+            if stall:  # унизу сторінки довантаження інколи «засинає» — трохи вгору й знову вниз
+                page.mouse.wheel(0, -2500)
+                browser.pause(0.5, 1.0)
+            page.mouse.wheel(0, 20000)
+            browser.pause(1.5, 3.0)
+            count = sum(len(p[0]) for p in pages)
+            stall = stall + 1 if count == seen else 0
+            seen = count
+    finally:
+        page.remove_listener("response", collect)
+    if not pages:
+        raise ListingsError(f"Шафа не віддала список «{tab}»")
+    tab_items = {x.id: replace(x, state=tab) for p in pages for x in p[0]}
+    total = pages[-1][2]
+    if len(tab_items) < total:
+        raise ListingsError(f"Список «{tab}»: прочитано {len(tab_items)} з {total}")
+    return tab_items
+
+
 def load(session: browser.Session, log: Callable[[str], None] = print) -> list[Listing]:
     """Прокрутити вкладки кабінету, як людина, і зібрати всі товари. Лише читання."""
-    page = session.page
     found: dict[int, Listing] = {}
     for tab, url in TABS.items():
-        pages: list[tuple[list[Listing], bool, int]] = []
-
-        def collect(response: Any, pages: list = pages) -> None:
-            try:
-                pages.extend(parse_feed(body) for body in _feeds(response))
-            except (KeyError, TypeError, ValueError):
-                pass  # чужа чи зламана відповідь — нижче звіримо кількість
-
-        page.on("response", collect)
-        try:
-            page.goto(url, wait_until="load")
-            browser.pause(3.0, 4.0)
-            seen, stall = 0, 0
-            while not pages or pages[-1][1]:
-                if stall >= STALL_ROUNDS:
-                    break
-                if stall:  # унизу сторінки довантаження інколи «засинає» — трохи вгору й знову вниз
-                    page.mouse.wheel(0, -2500)
-                    browser.pause(0.5, 1.0)
-                page.mouse.wheel(0, 20000)
-                browser.pause(1.5, 3.0)
-                count = sum(len(p[0]) for p in pages)
-                stall = stall + 1 if count == seen else 0
-                seen = count
-        finally:
-            page.remove_listener("response", collect)
-        if not pages:
-            raise ListingsError(f"Шафа не віддала список «{tab}»")
-        tab_items = {x.id: x for p in pages for x in p[0]}
-        total = pages[-1][2]
-        if len(tab_items) < total:
-            raise ListingsError(f"Список «{tab}»: прочитано {len(tab_items)} з {total}")
+        tab_items = _read_tab(session, tab, url)
         log(f"Мої речі · {tab}: {len(tab_items)}")
         found |= tab_items
     return list(found.values())
+
+
+def load_declined(session: browser.Session, log: Callable[[str], None] = print) -> list[Listing]:
+    """Лише вкладка «Відхилені» (їх мало — секунди): ROBOT-011. Лише читання, як `load`."""
+    keys: set[str] = set()
+    declined = _read_tab(session, DECLINED, TABS[DECLINED], keys)
+    log(f"Мої речі · {DECLINED}: {len(declined)}")
+    if declined:  # назви полів без значень: за ними знайдемо причину відхилення (TD-053)
+        log("Поля товару у відповіді Шафи: " + ", ".join(sorted(keys)))
+    return list(declined.values())
+
+
+def mark_declined(
+    conn: sqlite3.Connection, declined: list[Listing], log: Callable[[str], None] = print
+) -> list[int]:
+    """Наші опубліковані Картки, яких Шафа відхилила, → «Проблеми» `shafa_declined` (ROBOT-011).
+    Повертає id Карток, яких зачеплено тепер. Лише `published` із `shafa_id` серед відхилених;
+    повторно ту саму не чіпає (вона вже `problem`); чужі товари кабінету — ігноруються.
+    Сайт не чіпає: відхилення — не «продано»."""
+    marked: list[int] = []
+    with conn:
+        for listing in declined:
+            row = conn.execute(
+                "SELECT id, post_id, shafa_url FROM items WHERE status = ? AND shafa_id = ?",
+                (db.Status.PUBLISHED, listing.id),
+            ).fetchone()
+            if row is None:
+                continue
+            reason = (listing.reason or "").strip() or NO_REASON
+            text = (
+                f"Шафа відхилила оголошення: {reason}. "
+                f"Виправ на Шафі вручну або прибери в Архів. {row['shafa_url'] or listing.url}"
+            )
+            conn.execute(
+                "UPDATE items SET status = ?, problem_code = ?, problem_text = ?, updated_at = ? "
+                "WHERE id = ?",
+                (db.Status.PROBLEM, DECLINED_CODE, text, db.now(), row["id"]),
+            )
+            marked.append(row["id"])
+            log(f"Шафа відхилила: пост {row['post_id']} — {reason}")
+    return marked

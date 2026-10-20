@@ -81,7 +81,7 @@ def seed(conn, day=DAY):
             )
         conn.execute(
             "INSERT INTO ai_requests (model, input_tokens, output_tokens, cost_micro_usd, "
-            "created_at) VALUES ('m', 1, 1, 1_250_000, ?)",
+            "created_at) VALUES ('m', 1, 1, 1250000, ?)",
             (stamp(day),),
         )
 

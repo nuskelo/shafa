@@ -13,7 +13,7 @@ LISTINGS_DROP = (
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 14
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 15
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
@@ -313,6 +313,7 @@ def test_version_11_migrated_site_queue_rebuilt_with_waiting_and_rows_kept(tmp_p
     with conn:
         conn.executescript(
             "DROP TABLE site_jobs; DROP TABLE post_checks; DROP TABLE ai_answers;"
+            "ALTER TABLE my_listings DROP COLUMN state; ALTER TABLE my_listings DROP COLUMN reason;"
             + db.SITE.split("CREATE TABLE site_cache")[0]
         )
         conn.execute(
@@ -343,7 +344,8 @@ def test_version_12_migrated_sold_columns_and_unsent_gone_rechecked(tmp_path):
     with conn:
         conn.executescript(
             "ALTER TABLE post_checks DROP COLUMN hold; ALTER TABLE post_checks DROP COLUMN "
-            "off_site_at; ALTER TABLE post_checks DROP COLUMN sold_note; DROP TABLE ai_answers;"
+            "off_site_at; ALTER TABLE post_checks DROP COLUMN sold_note; DROP TABLE ai_answers; "
+            "ALTER TABLE my_listings DROP COLUMN state; ALTER TABLE my_listings DROP COLUMN reason;"
         )
         conn.execute(
             "INSERT INTO post_checks (post_id, gone_at, sold_at) VALUES (1, 'g', NULL), "
@@ -369,6 +371,9 @@ def test_version_13_migrated_adds_ai_answers(tmp_path):
     conn = db.connect(path)
     with conn:
         conn.execute("DROP TABLE ai_answers")
+        conn.executescript(
+            "ALTER TABLE my_listings DROP COLUMN state; ALTER TABLE my_listings DROP COLUMN reason;"
+        )
         conn.execute("PRAGMA user_version = 13")
     conn.close()
 

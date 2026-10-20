@@ -53,6 +53,7 @@ PROBLEMS = {
     "publish_uncertain": "Невідомо, чи опубліковано",
     "possible_duplicate": "Можливий дубль на Шафі",
     "already_published": "Уже опубліковано",
+    "shafa_declined": "Шафа відхилила",
     "publish_error": "Шафа не прийняла товар",
     "robot_field_missing": "Робот не знайшов поле на формі",
     "robot_logged_out": "Робот не увійшов на Шафу",
