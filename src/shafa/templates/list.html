@@ -32,6 +32,11 @@
       {% if card.old_rules %}
       <span class="badge old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто перезаповнити">заповнено старими правилами</span>
       {% endif %}
+      {% if checks[card.id].error %}
+      <span class="badge robot-error" title="Робот не зможе опублікувати — відкрийте Картку">робот не зможе</span>
+      {% elif checks[card.id].notes %}
+      <span class="badge" title="Робот пропустить деякі поля — відкрийте Картку">пропуски: {{ checks[card.id].notes | length }}</span>
+      {% endif %}
       {% if card.yellow and current != "problem" %}
       <span class="badge">Жовтих: {{ card.yellow }}</span>
       {% endif %}

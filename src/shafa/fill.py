@@ -15,6 +15,7 @@ from shafa import ai, catalog, review, rules, scan
 from shafa.db import Status, now
 from shafa.folders import item_folder
 from shafa.photos import PreparedPhoto, prepare
+from shafa.robot.plan import precheck
 from shafa.scan import NO_SECTION_TEXT
 
 # Захист від випадкових витрат: більше запитів за один запуск не буває.
@@ -508,6 +509,51 @@ def recheck_sizes(conn: sqlite3.Connection, dry_run: bool = False) -> SizesResul
             save_answer(conn, item_id, answer, version, rebuilt, needs)
             save_blank(conn, item_id, fields)
     return SizesResult(fixed, still_empty)
+
+
+@dataclass(frozen=True)
+class PrecheckResult:
+    returned: list[
+        tuple[int | None, str]
+    ]  # (номер поста, чому робот не зможе) — Картки, що йдуть назад
+    kept: int  # Схвалених, які робот опублікує
+
+
+def precheck_approved(
+    conn: sqlite3.Connection, root: Path, dry_run: bool = False
+) -> PrecheckResult:
+    """QA-002: усі «Схвалені», яких робот не опублікує (новий знімок, правка розділу), — назад
+    «На перевірку» з причиною в `problem_text`. Без мережі й ШІ; `dry_run` нічого не пише."""
+    returned: list[tuple[int | None, str]] = []
+    kept = 0
+    ids = [
+        r[0]
+        for r in conn.execute(
+            "SELECT id FROM items WHERE status = ? AND purged_at IS NULL ORDER BY id",
+            (Status.APPROVED,),
+        )
+    ]
+    with conn:
+        for item_id in ids:
+            card = review.load_card(conn, item_id)
+            error = precheck(card, root).error if card else None
+            if error is None:
+                kept += 1
+                continue
+            returned.append((card.post_id, error))
+            if not dry_run:
+                conn.execute(
+                    "UPDATE items SET status = ?, problem_code = NULL, problem_text = ?, "
+                    "updated_at = ? WHERE id = ? AND status = ?",
+                    (
+                        Status.REVIEW,
+                        f"Робот не зможе опублікувати: {error}",
+                        now(),
+                        item_id,
+                        Status.APPROVED,
+                    ),
+                )
+    return PrecheckResult(returned, kept)
 
 
 def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:

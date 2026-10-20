@@ -296,13 +296,19 @@ READY = [
 ]
 
 
+TITLED = [
+    ai.Field("title", "Шкіряні кеди Ecco 38 розміру"),
+    *READY,
+]  # без назви — QA-002 не схвалить
+
+
 def test_other_yellow_fields_do_not_block_approve(conn, root):
-    item_id = add_card(conn, root, blank=[*READY, ai.Field("brand", "X", True, "сумнів")])
+    item_id = add_card(conn, root, blank=[*TITLED, ai.Field("brand", "X", True, "сумнів")])
     assert review.act(conn, item_id, "approve") == "approved"
 
 
 def test_reject_restore_unapprove(conn, root):
-    item_id = add_card(conn, root, blank=READY)
+    item_id = add_card(conn, root, blank=TITLED)
 
     assert review.act(conn, item_id, "reject") == "rejected"
     assert status(conn, item_id) == Status.ARCHIVED
@@ -437,6 +443,7 @@ def test_keywords_for_section(section, keywords, expected):
 
 def test_keywords_follow_changed_section(conn, root):
     blank = [
+        ai.Field("title", "Кросівки Ecco 42 розміру"),
         ai.Field("section", MEN),
         ai.Field("sizes", ["42"]),
         ai.Field("colors", ["Чорний"]),

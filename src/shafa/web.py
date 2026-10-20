@@ -34,6 +34,7 @@ from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
 from shafa.robot import browser, control, lock, publish
 from shafa.robot import listings as listings_mod
+from shafa.robot.plan import Precheck, precheck
 from shafa.scan import STICKY, rescan_folder, scan
 
 COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
@@ -76,6 +77,7 @@ MESSAGES = {
     "section_yellow": "Схвалити не можна: розділ жовтий — змініть його або натисніть «Так, вірно»",
     "no_section": "Схвалити не можна: немає розділу",
     "section_unknown": "Схвалити не можна: такого розділу немає на Шафі — оберіть зі списку",
+    "precheck": "Схвалити не можна: робот не зможе опублікувати — причина в червоному блоці",
     "no_sizes": "Схвалити не можна: немає розміру",
     "no_colors": "Схвалити не можна: немає кольору",
     "no_gender": "Схвалити не можна: для малюків Шафа вимагає «Стать»",
@@ -775,12 +777,19 @@ class App:
                 **self._chrome(conn, request),
                 current=status,
                 cards=cards,
+                checks={c.id: self._precheck(c) for c in cards},
                 query=query,
                 message=MESSAGES.get(request.arg("msg")),
                 deletion_date=review.deletion_date,
             )
         finally:
             conn.close()
+
+    def _precheck(self, card: review.Card) -> Precheck:
+        """Що скаже робот про Картку (QA-002) — лише «На перевірку» і «Схвалені»."""
+        if card.status not in (Status.REVIEW, Status.APPROVED):
+            return Precheck(None, [])
+        return precheck(card, self.root)
 
     def card_page(self, item_id: int, request: Request) -> Response:
         conn = self.connect()
@@ -793,9 +802,12 @@ class App:
                 "SELECT duplicate_url, duplicate_name, shafa_url FROM items WHERE id = ?",
                 (item_id,),
             ).fetchone()
+            check = self._precheck(card)
             return self.page(
                 "card.html",
                 **self._chrome(conn, request),
+                robot_error=check.error,
+                robot_notes=check.notes,
                 duplicate_url=shafa_link(row["duplicate_url"]),
                 duplicate_name=row["duplicate_name"],
                 ai_verdict=dup.verdict_text(card.problem_text),
@@ -838,7 +850,7 @@ class App:
                 if action != "approve":
                     return redirect(back + "?msg=saved")
             if action in review.ACTIONS:
-                message = review.act(conn, item_id, action)
+                message = review.act(conn, item_id, action, self.root)
                 if message in review.APPROVE_BLOCKS or message == "stale":
                     return redirect(f"{back}?msg={message}")
                 return redirect(f"/{card.status}?msg={message}")
