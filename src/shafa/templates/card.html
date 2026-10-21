@@ -53,7 +53,7 @@
 <p class="back"><a href="/{{ card.status }}">← {{ tabs.get(card.status, "Назад") }}</a></p>
 <h1>{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</h1>
 <p class="meta">
-  Папка {{ card.folder_name }}{% if card.post_id %} · пост {{ card.post_id }}{% endif %}{% if card.post_date %} від {{ card.post_date[:10] }}{% endif %}
+  Папка {{ card.folder }}{% if card.post_id %} · пост {{ card.post_id }}{% endif %}{% if card.variant %} · <strong class="variant">розмір {{ card.variant }} · {{ card.place[0] }} з {{ card.place[1] }}</strong>{% endif %}{% if card.post_date %} від {{ card.post_date[:10] }}{% endif %}
   {% if card.status == "archived" and card.archived_at %} · в Архіві, видалиться {{ deletion_date(card.archived_at).strftime("%d.%m.%Y") }}{% endif %}
 </p>
 {% if card.status == "review" and card.problem_code in ("post_changed", "photos_changed") %}

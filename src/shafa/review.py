@@ -12,10 +12,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from shafa import ai, catalog, rules
+from shafa import ai, catalog, rules, variants
 from shafa.catalog import Kind
 from shafa.db import Status, now
-from shafa.folders import natural_key
+from shafa.folders import base_name, natural_key, variant_size
 
 ARCHIVE_DAYS = 7
 TABS = (Status.REVIEW, Status.APPROVED, Status.PROBLEM, Status.ARCHIVED)
@@ -156,6 +156,17 @@ class Card:
     photos: list[Photo]
     queue_pos: int | None = None  # місце старої Картки у списку імпорту
     old_rules: bool = False  # нова інструкція ШІ могла змінити бланк — «Перезаповнити» (CORE-009 B)
+    place: tuple[int, int] = (0, 0)  # CORE-014: «1 з 3» серед сестер-розмірів; (0, 0) — не варіант
+
+    @property
+    def variant(self) -> str | None:
+        """Розмір Картки-варіанта поста з кількома розмірами (CORE-014) або None."""
+        return variant_size(self.folder_name)
+
+    @property
+    def folder(self) -> str:
+        """Папка з фото: у варіантів спільна, без `~<розмір>`."""
+        return base_name(self.folder_name)
 
     @property
     def kind(self) -> Kind | None:
@@ -354,6 +365,9 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
     ).fetchone()
     if row is None:
         return None
+    row = dict(row)
+    if row["post_text"]:  # варіант бачить лише свій пункт поста (CORE-014)
+        row["post_text"] = variants.text_for(row["folder_name"], row["post_text"])
     blanks = {
         r["field"]: (json.loads(r["value"]), bool(r["yellow"]), r["reason"])
         for r in conn.execute("SELECT * FROM blanks WHERE item_id = ?", (item_id,))
@@ -419,6 +433,7 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         photos,
         row["queue_pos"],
         bool(blanks) and bool(row["needs_ai"]),
+        variants.place(conn, row["folder_name"], row["post_id"]),
     )
 
 

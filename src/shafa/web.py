@@ -31,7 +31,7 @@ from PIL import UnidentifiedImageError
 from shafa import ai, batch, catalog, config, db, dup, fill, health, options, photos, review, site
 from shafa.db import Status
 from shafa.export import parse_export
-from shafa.folders import PUBLISHED_DIR, is_old, item_folder, list_folders, old_root
+from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, list_folders, old_root
 from shafa.robot import browser, control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
@@ -139,7 +139,8 @@ PROBLEM_HINTS = {
     "post_not_found": "Такого поста немає в Експорті. Перевірте номер у назві папки.",
     "no_text": "У пості немає тексту — такий товар оформлюється вручну.",
     "no_price": "У пості немає ціни — допишіть ціну в пост і зробіть новий Експорт.",
-    "many_items": "У пості кілька товарів — такий пост оформлюється вручну.",
+    "many_items": "У пості кілька товарів — такий пост оформлюється вручну. Пост з кількома розмірами однієї пари розбирається сам, якщо кожен розмір — окремим пунктом «* 43 розмір. Устілка …».",
+    "size_gone": "Цей розмір прибрали з поста. Якщо його продано — «В архів». Якщо ні — поверніть пункт у пост і натисніть «Перевірити ще раз».",
     "no_photos": "Додайте в папку фото .jpg.",
     "too_many_photos": "Залиште в папці не більше 10 фото.",
     "folder_missing": "Папку перейменовано або видалено.",
@@ -1085,7 +1086,7 @@ class App:
         root = (old_root() if is_old(row["folder_name"]) else self.root).resolve()
         folders = [item_folder(self.root, row["folder_name"]).resolve()]
         if row["status"] == Status.PUBLISHED:  # робот переносить папку в «Опубліковано» (TD-016)
-            folders.insert(0, root / PUBLISHED_DIR / row["folder_name"])
+            folders.insert(0, root / PUBLISHED_DIR / base_name(row["folder_name"]))
         path = next((p for f in folders if (p := (f / row["file_name"]).resolve()).is_file()), None)
         if path is None or not path.is_relative_to(root):
             return text(404, "Фото не знайдено")
