@@ -83,6 +83,7 @@ STICKY_TITLES = {  # проблеми публікації — простими 
     "possible_duplicate": "Схожий товар уже є на Шафі",
     "already_published": "Цей пост уже опубліковано з іншої папки",
     "shafa_declined": "Шафа відхилила оголошення після публікації",
+    "photos_missing": "Фото поста не знайдено в папці",  # без запису Картка-Проблема давала 500
 }
 MESSAGES = {
     "saved": "Збережено",
@@ -176,6 +177,59 @@ PROBLEM_HINTS = {
     "robot_not_sent": "Форма на Шафі не надіслалась (товар не створено). Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_publish_blocked": "Захист робота не пропустив запит публікації — товар не створено. Скажіть Власнику.",
 }
+# UI-006: рядок Проблеми у списку — коротка мітка і що робити (довгий текст для Картки — `PROBLEM_HINTS`).
+PROBLEM_KINDS = {
+    "bad_folder_name": (
+        "Назва папки",
+        "перейменуй папку на номер поста, потім «Перевірити ще раз»",
+    ),
+    "duplicate_post": ("Дві папки", "залиш одну папку для поста, потім «Перевірити ще раз»"),
+    "post_not_found": ("Поста немає", "перевір номер у назві папки, потім «Перевірити ще раз»"),
+    "no_text": ("Нема тексту", "такий товар оформлюється вручну — відкрий Картку"),
+    "no_price": (
+        "Нема ціни",
+        "допиши ціну в пост, зроби новий Експорт і натисни «Перевірити ще раз»",
+    ),
+    "many_items": ("Кілька товарів", "опублікуй вручну на Шафі — робот такі пости не бере"),
+    "size_gone": (
+        "Розмір прибрано",
+        "якщо розмір продано — нічого не роби; якщо ні — поверни пункт у пост",
+    ),
+    "no_section": ("Нема розділу", "опублікуй вручну — підходящого розділу на Шафі немає"),
+    "no_photos": ("Нема фото", "додай в папку фото .jpg, потім «Перевірити ще раз»"),
+    "too_many_photos": (
+        "Забагато фото",
+        "залиш в папці не більше 10 фото, потім «Перевірити ще раз»",
+    ),
+    "folder_missing": (
+        "Нема папки",
+        "папку перейменовано чи видалено — поверни її, потім «Перевірити ще раз»",
+    ),
+    "ai_error": ("ШІ не заповнив", "«Перевірити ще раз» — Картка знову піде на ШІ"),
+    "stale_rules": ("Старі правила", "«Перевірити ще раз» — перерахує без ШІ, потім схвали знову"),
+    "possible_duplicate": ("Схожий є на Шафі", "відкрий Картку і порівняй"),
+    "already_published": ("Уже опубліковано", "цей пост уже на Шафі — відкрий Картку"),
+    "publish_uncertain": ("Не впевнений", "перевір «Мої речі» на Шафі, потім відкрий Картку"),
+    "publish_error": ("Шафа не прийняла", "відкрий Картку"),
+    "shafa_declined": (
+        "Шафа не прийняла",
+        "відкрий Картку: виправ оголошення на Шафі або прибери в архів",
+    ),
+    "photos_missing": ("Фото", "перевір папку з фото, потім «Перевірити ще раз»"),
+    "robot_photos": ("Фото", "перевір папку з фото, потім «Перевірити ще раз»"),
+    "post_deleted": (
+        "Пост видалено",
+        "пост прибрано з каналу — схоже, продано; публікувати не треба",
+    ),
+}
+ROBOT_KIND = ("Робот", "«Перевірити ще раз» — робот спробує знову")
+OTHER_KIND = ("Проблема", "відкрий Картку")
+# Кнопки в рядку Проблеми — лише ті, що працюють на сервері: `publish.to_archive` приймає тільки ці коди.
+ARCHIVE_CODES = ("possible_duplicate", "already_published", "shafa_declined")
+LINK_CODES = (
+    "publish_uncertain",
+    "publish_error",
+)  # їх вирішує людина на Картці (посилання на товар)
 
 SECURITY_HEADERS = {
     # Сторінки беруть лише свої файли: жодних зовнішніх скриптів, стилів, шрифтів, фото.
@@ -470,6 +524,7 @@ class App:
                 **self._chrome(conn, request),
                 current="settings",
                 options=options.OPTIONS,
+                blocks=settings_blocks(),
                 values=values or options.current(),
                 snapshot=listings_mod.snapshot_info(conn),
                 held=site.summary(conn)[3],
@@ -918,13 +973,22 @@ class App:
                     href = f"/{status}" + (f"?{urlencode(args)}" if args else "")
                     filters.append((key, label, count, href))
                 cards = self._filtered(cards, marks, chosen)
+            on_shafa = {  # Картка з `shafa_id` з Архіву не повертається (як на самій Картці)
+                r[0] for r in conn.execute("SELECT id FROM items WHERE shafa_id IS NOT NULL")
+            }
             return self.page(
-                "list.html",
+                {Status.PROBLEM: "problems.html", Status.ARCHIVED: "archived.html"}.get(
+                    status, "list.html"
+                ),
                 **self._chrome(conn, request),
                 current=status,
                 cards=cards,
                 checks=checks,
                 marks=marks,
+                rows={c.id: problem_row(c) for c in cards} if status == Status.PROBLEM else {},
+                on_shafa=on_shafa,
+                my_items=MY_ITEMS,
+                list_url=f"/{status}" + (f"?{urlencode({'q': query})}" if query else ""),
                 filters=filters,
                 chosen=chosen,
                 query=query,
@@ -1025,6 +1089,8 @@ class App:
                 block=MESSAGES.get(block or ""),
                 sections=catalog.sections(),
                 hint=PROBLEM_HINTS.get(card.problem_code or ""),
+                problem_archive=problem_actions(card.problem_code)[0],
+                problem_recheck=problem_actions(card.problem_code)[1],
                 deletion_date=review.deletion_date,
                 editable=card.status == Status.REVIEW,
                 nav=self._nav(conn, card, from_),
@@ -1046,7 +1112,15 @@ class App:
             if card is None:
                 return text(404, "Картку не знайдено")
 
+            stay = (request.form.get("stay") or [""])[
+                0
+            ] == "list"  # кнопка зі списку Проблем (UI-006)
+
             def back(**params) -> str:
+                if (
+                    stay and from_ and list(params) == ["msg"]
+                ):  # повідомлення — у списку, не на Картці
+                    return with_msg(from_, params["msg"])
                 return card_url(item_id, from_, **params)
 
             if action in ("save", "approve", "folder_order") or action.startswith("confirm:"):
@@ -1139,6 +1213,7 @@ class App:
                 **self._chrome(conn, request),
                 current="sessions",
                 sessions=sessions,
+                s_tones={r["id"]: session_tone(r) for r in sessions},
                 reasons=control.LAST,
                 message=MESSAGES.get(request.arg("msg")),
             )
@@ -1164,9 +1239,10 @@ class App:
                 **self._chrome(conn, request),
                 current="sessions",
                 session=row,
+                tone=session_tone(row),
                 cards=cards,
+                rows={c.id: problem_row(c) for c in cards if c.status == Status.PROBLEM},
                 reasons=control.LAST,
-                sticky_titles=STICKY_TITLES,
                 message=None,
             )
         finally:
@@ -1435,6 +1511,76 @@ def card_mark(card: review.Card, check: Precheck) -> Mark | None:
     if skips:
         parts.append(plural(skips, "пропуск", "пропуски", "пропусків"))
     return Mark("warn", " · ".join(parts)) if parts else Mark("ok", "Готово")
+
+
+def settings_blocks() -> list[tuple[str, list]]:
+    """Налаштування за блоками (UI-006): поля й порядок ті самі, що в `options.OPTIONS`."""
+    own = {
+        "Сайт: «Продано»": (
+            site.SEND_SETTING, site.WAIT_SETTING, site.SOLD_SETTING, site.FUSE_SETTING
+        ),
+        "«Мої речі» на Шафі": (listings_mod.DAYS_SETTING,),
+    }  # fmt: skip
+    taken = {name for names in own.values() for name in names}
+    blocks = [("Ліміти й робот", [o for o in options.OPTIONS if o.name not in taken])]
+    blocks += [
+        (title, [o for o in options.OPTIONS if o.name in names]) for title, names in own.items()
+    ]
+    return blocks
+
+
+@dataclass
+class ProblemRow:
+    """Рядок Проблеми (UI-006): що сталось, що робити, які кнопки."""
+
+    label: str
+    why: str
+    todo: str
+    details: str  # повний текст причини, коли `why` — коротка фраза зі `STICKY_TITLES`
+    archive: bool
+    recheck: bool
+    my_items: bool
+
+
+def problem_actions(code: str | None) -> tuple[bool, bool]:
+    """(`to_archive`, `recheck`) — ті самі кнопки, що на Картці (`card.html`), і лише робочі на сервері:
+    `publish_uncertain`/`publish_error` вирішуються посиланням на Картці, решта STICKY — без повтору."""
+    if code in LINK_CODES:
+        return False, False
+    if code in ARCHIVE_CODES:
+        return True, False
+    return False, True
+
+
+def problem_row(card: review.Card) -> ProblemRow:
+    code = card.problem_code or ""
+    label, todo = PROBLEM_KINDS.get(code) or (
+        ROBOT_KIND if code.startswith("robot_") else OTHER_KIND
+    )
+    short = STICKY_TITLES.get(code)
+    text_ = card.problem_text or ""
+    archive, recheck = problem_actions(code)
+    return ProblemRow(
+        label=label,
+        why=short or text_,
+        todo=todo,
+        details=text_ if short and text_ and text_ != short else "",
+        archive=archive,
+        recheck=recheck,
+        my_items=code in LINK_CODES,
+    )
+
+
+CALM_STOPS = ("done", "limit", "stop")  # сесія закінчилась як задумано
+
+
+def session_tone(row) -> str:
+    """Колір сесії: `run` — працює, `ok` — спокійний кінець, `warn` — зупинилась з причини, `idle` — без причини."""
+    if row["ended_at"] is None:
+        return "run"
+    if row["stop_code"] in CALM_STOPS:
+        return "ok"
+    return "warn" if row["stop_code"] or row["stop_reason"] else "idle"
 
 
 def dmy(stamp: str | None) -> str:
