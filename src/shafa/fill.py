@@ -5,13 +5,14 @@
 
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from PIL import UnidentifiedImageError
 
-from shafa import ai, catalog, review, rules, scan, variants
+from shafa import ai, catalog, events, review, rules, scan, variants
 from shafa.db import Status, now
 from shafa.folders import item_folder
 from shafa.photos import PreparedPhoto, prepare
@@ -48,6 +49,110 @@ class Filled:
     usage: ai.Usage | None
     yellow: int = 0
     error: str | None = None
+    item_id: int = field(default=0, compare=False)  # для підсумку в журнал подій
+
+
+# --- Підсумок для журналу подій (BOT-012) ---
+
+
+@dataclass
+class Tally:
+    """Чим закінчилась робота ШІ над Картками: готові, з жовтим, у Проблемах, що це коштувало."""
+
+    ready: int = 0
+    yellow: int = 0
+    problems: int = 0
+    returned: int = 0  # пакет не обробив — Картки знову в черзі (не рахуються в `total`)
+    cost_micro: int = 0
+    name: str = ""  # назва останньої Картки: для підсумку з однієї
+
+    @property
+    def total(self) -> int:
+        return self.ready + self.yellow + self.problems
+
+    def card(
+        self, name: str, *, yellow: bool = False, problem: bool = False, cost: int = 0
+    ) -> None:
+        self.name = name
+        self.cost_micro += cost
+        if problem:
+            self.problems += 1
+        elif yellow:
+            self.yellow += 1
+        else:
+            self.ready += 1
+
+
+def _money(micro: int) -> str:
+    return f"{micro / 1_000_000:.2f}".replace(".", ",").removesuffix(",00") + " $"
+
+
+def _spent_note(conn: sqlite3.Connection) -> str:
+    """« (сьогодні 1,20 $ з 3 $)»; налаштування зіпсовані — без дужок."""
+    from shafa import batch
+
+    try:
+        today = datetime.now().astimezone()
+        return f" (сьогодні {_money(batch.spent_today(conn, today))} з {_money(batch.limits().daily_micro_usd)})"
+    except Exception:  # noqa: BLE001 — підсумок для журналу не ламає ШІ
+        return ""
+
+
+def tally_text(conn: sqlite3.Connection, tally: Tally) -> str:
+    """Рядок «ШІ закінчив …» для журналу; з однієї Картки — короткий «ШІ: 7015 готова …»."""
+    cost = f"{round(tally.cost_micro / 10_000)} ¢"
+    if tally.total == 1:
+        what = (
+            "у Проблемах" if tally.problems
+            else "готова до перевірки (з жовтим)" if tally.yellow
+            else "готова до перевірки"
+        )  # fmt: skip
+        return f"ШІ: {tally.name} {what} · {cost}"
+    parts = [
+        f"{n} {word}"
+        for n, word in (
+            (tally.ready, "готові до перевірки"),
+            (tally.yellow, "з жовтим"),
+            (tally.problems, "у Проблемах"),
+        )
+        if n
+    ]
+    return f"ШІ закінчив: {events.cards(tally.total)} — {', '.join(parts)} · {cost}" + _spent_note(
+        conn
+    )
+
+
+def _in_problems(conn: sqlite3.Connection, item_id: int) -> bool:
+    row = conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()
+    return bool(row) and row[0] == Status.PROBLEM
+
+
+def announce(conn: sqlite3.Connection, results: list[Filled]) -> None:
+    """Підсумок звичайних запитів (по одному): `ai.done`, а коли всі помилкові — гучне `ai.stop`."""
+    if not results:
+        return
+    errors = [r for r in results if r.error]
+    if len(errors) == len(results):  # ключ, ліміт, зв'язок: жодна Картка не заповнилась
+        events.emit("ai.stop", f"ШІ не відповів ({events.cards(len(results))}): {errors[0].error}")
+        return
+    tally = Tally()
+    for r in results:
+        problem = bool(r.error) or _in_problems(conn, r.item_id)
+        tally.card(
+            r.folder_name, yellow=bool(r.yellow), problem=problem,
+            cost=r.usage.cost_micro_usd if r.usage else 0,
+        )  # fmt: skip
+    events.emit("ai.done", tally_text(conn, tally))
+
+
+def fill_all(conn: sqlite3.Connection, client: Any, planned: list[Planned]) -> list[Filled]:
+    """Звичайні запити по одному (CLI `fill`) з подіями для журналу: «почав» (якщо Карток кілька),
+    «закінчив». Картка з бота сама — лише одним рядком наприкінці."""
+    if len(planned) > 1:
+        events.emit("ai.start", f"ШІ почав аналіз: {events.cards(len(planned))}")
+    results = [fill(conn, client, p) for p in planned]
+    announce(conn, results)
+    return results
 
 
 # Картки, що чекають результату пакета: їх не відправляємо вдруге (D3).
@@ -284,7 +389,7 @@ def refill_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def mark_refill(conn: sqlite3.Connection, item_ids: list[int]) -> int:
+def mark_refill(conn: sqlite3.Connection, item_ids: list[int], *, announce: bool = True) -> int:
     """Повернути Картки в чергу ШІ: `new` + `refill_at` (без чекання 7 днів). Бланк і правки лишаються
     до відповіді ШІ. Повертає, скільки Карток справді позначено.
 
@@ -314,6 +419,11 @@ def mark_refill(conn: sqlite3.Connection, item_ids: list[int]) -> int:
                 (status, code, text, refill_at, now(), item_id, Status.REVIEW, Status.PROBLEM),
             )
             marked += cursor.rowcount
+    if marked and announce:
+        events.emit(
+            "ai.start",
+            f"Перезаповнити: {events.cards(marked)} у черзі ШІ (підуть наступним пакетом)",
+        )
     return marked
 
 
@@ -335,7 +445,12 @@ def refill_posts(conn: sqlite3.Connection, post_ids: list[int]) -> RefillPosts:
                 (post_id,),
             )
         ]
-        (marked if ids and mark_refill(conn, ids) else skipped).append(post_id)
+        (marked if ids and mark_refill(conn, ids, announce=False) else skipped).append(post_id)
+    if marked:
+        events.emit(
+            "ai.start",
+            f"Перезаповнити: пости {', '.join(map(str, marked))} у черзі ШІ (підуть наступним пакетом)",
+        )
     return RefillPosts(marked, skipped)
 
 
@@ -455,6 +570,8 @@ def recheck(conn: sqlite3.Connection, item_ids: list[int] | None = None) -> int:
             done += 1
     if item_ids is None:
         done += variants.split_waiting(conn)
+        if done:  # по одній Картці (її правка) — не подія
+            events.emit("ai.rules", f"Перерахунок правилами: {events.cards(done)} (без ШІ)")
     return done
 
 
@@ -538,6 +655,13 @@ def recheck_sizes(conn: sqlite3.Connection, dry_run: bool = False) -> SizesResul
             needs = code != "many_items" and ai.needs_ai(version, answer, text[0])
             save_answer(conn, item_id, answer, version, rebuilt, needs)
             save_blank(conn, item_id, fields)
+    if fixed and not dry_run:
+        events.emit(
+            "ai.rules",
+            f"Повернуто розмір: {events.cards(len(fixed))}"
+            + (f", без розміру лишилось {len(still_empty)}" if still_empty else "")
+            + " (без ШІ)",
+        )
     return SizesResult(fixed, still_empty)
 
 
@@ -583,6 +707,11 @@ def precheck_approved(
                         Status.APPROVED,
                     ),
                 )
+    if not dry_run and (returned or kept):
+        events.emit(
+            "ai.rules",
+            f"Перевірка Схвалених: назад на перевірку {len(returned)}, робот опублікує {kept}",
+        )
     return PrecheckResult(returned, kept)
 
 
@@ -594,7 +723,7 @@ def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
         with conn:
             log_request(conn, planned.item_id, error.usage, str(error))
             set_status(conn, planned.item_id, str(error))
-        return Filled(planned.folder_name, error.usage, error=str(error))
+        return Filled(planned.folder_name, error.usage, error=str(error), item_id=planned.item_id)
     fields = variants.check_answer(
         answer, [p.file_name for p in planned.photos], planned.folder_name, planned.post_text,
         planned.edited,
@@ -604,7 +733,9 @@ def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
         if set_status(conn, planned.item_id, None, fields):  # Картку вже взяли — бланк не чіпаємо
             save_blank(conn, planned.item_id, fields, answer)
             variants.spread(conn, planned.item_id, answer)  # сестрам — та сама відповідь
-    return Filled(planned.folder_name, usage, yellow=sum(f.yellow for f in fields))
+    return Filled(
+        planned.folder_name, usage, yellow=sum(f.yellow for f in fields), item_id=planned.item_id
+    )
 
 
 def retry_row(conn: sqlite3.Connection, item_id: int) -> sqlite3.Row | None:
@@ -627,7 +758,9 @@ def retry(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
     except ai.AiError as error:
         with conn:
             log_request(conn, planned.item_id, error.usage, str(error))
-        return Filled(planned.folder_name, error.usage, error=str(error))
+        done = Filled(planned.folder_name, error.usage, error=str(error), item_id=planned.item_id)
+        announce(conn, [done])
+        return done
     fields = variants.check_answer(
         answer, [p.file_name for p in planned.photos], planned.folder_name, planned.post_text,
         planned.edited,
@@ -640,4 +773,8 @@ def retry(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
         )
         if cursor.rowcount == 1:  # Картку тим часом схвалили чи відхилили — бланк не чіпаємо
             save_blank(conn, planned.item_id, fields, answer)
-    return Filled(planned.folder_name, usage, yellow=sum(f.yellow for f in fields))
+    done = Filled(
+        planned.folder_name, usage, yellow=sum(f.yellow for f in fields), item_id=planned.item_id
+    )
+    announce(conn, [done])
+    return done
