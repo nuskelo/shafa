@@ -191,6 +191,7 @@
   {% if hint %}<p>{{ hint }}</p>{% endif %}
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
+    {% if problem_archive %}<button name="action" value="to_archive" class="reject">В архів</button>{% endif %}
     <button name="action" value="recheck">Перевірити ще раз</button>
   </form>
 </div>

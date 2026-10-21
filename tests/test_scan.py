@@ -327,3 +327,26 @@ def test_two_sizes_in_post_are_many_items(text, problem):
         assert found == ("many_items", "У пості кілька розмірів — схоже, кілька товарів")
     else:
         assert found is None
+
+
+@pytest.mark.parametrize("code", ["many_items", "no_section"])
+def test_core017_archived_card_not_returned_by_scan(conn, posts, root, code):
+    """CORE-017: заархівована Картка «кілька товарів»/«нема розділу» лишається в Архіві (і після очищення)."""
+    from datetime import datetime, timedelta
+
+    from shafa import review
+    from shafa.robot import publish
+
+    make_folder(root, "10", ["1.jpg"])
+    run(conn, posts, root)
+    with conn:
+        conn.execute("UPDATE items SET status = ?, problem_code = ? WHERE folder_name = '10'",
+                     (Status.PROBLEM, code))  # fmt: skip
+    item = conn.execute("SELECT id FROM items WHERE folder_name = '10'").fetchone()[0]
+    assert publish.to_archive(conn, item) == "duplicate_archived"
+    run(conn, posts, root)
+    assert items(conn)["10"][:2] == (Status.ARCHIVED, code)
+    review.purge_archive(conn, datetime.fromisoformat(review.now()) + timedelta(days=8))
+    run(conn, posts, root)
+    assert items(conn)["10"][:2] == (Status.ARCHIVED, code)
+    assert conn.execute("SELECT COUNT(*) FROM items").fetchone()[0] == 1

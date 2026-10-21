@@ -108,6 +108,7 @@ MESSAGES = {
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
     "recheck_new": "Папку перевірено: усе добре, Картка чекає на ШІ",
     "recheck_problem": "Папку перевірено: проблема лишилась",
+    "no_restore": "Такий пост робот не опублікує — повертати його на перевірку не можна",
     "on_shafa_block": "Цей товар уже є на Шафі — повертати його на перевірку й публікувати вдруге не можна",
     "sticky": "Спершу перевірте Шафу і скористайтеся кнопками нижче",
     "on_shafa": "Картку перенесено в Опубліковані",
@@ -190,12 +191,18 @@ PROBLEM_KINDS = {
         "Нема ціни",
         "допиши ціну в пост, зроби новий Експорт і натисни «Перевірити ще раз»",
     ),
-    "many_items": ("Кілька товарів", "опублікуй вручну на Шафі — робот такі пости не бере"),
+    "many_items": (
+        "Кілька товарів",
+        "опублікуй вручну на Шафі або в архів — робот такі пости не бере",
+    ),
     "size_gone": (
         "Розмір прибрано",
         "якщо розмір продано — нічого не роби; якщо ні — поверни пункт у пост",
     ),
-    "no_section": ("Нема розділу", "опублікуй вручну — підходящого розділу на Шафі немає"),
+    "no_section": (
+        "Нема розділу",
+        "опублікуй вручну або в архів — підходящого розділу на Шафі немає",
+    ),
     "no_photos": ("Нема фото", "додай в папку фото .jpg, потім «Перевірити ще раз»"),
     "too_many_photos": (
         "Забагато фото",
@@ -225,7 +232,9 @@ PROBLEM_KINDS = {
 ROBOT_KIND = ("Робот", "«Перевірити ще раз» — робот спробує знову")
 OTHER_KIND = ("Проблема", "відкрий Картку")
 # Кнопки в рядку Проблеми — лише ті, що працюють на сервері: `publish.to_archive` приймає тільки ці коди.
-ARCHIVE_CODES = ("possible_duplicate", "already_published", "shafa_declined")
+ARCHIVE_CODES = (
+    "possible_duplicate", "already_published", "shafa_declined", *review.NO_RESTORE
+)  # fmt: skip
 LINK_CODES = (
     "publish_uncertain",
     "publish_error",
@@ -974,8 +983,13 @@ class App:
                     filters.append((key, label, count, href))
                 cards = self._filtered(cards, marks, chosen)
             on_shafa = {  # Картка з `shafa_id` з Архіву не повертається (як на самій Картці)
-                r[0] for r in conn.execute("SELECT id FROM items WHERE shafa_id IS NOT NULL")
-            }
+                r[0]
+                for r in conn.execute(
+                    "SELECT id FROM items WHERE shafa_id IS NOT NULL "
+                    f"OR problem_code IN ({', '.join('?' * len(review.NO_RESTORE))})",
+                    review.NO_RESTORE,
+                )
+            }  # CORE-017: «кілька товарів» / «нема розділу» теж не повертаються
             return self.page(
                 {Status.PROBLEM: "problems.html", Status.ARCHIVED: "archived.html"}.get(
                     status, "list.html"
@@ -1061,7 +1075,7 @@ class App:
                 return text(404, "Картку не знайдено")
             bad = {name for name in request.query.get("bad", []) if name in review.SPEC}
             row = conn.execute(
-                "SELECT duplicate_url, duplicate_name, shafa_url, shafa_id FROM items WHERE id = ?",
+                "SELECT duplicate_url, duplicate_name, shafa_url, shafa_id, problem_code FROM items WHERE id = ?",
                 (item_id,),
             ).fetchone()
             check = self._precheck(card)
@@ -1077,7 +1091,8 @@ class App:
                 ai_verdict=dup.verdict_text(card.problem_text),
                 duplicate_photo=self._duplicate_file(item_id).is_file(),
                 shafa_url=shafa_link(row["shafa_url"]),
-                has_shafa_id=row["shafa_id"] is not None,
+                has_shafa_id=row["shafa_id"] is not None
+                or row["problem_code"] in review.NO_RESTORE,
                 my_items=MY_ITEMS,
                 sticky=STICKY,
                 sticky_titles=STICKY_TITLES,
@@ -1547,6 +1562,10 @@ def problem_actions(code: str | None) -> tuple[bool, bool]:
     `publish_uncertain`/`publish_error` вирішуються посиланням на Картці, решта STICKY — без повтору."""
     if code in LINK_CODES:
         return False, False
+    if (
+        code in review.NO_RESTORE
+    ):  # CORE-017: і в архів, і «Перевірити ще раз» (пост могли виправити)
+        return True, True
     if code in ARCHIVE_CODES:
         return True, False
     return False, True

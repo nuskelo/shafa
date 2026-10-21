@@ -1140,10 +1140,11 @@ def other_item(conn: sqlite3.Connection, item_id: int) -> str:
 
 
 def to_archive(conn: sqlite3.Connection, item_id: int) -> str:
-    """«Справді дубль → в Архів» (і для «пост уже опубліковано», і для відхилених Шафою, ROBOT-011):
-    прибирається через 7 днів."""
+    """«Справді дубль → в Архів» (і для «пост уже опубліковано», і для відхилених Шафою, ROBOT-011,
+    і для «кілька товарів» / «нема розділу», CORE-017): прибирається через 7 днів."""
     done = _decide(
-        conn, item_id, ("possible_duplicate", "already_published", listings_mod.DECLINED_CODE),
+        conn, item_id, ("possible_duplicate", "already_published", listings_mod.DECLINED_CODE,
+                        *review.NO_RESTORE),
         "status = ?, archived_at = ?", (Status.ARCHIVED, now()),
     )  # fmt: skip
     return "duplicate_archived" if done else "stale"

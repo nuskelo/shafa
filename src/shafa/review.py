@@ -513,6 +513,10 @@ POST_CHANGED, PHOTOS_CHANGED = "post_changed", "photos_changed"
 SEASON_CHANGED = "season_changed"  # CORE-016: сезон змінено правилом, Картка була схвалена
 NOTE_CODES = (POST_CHANGED, PHOTOS_CHANGED, SEASON_CHANGED)
 
+# CORE-017: проблеми, які робот не розв'яже; після «В архів» їх не повертають на перевірку
+NO_RESTORE = ("many_items", "no_section")
+NO_RESTORE_MSG = "no_restore"
+
 ON_SHAFA = "on_shafa_block"  # ROBOT-011: у Картки є `shafa_id` — товар уже на Шафі
 
 
@@ -528,6 +532,14 @@ def act(conn: sqlite3.Connection, item_id: int, action: str, root: Path | None =
     source, target, done = ACTIONS[action]
     if action in ("approve", "restore") and _on_shafa(conn, item_id):
         return ON_SHAFA  # ROBOT-011: що вже опубліковано, у чергу публікації не повертається
+    if (
+        action == "restore"
+        and conn.execute(
+            f"SELECT 1 FROM items WHERE id = ? AND problem_code IN ({', '.join('?' * len(NO_RESTORE))})",
+            (item_id, *NO_RESTORE),
+        ).fetchone()
+    ):
+        return NO_RESTORE_MSG  # CORE-017: пост із кількома товарами не можна схвалити
     if action == "approve":
         card = load_card(conn, item_id)
         block = card.approve_block() if card and card.status == source else None
