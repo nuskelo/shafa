@@ -206,6 +206,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .duplicate { display: flex; gap: 12px; align-items: flex-start; margin: 8px 0; }
 .duplicate img { width: 160px; max-width: 40%; height: auto; border-radius: 6px; }
 
+.badge.changed { background: #fff4d6; border-color: #d9a400; color: #7a5b00; }
+p.changed-note { margin: 0 0 1rem; padding: 0.5rem 0.8rem; border: 2px solid #d9a400; border-radius: 6px; background: #fff4d6; color: #5c4400; }
 .badge.old-rules { background: #e6e6e6; color: #555; }
 .badge.robot-error { background: #fdecea; border-color: var(--red); color: var(--red); }
 p.robot-error { margin: 0 0 1rem; padding: 0.5rem 0.8rem; border: 2px solid var(--red); border-radius: 6px; background: #fdecea; color: var(--red); font-weight: 600; }

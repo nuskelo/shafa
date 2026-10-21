@@ -56,6 +56,9 @@
   Папка {{ card.folder_name }}{% if card.post_id %} · пост {{ card.post_id }}{% endif %}{% if card.post_date %} від {{ card.post_date[:10] }}{% endif %}
   {% if card.status == "archived" and card.archived_at %} · в Архіві, видалиться {{ deletion_date(card.archived_at).strftime("%d.%m.%Y") }}{% endif %}
 </p>
+{% if card.status == "review" and card.problem_code in ("post_changed", "photos_changed") %}
+<p class="changed-note">{{ card.problem_text }}</p>
+{% endif %}
 
 <div class="card">
   <section class="left">
