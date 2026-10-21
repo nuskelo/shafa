@@ -35,7 +35,7 @@ from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, list_fo
 from shafa.robot import browser, control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
-from shafa.scan import STICKY, rescan_folder, scan
+from shafa.scan import STICKY, scan
 
 HEALTH_EVERY = 30  # секунд: «Перевірити ще раз» не частіше
 COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
@@ -978,25 +978,13 @@ class App:
             if action == "ai_retry":
                 message = self.ai_retry(conn, item_id)
                 return redirect(f"{back}?msg={message}")
-            if action == "recheck" and card.problem_code == "photos_missing":
-                if review.photos_retry(conn, item_id):
-                    return redirect(f"/{Status.REVIEW}?msg=photos_retry")
-                return redirect(f"{back}?msg=stale")
-            if action == "recheck" and (card.problem_code or "").startswith("robot_"):
-                if review.robot_retry(conn, item_id):
-                    return redirect(f"/{Status.PROBLEM}?msg=robot_retry")
-                return redirect(f"{back}?msg=stale")
-            if action == "recheck" and card.problem_code == fill.STALE_RULES:
-                fill.recheck(conn, [item_id])
-                return redirect(f"/{Status.REVIEW}?msg=recheck_done")
-            if action == "recheck" and card.problem_code in STICKY:
-                return redirect(f"{back}?msg=sticky")
             if action == "recheck":
-                folders = list_folders(self.root, self.channel_id)
-                status = rescan_folder(conn, card.folder_name, folders)
-                if status == Status.NEW:
-                    return redirect(f"/{Status.PROBLEM}?msg=recheck_new")
-                return redirect(f"{back}?msg={'recheck_problem' if status else 'stale'}")
+                result = review.recheck(conn, item_id, self.root, self.channel_id)
+                if result.code in ("photos_retry", "recheck_done"):
+                    return redirect(f"/{Status.REVIEW}?msg={result.code}")
+                if result.code in ("robot_retry", "recheck_new"):
+                    return redirect(f"/{Status.PROBLEM}?msg={result.code}")
+                return redirect(f"{back}?msg={result.code}")
             return text(400, "Невідома дія")
         finally:
             conn.close()

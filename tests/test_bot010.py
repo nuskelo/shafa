@@ -191,7 +191,8 @@ def test_more_than_ten_problems_are_cut(conn, data, tg, make_bot):
         problem(conn, str(n))
     step(clock, bot)
     [text] = sent(tg)
-    assert text.count("• ") == 10 and text.endswith("…і ще 3")
+    assert text.count("• ") == 10 and "…і ще 3" in text
+    assert text.endswith("Кнопки — для перших 5, решту — у програмі.")  # BOT-011
 
 
 def test_problem_that_was_fixed_and_came_back_is_new_again(conn, data, tg, make_bot):

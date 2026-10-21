@@ -53,7 +53,7 @@ import pillow_heif
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import changes, config, rules, site
-from shafa.bot import alerts, report
+from shafa.bot import actions, alerts, report
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
@@ -662,7 +662,12 @@ class Bot:
             if not alerts.enabled():
                 alerts.forget(data_dir)
                 return
-            alerts.run(self.conn, data_dir, now_, lambda text: self.say(owner, text) is not None)
+            alerts.run(
+                self.conn, data_dir, now_,
+                lambda text, markup=None, album_of=None: actions.deliver(
+                    self, owner, text, markup, album_of
+                ),
+            )  # fmt: skip
         except Exception as error:  # noqa: BLE001
             self.log(f"Тривоги: {type(error).__name__}: {str(error)[:200]}")
 
@@ -756,10 +761,14 @@ class Bot:
     def _callback(self, update_id: int, query: dict) -> None:
         message = query.get("message") or {}
         chat = message.get("chat")
+        action, _, raw_id = str(query.get("data") or "").partition(":")
+        if action in actions.ACTIONS:  # BOT-011: кнопки тривог — лише Власнику, свої правила
+            self._mark(update_id)
+            actions.handle(self, query)
+            return
         if not self._allowed(chat, query.get("from")):
             self._mark(update_id)
             return
-        action, _, raw_id = str(query.get("data") or "").partition(":")
         if action in (PUBLISH_ALL, CANCEL_ALL):
             self._all(update_id, query, chat["id"], action)
             return
