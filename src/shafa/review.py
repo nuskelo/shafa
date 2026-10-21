@@ -10,7 +10,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from shafa import ai, catalog, rules, variants
 from shafa.catalog import Kind
@@ -587,6 +587,42 @@ def photos_retry(conn: sqlite3.Connection, item_id: int) -> bool:
             (Status.REVIEW, now(), item_id, Status.PROBLEM),
         )
     return cursor.rowcount == 1
+
+
+class Recheck(NamedTuple):
+    code: str  # код повідомлення (див. `web.MESSAGES`)
+    status: str | None  # статус Картки після перевірки; None — Картки немає чи нічого не зроблено
+
+
+def recheck(conn: sqlite3.Connection, item_id: int, root: Path, channel_id: str | None) -> Recheck:
+    """«Перевірити ще раз» для Картки: що саме робиться, залежить від `problem_code`.
+
+    Спільне для екрана й бота (BOT-011). Проблеми публікації (`STICKY`) тут не рушаться — їх вирішує
+    людина окремими діями. `channel_id` — канал Експорту для назв папок (як у `list_folders`)."""
+    from shafa import fill  # fill імпортує review
+    from shafa.folders import list_folders
+    from shafa.scan import STICKY, rescan_folder
+
+    card = load_card(conn, item_id)
+    if card is None:
+        return Recheck("stale", None)
+    code = card.problem_code or ""
+    if code == "photos_missing":
+        done = photos_retry(conn, item_id)
+        return Recheck("photos_retry", Status.REVIEW) if done else Recheck("stale", None)
+    if code.startswith("robot_"):
+        done = robot_retry(conn, item_id)
+        return Recheck("robot_retry", Status.APPROVED) if done else Recheck("stale", None)
+    if code == fill.STALE_RULES:
+        fill.recheck(conn, [item_id])
+        after = conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()
+        return Recheck("recheck_done", after["status"] if after else None)
+    if code in STICKY:
+        return Recheck("sticky", card.status)
+    status = rescan_folder(conn, card.folder_name, list_folders(root, channel_id))
+    if status == Status.NEW:
+        return Recheck("recheck_new", status)
+    return Recheck("recheck_problem" if status else "stale", status)
 
 
 def purge_archive(conn: sqlite3.Connection, today: datetime | None = None) -> list[int]:
