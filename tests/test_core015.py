@@ -212,7 +212,7 @@ def test_note_shows_on_card_and_list(conn, root, tmp_path):
         return app.handle(request).body.decode("utf-8")
 
     assert "Пост змінено 21.10.2026" in get(f"/item/{item_id}")
-    assert 'class="badge changed"' in get("/review")
+    assert "mark mark-warn changed" in get("/review") and "Пост змінено" in get("/review")
 
 
 # --- Бот: edited_channel_post ---

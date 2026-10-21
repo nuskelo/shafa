@@ -479,7 +479,7 @@ def test_panel_while_rehearsing_and_without_approved(conn, root, app, spawner, l
     with lock.hold("rehearse", lock_file):
         page = html(get(app, "/review"))
         assert "Йде пробний прогін" in page
-        assert "Старт" not in page and "Перевірити завтрашні" not in page
+        assert 'value="start"' not in page and "Перевірити завтрашні" not in page
         assert location(post(app, "/robot", action="start", back="/review")).endswith(
             "msg=robot_cannot_start"
         )

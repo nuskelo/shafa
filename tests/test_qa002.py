@@ -119,7 +119,7 @@ def test_list_marks_cards_without_text(conn, app, root):
     make_required(BOOTS, "Сезон")
     add_card(conn, root, blank=NO_SEASON, text=TEXT)
     page = html(get(app, "/review"))
-    assert "робот не зможе" in page
+    assert "Робот не зможе опублікувати" in page
     assert "Обов'язкові поля" not in page  # у списку лише позначка
 
 
@@ -127,7 +127,7 @@ def test_list_marks_notes_as_count(conn, app, root):
     blank = [f for f in BLANK if f.name != "type"] + [ai.Field("type", "Мартінси")]
     add_card(conn, root, blank=blank, text=TEXT)
     page = html(get(app, "/review"))
-    assert "пропуски: 1" in page and "робот не зможе" not in page
+    assert "1 пропуск" in page and "Робот не зможе" not in page
 
 
 # --- Схвалення ---

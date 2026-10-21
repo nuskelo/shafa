@@ -144,8 +144,8 @@ def test_tabs_with_counts(conn, app, root, item_id):
     assert 'href="/review" class="tab current">На перевірку <span class="count">1</span>' in page
     assert 'Схвалені <span class="count">1</span>' in page
     assert f'href="/item/{item_id}"' in page
-    assert "Жовтих: 3" in page
-    assert "1380 грн · Чоловічий одяг / Взуття / Кросівки" in page
+    assert "3 жовті · 2 пропуски" in page
+    assert "1380 грн" in page and "Чоловічий одяг · Взуття · Кросівки" in page
 
 
 def test_search(conn, app, root, item_id):
