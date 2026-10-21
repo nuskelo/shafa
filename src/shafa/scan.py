@@ -4,12 +4,12 @@ import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
 
-from shafa import catalog
+from shafa import catalog, variants
 from shafa.bot.hashtag import accessory_group, item_kind
 from shafa.db import Status, now
 from shafa.export import Post
-from shafa.folders import Folder, is_old, natural_key
-from shafa.rules import many_items, many_sizes, price_from_text
+from shafa.folders import Folder, base_name, is_old, natural_key, variant_name, variant_size
+from shafa.rules import many_items, many_sizes, price_from_text, size_variants
 
 MAX_PHOTOS = 10
 
@@ -108,8 +108,8 @@ def find_problem(
         return "no_text", f"У поста {post_id} немає тексту"
     if price_from_text(texts[post_id]) is None:
         return "no_price", f"У поста {post_id} немає ціни"
-    if problem := text_problem(texts[post_id]):
-        return problem
+    if not size_variants(texts[post_id]) and (problem := text_problem(texts[post_id])):
+        return problem  # пост з кількома розмірами однозначно — Картка на розмір (CORE-014)
     if not folder.photos:
         return "no_photos", "У папці немає фото .jpg"
     if len(folder.photos) > MAX_PHOTOS:
@@ -184,6 +184,50 @@ def _save_item(conn: sqlite3.Connection, folder: Folder, problem: tuple[str, str
     )
 
 
+def _mark_gone(conn: sqlite3.Connection, folder_name: str, sizes: set[str]) -> None:
+    """Варіанти папки, чийого розміру в пості вже немає, → «Проблеми» (лише `new`/`problem`;
+    перевірені — `changes.text_changed`)."""
+    prefix = variant_name(folder_name, "")
+    for row in conn.execute(
+        "SELECT id, folder_name, status, problem_code FROM items WHERE folder_name LIKE ? || '%'",
+        (prefix,),
+    ).fetchall():
+        size = variant_size(row["folder_name"])
+        if size in sizes or not touchable(row["status"], row["problem_code"]):
+            continue
+        if row["problem_code"] == variants.GONE:
+            continue
+        conn.execute(
+            "UPDATE items SET status = ?, problem_code = ?, problem_text = ?, updated_at = ? "
+            "WHERE id = ?",
+            (Status.PROBLEM, variants.GONE, variants.GONE_TEXT.format(size=size), now(), row["id"]),
+        )
+
+
+def _save_folder(
+    conn: sqlite3.Connection, folder: Folder, problem: tuple[str, str] | None, text: str | None
+) -> None:
+    """Папка → Картка; пост з кількома розмірами (CORE-014) → Картка на кожен розмір.
+
+    Стара Картка без суфікса стає першим варіантом (`variants.split_card`). Якщо її вже взяли в
+    роботу (на перевірці, схвалена, опублікована) — варіантів не робимо: спершу її перерахують
+    правила (`many_items`), тоді розділять.
+    """
+    found = size_variants(text) if text else None
+    if found:
+        base = conn.execute("SELECT id FROM items WHERE folder_name = ?", (folder.name,)).fetchone()
+        if base is not None and not variants.split_card(conn, base["id"]):
+            found = None
+    if not found:
+        _save_item(conn, folder, problem)
+        _mark_gone(conn, folder.name, set())
+        return
+    for variant in found:
+        name = variant_name(folder.name, variant.size)
+        _save_item(conn, Folder(name, folder.post_id, folder.photos), problem)
+    _mark_gone(conn, folder.name, {v.size for v in found})
+
+
 def _twins(folders: list[Folder]) -> dict[int, list[str]]:
     twins: dict[int, list[str]] = defaultdict(list)
     for folder in folders:
@@ -198,7 +242,7 @@ def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
     ).fetchall()
     stamp = now()
     for row in rows:
-        if row["folder_name"] in present or row["problem_code"] == "folder_missing":
+        if base_name(row["folder_name"]) in present or row["problem_code"] == "folder_missing":
             continue
         if is_old(row["folder_name"]):  # фото старого поста — у теці даних, не в Головній
             continue
@@ -226,7 +270,8 @@ def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]
         twins = _twins(folders)
         old = _old_posts(conn)
         for folder in folders:
-            _save_item(conn, folder, folder_problem(folder, texts, twins, old))
+            problem = folder_problem(folder, texts, twins, old)
+            _save_folder(conn, folder, problem, texts.get(folder.post_id))
         _mark_missing(conn, {f.name for f in folders})
 
     from shafa import changes  # changes бере правила звідси
@@ -261,7 +306,7 @@ def rescan_folder(conn: sqlite3.Connection, folder_name: str, folders: list[Fold
             from shafa import borh  # borh бере правила звідси
 
             return borh.recheck(conn, row["id"])
-        folder = next((f for f in folders if f.name == folder_name), None)
+        folder = next((f for f in folders if f.name == base_name(folder_name)), None)
         if folder is None:
             conn.execute(
                 """
@@ -272,6 +317,7 @@ def rescan_folder(conn: sqlite3.Connection, folder_name: str, folders: list[Fold
                 (Status.PROBLEM, now(), row["id"]),
             )
             return Status.PROBLEM
-        problem = folder_problem(folder, _texts(conn), _twins(folders), _old_posts(conn))
-        _save_item(conn, folder, problem)
+        texts = _texts(conn)
+        problem = folder_problem(folder, texts, _twins(folders), _old_posts(conn))
+        _save_folder(conn, folder, problem, texts.get(folder.post_id))
         return conn.execute("SELECT status FROM items WHERE id = ?", (row["id"],)).fetchone()[0]
