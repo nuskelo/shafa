@@ -25,11 +25,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from shafa import catalog, config, dup, review, rules
+from shafa import catalog, config, dup, review, rules, variants
 from shafa.bot.presence import GONE
 from shafa.db import Status, now
 from shafa.fill import STALE_RULES
-from shafa.folders import PUBLISHED_DIR, is_old, item_folder
+from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, variant_size
 from shafa.robot import listings as listings_mod
 from shafa.robot import lock
 from shafa.robot.browser import NO_LOGIN
@@ -281,12 +281,15 @@ def already_published(conn: sqlite3.Connection, item_id: int, post_id: int | Non
     `shafa_id`, рахується опублікованою, навіть коли Шафа її відхилила (ROBOT-011)."""
     if post_id is None:
         return None
-    row = conn.execute(
-        "SELECT folder_name FROM items WHERE post_id = ? AND id != ? "
-        "AND (status IN (?, ?) OR shafa_id IS NOT NULL)",
+    own = conn.execute("SELECT folder_name FROM items WHERE id = ?", (item_id,)).fetchone()
+    sisters = {r["id"] for r in variants.sisters(conn, own[0], post_id)} if own else set()
+    rows = conn.execute(
+        "SELECT id, folder_name FROM items WHERE post_id = ? AND id != ? "
+        "AND (status IN (?, ?) OR shafa_id IS NOT NULL) ORDER BY id",
         (post_id, item_id, Status.PUBLISHED, Status.PUBLISHING),
-    ).fetchone()
-    return row[0] if row else None
+    ).fetchall()
+    # CORE-014: сестра-розмір того самого поста — окреме оголошення, не повтор
+    return next((r["folder_name"] for r in rows if r["id"] not in sisters), None)
 
 
 def card_duplicate(
@@ -363,9 +366,11 @@ def move_published(root: Path, folder_name: str) -> str | None:
     """Папка опублікованого → `<Головна>/Опубліковано/`. Повертає нотатку, якщо не вийшло (D1).
 
     Старий пост (CORE-005) папки в Головній не має: його фото лишається в теці даних.
+    Варіанти поста (CORE-014) ділять одну папку — див. `move_when_done`.
     """
     if is_old(folder_name):
         return None
+    folder_name = base_name(folder_name)
     source = root / folder_name
     target = root / PUBLISHED_DIR / folder_name
     if target.exists():
@@ -380,6 +385,15 @@ def move_published(root: Path, folder_name: str) -> str | None:
     return None
 
 
+def move_when_done(conn: sqlite3.Connection, root: Path, item_id: int) -> str | None:
+    """Папку опублікованої Картки — в «Опубліковано». Варіанти одного поста (CORE-014) ділять
+    папку: вона переїжджає, лише коли опубліковано всіх сестер (інакше решта лишилась би без фото)."""
+    row = conn.execute("SELECT folder_name, post_id FROM items WHERE id = ?", (item_id,)).fetchone()
+    if row is None or not variants.all_published(conn, row[0], row[1]):
+        return None
+    return move_published(root, row[0])
+
+
 def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> list[str]:
     """Видалити з «Опубліковано» папки Карток, опублікованих понад 3 дні тому.
 
@@ -389,10 +403,19 @@ def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> li
         return []
     cutoff = (today - DELETE_AFTER).astimezone(UTC).isoformat(timespec="seconds")
     removed = []
-    for (name,) in conn.execute(
-        "SELECT folder_name FROM items WHERE status = ? AND published_at < ?",
+    for name, post_id in conn.execute(
+        "SELECT folder_name, post_id FROM items WHERE status = ? AND published_at < ?",
         (Status.PUBLISHED, cutoff),
-    ):
+    ).fetchall():
+        if variant_size(name) is not None:  # спільна папка сестер (CORE-014): коли пізніша — теж
+            later = conn.execute(
+                "SELECT 1 FROM items WHERE post_id = ? AND folder_name LIKE ? || '%' "
+                "AND purged_at IS NULL AND (status != ? OR published_at >= ?)",
+                (post_id, f"{base_name(name)}~", Status.PUBLISHED, cutoff),
+            ).fetchone()
+            if later:
+                continue
+            name = base_name(name)
         folder = root / PUBLISHED_DIR / name
         if folder.is_dir() and folder.parent == root / PUBLISHED_DIR:
             shutil.rmtree(folder)
@@ -805,7 +828,11 @@ class Run:
             "SELECT duplicate_ok_at FROM items WHERE id = ?", (card.id,)
         ).fetchone()[0]  # «Це інший товар» — Продавчиня вже перевірила
         similar = None  # примітка «схоже, але ШІ: інша пара» — піде в Картку при публікації
-        if not checked and (duplicate := card_duplicate(card, listings)):
+        others = variants.sister_shafa_ids(
+            self.conn, card.id
+        )  # сестри-розміри — не дублі (CORE-014)
+        mine = [x for x in listings if x.id not in others] if others else listings
+        if not checked and (duplicate := card_duplicate(card, mine)):
             go, similar = self._similar(report, card, duplicate)
             if not go:
                 return None
@@ -909,7 +936,7 @@ class Run:
             report.notes += [f"Пост {card.post_id}: {note}" for note in notes]
             if result.errors:
                 report.notes.append(f"Пост {card.post_id}: Шафа додала зауваження: {result.errors}")
-            if note := move_published(self.root, card.folder_name):
+            if note := move_when_done(self.conn, self.root, card.id):
                 report.notes.append(note)
             return True
         shot = self._shot(card, "після-кліку")
@@ -984,8 +1011,7 @@ def on_shafa(conn: sqlite3.Connection, root: Path, item_id: int, link: str) -> s
     )  # fmt: skip
     if not done:
         return "stale"
-    folder = conn.execute("SELECT folder_name FROM items WHERE id = ?", (item_id,)).fetchone()[0]
-    move_published(root, folder)
+    move_when_done(conn, root, item_id)
     return "on_shafa"
 
 

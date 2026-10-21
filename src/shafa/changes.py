@@ -14,9 +14,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from shafa import ai, fill, review, rules, scan
+from shafa import ai, fill, review, rules, scan, variants
 from shafa.db import Status, now
-from shafa.folders import Folder, is_old
+from shafa.folders import Folder, base_name, is_old
 
 LOG_NAME = "post-changes.json"  # у теці даних: зміни постів, що вже на Шафі (для звіту, BOT-009)
 LOG_KEEP = 200
@@ -121,7 +121,8 @@ def text_changed(
     if row is None or row["text"] == text or (row["source"] == "export" and not allow_old):
         return TextChange()
     rows = conn.execute(
-        "SELECT id, status FROM items WHERE post_id = ? AND purged_at IS NULL ORDER BY id",
+        "SELECT id, folder_name, status FROM items WHERE post_id = ? AND purged_at IS NULL "
+        "ORDER BY id",
         (post_id,),
     ).fetchall()
     seen = [r for r in rows if r["status"] in (*FIXED, Status.PUBLISHED)]
@@ -137,6 +138,9 @@ def text_changed(
             if old is None:
                 continue
             if status == Status.PUBLISHED:
+                if gone := variants.gone(item["folder_name"], text):  # CORE-014: статус той самий
+                    published.append((post_id, gone[1]))
+                    continue
                 after = review.load_card(conn, item_id)
                 if after is not None:
                     published.append((post_id, _diff(old, after)))
@@ -144,7 +148,7 @@ def text_changed(
             problem = None
             if _has_blank(conn, item_id):
                 result = fill.recalc(conn, item_id, text)
-                problem = result.problem
+                problem = result.problem  # і «розмір прибрано з поста» (CORE-014)
                 needs = (not problem or problem[0] != "many_items") and ai.needs_ai(
                     result.version, result.answer, text
                 )
@@ -205,7 +209,7 @@ def sync_photos(
             if is_old(row["folder_name"]):  # фото старих постів — у теці даних, не в Головній
                 continue
             item_id, status = row["id"], row["status"]
-            folder = by_name.get(row["folder_name"])
+            folder = by_name.get(base_name(row["folder_name"]))  # варіанти ділять папку (CORE-014)
             if folder is None or not folder.photos:
                 why = NO_FOLDER if folder is None else NO_PHOTOS
                 conn.execute(
