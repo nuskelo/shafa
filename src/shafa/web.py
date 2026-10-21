@@ -28,7 +28,21 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import jinja2
 from PIL import UnidentifiedImageError
 
-from shafa import ai, batch, catalog, config, db, dup, fill, health, options, photos, review, site
+from shafa import (
+    ai,
+    batch,
+    catalog,
+    config,
+    db,
+    dup,
+    fill,
+    health,
+    options,
+    photos,
+    review,
+    rules,
+    site,
+)
 from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, list_folders, old_root
@@ -74,6 +88,9 @@ MESSAGES = {
     "saved": "Збережено",
     "approved": "Схвалено",
     "rejected": f"Відхилено — Картка в Архіві {review.ARCHIVE_DAYS} днів",
+    "approved_done": "Схвалено. Усе переглянуто — більше Карток у цьому списку немає",
+    "rejected_done": f"Відхилено — Картка в Архіві {review.ARCHIVE_DAYS} днів. "
+    "Усе переглянуто — більше Карток у цьому списку немає",
     "unapproved": "Схвалення скасовано — Картка знову на перевірці",
     "restored": "Повернуто на перевірку",
     "section_yellow": "Схвалити не можна: розділ жовтий — змініть його або натисніть «Так, вірно»",
@@ -810,7 +827,8 @@ class App:
     def panel(self, request: Request) -> Response:
         conn = self.connect()
         try:
-            html = self.env.get_template("panel.html").render(
+            template = "panel_mini.html" if request.arg("mini") else "panel.html"
+            html = self.env.get_template(template).render(
                 token=self.token, local=local_time, back=safe_back(request.arg("back")),
                 fake=self.fake_shafa, **self._panel_context(conn),
             )  # fmt: skip
@@ -888,7 +906,7 @@ class App:
             checks = {c.id: self._precheck(c) for c in cards}
             marks = {c.id: card_mark(c, checks[c.id]) for c in cards}
             filters = []
-            chosen = ""
+            chosen = self._chosen(status, request.arg("f"))
             if status == Status.REVIEW:  # UI-004: «Усі / Треба глянути / Готові»
                 warn = sum(1 for m in marks.values() if m.tone != "ok")
                 for key, label, count in (
@@ -899,9 +917,7 @@ class App:
                     args = {k: v for k, v in (("f", key), ("q", query)) if v}
                     href = f"/{status}" + (f"?{urlencode(args)}" if args else "")
                     filters.append((key, label, count, href))
-                chosen = request.arg("f") if request.arg("f") in ("warn", "ok") else ""
-                if chosen:
-                    cards = [c for c in cards if (marks[c.id].tone != "ok") == (chosen == "warn")]
+                cards = self._filtered(cards, marks, chosen)
             return self.page(
                 "list.html",
                 **self._chrome(conn, request),
@@ -924,6 +940,55 @@ class App:
             return Precheck(None, [])
         return precheck(card, self.root)
 
+    @staticmethod
+    def _chosen(status: str, value: str) -> str:
+        """Фільтр списку: лише в «На перевірку», лише `warn`/`ok`."""
+        return value if status == Status.REVIEW and value in ("warn", "ok") else ""
+
+    @staticmethod
+    def _filtered(cards: list[review.Card], marks: dict, chosen: str) -> list[review.Card]:
+        if not chosen:
+            return cards
+        return [c for c in cards if (marks[c.id].tone != "ok") == (chosen == "warn")]
+
+    def _from(self, request: Request, card: review.Card) -> str:
+        """Список, з якого відкрили Картку (UI-005): `from` у адресі, інакше сторінка, з якої прийшли
+        (Referer), інакше вкладка самої Картки."""
+        for raw, hosts in (
+            (request.arg("from"), None),
+            (request.headers.get("referer", ""), self._allowed_hosts()),
+        ):
+            if found := safe_list(raw, hosts):
+                return found
+        return f"/{card.status}" if card.status in LIST_TABS else "/" + Status.REVIEW
+
+    def _nav(self, conn, card: review.Card, from_: str) -> "Nav":
+        """Верх Картки: куди «назад», «3 з 8» і яка Картка наступна — у тому ж списку (фільтр, пошук)."""
+        url = urlsplit(from_)
+        status = Status(url.path.strip("/"))
+        nav = Nav(from_, TAB_TITLES[status])
+        if status not in CARD_TABS:  # «Опубліковані» без порядку й фільтрів
+            return nav
+        query = parse_qs(url.query)
+        text_, chosen = (
+            (query.get("q") or [""])[0],
+            self._chosen(status, (query.get("f") or [""])[0]),
+        )
+        cards = review.list_tab(conn, status, text_)
+        if chosen:
+            marks = {c.id: card_mark(c, self._precheck(c)) for c in cards}
+            cards = self._filtered(cards, marks, chosen)
+        ids = [c.id for c in cards]
+        if card.id in ids:
+            at = ids.index(card.id)
+            nav.index, nav.total = at + 1, len(ids)
+            following = ids[at + 1 : at + 2]
+        else:  # Картка вже не підпадає під фільтр (напр., підтвердила останнє жовте) — далі перша
+            following = ids[:1]
+        if following:
+            nav.next_url = item_url(following[0], from_)
+        return nav
+
     def card_page(self, item_id: int, request: Request) -> Response:
         conn = self.connect()
         try:
@@ -936,6 +1001,8 @@ class App:
                 (item_id,),
             ).fetchone()
             check = self._precheck(card)
+            from_ = self._from(request, card)
+            block = card.approve_block() if card.status == Status.REVIEW else None
             return self.page(
                 "card.html",
                 **self._chrome(conn, request),
@@ -955,23 +1022,33 @@ class App:
                 bad=bad,
                 bad_input=review.BAD_INPUT,
                 message=MESSAGES.get(request.arg("msg")),
-                block=MESSAGES.get(card.approve_block() or ""),
+                block=MESSAGES.get(block or ""),
                 sections=catalog.sections(),
                 hint=PROBLEM_HINTS.get(card.problem_code or ""),
                 deletion_date=review.deletion_date,
                 editable=card.status == Status.REVIEW,
+                nav=self._nav(conn, card, from_),
+                layout=card_layout(card, bad, block),
+                attention=attention(card),
+                post_price=rules.price_from_text(card.post_text) if card.post_text else None,
+                was=was_values(card),
             )
         finally:
             conn.close()
 
     def card_post(self, item_id: int, request: Request) -> Response:
         action = (request.form.get("action") or [""])[0]
+        from_ = safe_list((request.form.get("from") or [""])[0])  # звідки відкрили (UI-005)
+        following = safe_next((request.form.get("next") or [""])[0])
         conn = self.connect()
         try:
             card = review.load_card(conn, item_id)
             if card is None:
                 return text(404, "Картку не знайдено")
-            back = f"/item/{item_id}"
+
+            def back(**params) -> str:
+                return card_url(item_id, from_, **params)
+
             if action in ("save", "approve", "folder_order") or action.startswith("confirm:"):
                 form, confirm = dict(request.form), action.removeprefix("confirm:")
                 if action == "folder_order":  # порядок фото як у папці — і це підтвердження
@@ -980,14 +1057,20 @@ class App:
                     confirm = "photo_order"
                 bad = review.save(conn, card, form, confirm or None)
                 if bad:
-                    return redirect(back + "?" + urlencode({"msg": "bad", "bad": bad}, doseq=True))
+                    return redirect(back(msg="bad", bad=bad))
                 if action != "approve":
-                    return redirect(back + "?msg=saved")
+                    return redirect(back(msg="saved"))
             if action in review.ACTIONS:
                 message = review.act(conn, item_id, action, self.root)
                 if message in review.APPROVE_BLOCKS or message in ("stale", review.ON_SHAFA):
-                    return redirect(f"{back}?msg={message}")
-                return redirect(f"/{card.status}?msg={message}")
+                    return redirect(back(msg=message))
+                if from_ is None:  # старий виклик без списку
+                    return redirect(f"/{card.status}?msg={message}")
+                if message in ("approved", "rejected"):  # «Схвалити і далі» / «Відхилити»
+                    if following:
+                        return redirect(with_msg(following, message))
+                    message += "_done"
+                return redirect(with_msg(from_, message))
             decisions = {
                 "on_shafa": lambda: publish.on_shafa(
                     conn, self.root, item_id, (request.form.get("shafa_link") or [""])[0]
@@ -999,25 +1082,25 @@ class App:
             if action in decisions:
                 message = decisions[action]()
                 if message in ("stale", "bad_link", "listing_found"):
-                    return redirect(f"{back}?msg={message}")
+                    return redirect(back(msg=message))
                 return redirect(f"/{Status.PROBLEM}?msg={message}")
             if action == "refill":
                 if not fill.mark_refill(conn, [item_id]):
-                    return redirect(f"{back}?msg=stale")
+                    return redirect(back(msg="stale"))
                 started = self._start(self._send_refill, "перезаповнюю: відправляю на ШІ…")
                 return redirect(
                     f"/{Status.REVIEW}?msg={'refill_started' if started else 'ai_busy'}"
                 )
             if action == "ai_retry":
                 message = self.ai_retry(conn, item_id)
-                return redirect(f"{back}?msg={message}")
+                return redirect(back(msg=message))
             if action == "recheck":
                 result = review.recheck(conn, item_id, self.root, self.channel_id)
                 if result.code in ("photos_retry", "recheck_done"):
                     return redirect(f"/{Status.REVIEW}?msg={result.code}")
                 if result.code in ("robot_retry", "recheck_new"):
                     return redirect(f"/{Status.PROBLEM}?msg={result.code}")
-                return redirect(f"{back}?msg={result.code}")
+                return redirect(back(msg=result.code))
             return text(400, "Невідома дія")
         finally:
             conn.close()
@@ -1154,6 +1237,148 @@ def safe_back(path: str) -> str:
 def shafa_link(url: str | None) -> str | None:
     """Посилання з бази — у сторінку лише якщо це справді shafa.ua (не `javascript:`)."""
     return url if url and url.startswith("https://shafa.ua/") else None
+
+
+LIST_TABS = (*CARD_TABS, Status.PUBLISHED)
+
+
+def item_url(item_id: int, from_: str | None = None) -> str:
+    return f"/item/{item_id}" + (f"?{urlencode({'from': from_})}" if from_ else "")
+
+
+def card_url(item_id: int, from_: str | None = None, **params) -> str:
+    """Адреса Картки з повідомленням; `from` лише коли форма його принесла (UI-005)."""
+    args = ({"from": from_} if from_ else {}) | params
+    return f"/item/{item_id}" + (f"?{urlencode(args, doseq=True)}" if args else "")
+
+
+def with_msg(url: str, message: str) -> str:
+    return f"{url}{'&' if '?' in url else '?'}{urlencode({'msg': message})}"
+
+
+def safe_list(value: str, hosts: set[str] | None = None) -> str | None:
+    """Адреса нашого списку: `/review?f=warn&q=…` (або повна з нашим `Host` — з Referer).
+
+    Усе інше (чужий сайт, інший шлях, зайві параметри) — None; інші параметри вирізаються."""
+    if "\\" in value:
+        return None
+    url = urlsplit(value)
+    if hosts is not None:
+        if url.scheme != "http" or url.netloc not in hosts:
+            return None
+    elif url.scheme or url.netloc:
+        return None
+    name = url.path.strip("/")
+    if url.path != f"/{name}" or name not in LIST_TABS:
+        return None
+    query = parse_qs(url.query)
+    args = {}
+    if name == Status.REVIEW and (query.get("f") or [""])[0] in ("warn", "ok"):
+        args["f"] = query["f"][0]
+    if (query.get("q") or [""])[0]:
+        args["q"] = query["q"][0]
+    return f"/{name}" + (f"?{urlencode(args)}" if args else "")
+
+
+def safe_next(value: str) -> str | None:
+    """Куди йти після «Схвалити і далі»: лише Картка нашої програми (`/item/N?from=…`)."""
+    if "\\" in value:
+        return None
+    url = urlsplit(value)
+    match = _ITEM.fullmatch(url.path)
+    if url.scheme or url.netloc or not match:
+        return None
+    return item_url(int(match[1]), safe_list((parse_qs(url.query).get("from") or [""])[0]))
+
+
+@dataclass
+class Nav:
+    """Верх Картки: список, звідки прийшли, місце в ньому і наступна Картка."""
+
+    back: str
+    title: str
+    index: int | None = None
+    total: int | None = None
+    next_url: str | None = None
+
+
+MAIN_ROWS = (  # поля, які правлять найчастіше: у рядку їх стільки, скільки в кортежі
+    ("title",), ("price", "sizes"), ("section",), ("brand", "condition"), ("colors",),
+    ("season",), ("material_upper",),
+)  # fmt: skip
+MAIN_FIELDS = {name for row in MAIN_ROWS for name in row}
+MISSING = {  # чому не можна схвалити → яке поле порожнє
+    "no_section": "section", "section_unknown": "section", "section_yellow": "section",
+    "no_sizes": "sizes", "babies_size": "sizes", "no_colors": "colors", "no_gender": "gender",
+}  # fmt: skip
+
+
+@dataclass
+class Layout:
+    """Як розкласти поля Картки: жовті з основних — угору, решта основних — рядками, рідкі — у «Ще поля»."""
+
+    yellow: list[review.FieldView]
+    rows: list[list[review.FieldView]]
+    rare: list[review.FieldView]
+    rare_open: bool
+    missing: set[str]
+
+
+def card_layout(card: review.Card, bad: set[str], block: str | None) -> Layout:
+    visible = {f.spec.name: f for f in card.visible if f.spec.widget != "order"}
+    yellow = [f for name, f in visible.items() if f.yellow and name in MAIN_FIELDS]
+    taken = {f.spec.name for f in yellow}
+    rows = [[visible[n] for n in row if n in visible and n not in taken] for row in MAIN_ROWS]
+    rare = [f for name, f in visible.items() if name not in MAIN_FIELDS]
+    missing = {MISSING[block]} if block in MISSING else set()
+    opened = any(f.yellow or f.spec.name in bad or f.spec.name in missing for f in rare)
+    return Layout(yellow, [r for r in rows if r], rare, opened, missing)
+
+
+WAS = re.compile(r"було (.+?) →")
+
+
+def was_values(card: review.Card) -> dict[str, str]:
+    """«було …» для жовтих полів, де це відомо: сезон, який змінило правило (CORE-016)."""
+    found = WAS.search(card.problem_text or "")
+    if card.status == Status.REVIEW and card.problem_code == review.SEASON_CHANGED and found:
+        return {"season": found[1]}
+    return {}
+
+
+@dataclass
+class Attention:
+    """Жовта примітка вгорі Картки: що перевірити і чому."""
+
+    title: str
+    lines: list[str]
+    note: str | None  # примітка CORE-015/CORE-016 — «Пост змінено…», «Сезон змінено правилом…»
+
+
+def short_label(field: review.FieldView) -> str:
+    return field.spec.label.split(",")[0]
+
+
+def attention(card: review.Card) -> Attention | None:
+    if card.status != Status.REVIEW:
+        return None
+    yellow = [f for f in card.visible if f.yellow]
+    note = card.problem_text if card.problem_code in review.NOTE_CODES else None
+    if not yellow and not note:
+        return None
+    if not yellow:  # лише примітка «Пост змінено…» / «Сезон змінено правилом…»
+        return Attention(note, [], None)
+    lines = [
+        f"{short_label(f)}: {f.reason or 'перевірте'}"
+        if len(yellow) > 1
+        else f.reason or "перевірте"
+        for f in yellow[:2]
+    ]
+    if len(yellow) > 2:
+        lines.append(f"Ще {len(yellow) - 2} — у полях нижче")
+    names = ", ".join(short_label(f) for f in yellow)
+    title = f"Перевір {plural(len(yellow), 'поле', 'поля', 'полів')}: {names}"
+    return Attention(title, lines, note)
 
 
 ROBOT_TONES = {  # кружечок плитки «Робот»: ok — працює, idle — стоїть, warn — увага, bad — помилка

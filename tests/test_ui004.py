@@ -58,12 +58,11 @@ def marks(page: str) -> list[str]:
 @pytest.mark.parametrize("path", ["/review", "/approved", "/problem", "/published", "/sessions",
                                   "/archived", "/settings"])  # fmt: skip
 def test_every_tab_is_reachable_from_every_page(conn, root, app, path):
-    item = ready(conn, root)
-    pages = [path, f"/item/{item}"]
-    for page_path in pages:
-        page = html(get(app, page_path))
-        for tab in ALL_TABS:
-            assert f'href="{tab}"' in page, (page_path, tab)
+    ready(conn, root)
+    # Картка (UI-005) має власний верх: «← список» і смужка стану, без вкладок — див. test_ui005
+    page = html(get(app, path))
+    for tab in ALL_TABS:
+        assert f'href="{tab}"' in page, (path, tab)
 
 
 def test_counts_and_red_problem_counter(conn, root, app):

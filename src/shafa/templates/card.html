@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}{{ card.fields["title"].value or card.folder_name }} · Шафа-помічник{% endblock %}
 
+{% macro hidden() %}<input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">{% endmacro %}
+
 {% macro options(values, selected, blank=True) %}
   {% if blank %}<option value="">—</option>{% endif %}
   {% for value in values %}
@@ -9,6 +11,25 @@
   {% if selected and selected not in values %}
   <option value="{{ selected }}" selected>{{ selected }} (немає в довіднику)</option>
   {% endif %}
+{% endmacro %}
+
+{# Чипи (UI-005): без JS їх не видно — працює звичайне поле поруч; з JS app.js пише вибране в те саме поле.
+   kind: toggle — усі варіанти кнопками; pick — вибрані чипами і «+ …» зі списком із пошуком; single — одне з двох. #}
+{% macro chipset(f, values, kind, noun="", swatch=False, max=0) %}
+<div class="chipset chips-{{ kind }}" data-chips="{{ kind }}" data-target="{{ f.spec.name }}"{% if max %} data-max="{{ max }}"{% endif %}{% if not editable %} data-readonly{% endif %}>
+  {% if kind == "pick" %}
+  <span class="chosen"></span>
+  <button type="button" class="chip add" aria-expanded="false">+ {{ noun }}</button>
+  <div class="picker" hidden>
+    <input type="search" class="picker-search" placeholder="Знайти…" aria-label="Пошук: {{ noun }}" autocomplete="off">
+    <div class="picker-list">
+      {% for value in values %}<button type="button" class="chip opt" data-value="{{ value }}" aria-pressed="false">{% if swatch %}<span class="swatch" data-color="{{ value }}" aria-hidden="true"></span>{% endif %}{{ value }}</button>{% endfor %}
+    </div>
+  </div>
+  {% else %}
+  {% for value in values %}<button type="button" class="chip opt" data-value="{{ value }}" aria-pressed="false">{{ value }}</button>{% endfor %}
+  {% endif %}
+</div>
 {% endmacro %}
 
 {% macro widget(f) %}
@@ -25,14 +46,16 @@
   </span>
   <datalist id="sizes-list">{% for size in f.options %}<option value="{{ size }}">{% endfor %}</datalist>
   {% elif f.spec.widget == "colors" %}
-  <span class="pair">
+  <span class="pair plain">
     <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0]) }}</select>
     <select name="{{ name }}" aria-label="Другий колір"{{ off }}>{{ options(f.spec.options, f.inputs[1]) }}</select>
   </span>
+  {{ chipset(f, f.spec.options, "pick", "колір", swatch=True, max=2) }}
   {% elif f.spec.widget == "choice" %}
   <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.options, f.inputs[0]) }}</select>
   {% elif f.spec.widget == "condition" %}
-  <select id="f-{{ name }}" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0], blank=False) }}</select>
+  <select id="f-{{ name }}" class="plain" name="{{ name }}"{{ off }}>{{ options(f.spec.options, f.inputs[0], blank=False) }}</select>
+  {{ chipset(f, f.spec.options, "single") }}
   {% elif f.spec.widget == "yesno" %}
   <select id="f-{{ name }}" name="{{ name }}"{{ off }}>
     <option value="">—</option>
@@ -40,188 +63,220 @@
     <option value="no"{% if f.inputs[0] == "no" %} selected{% endif %}>ні</option>
   </select>
   {% elif f.spec.widget == "price" %}
-  <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" inputmode="numeric" class="short"{{ off }}>
+  <span class="money"><input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" inputmode="numeric" class="short"{{ off }}><span class="unit">грн</span></span>
+  {% elif f.spec.widget == "list" and f.options %}
+  <input id="f-{{ name }}" class="plain" name="{{ name }}" value="{{ f.inputs[0] }}"{{ off }}>
+  <small class="plain">через кому; варіанти Шафи: {{ f.options | join(", ") }}</small>
+  {{ chipset(f, f.options, "pick" if f.options | length > 8 else "toggle", "матеріал" if name.startswith("material") else "варіант") }}
   {% else %}
   <input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}"{{ off }}>
   {% endif %}
-  {% if f.spec.widget == "list" %}<small>через кому{% if f.options %}; варіанти Шафи: {{ f.options | join(", ") }}{% endif %}</small>{% endif %}
+  {% if f.spec.widget == "list" and not f.options %}<small>через кому</small>{% endif %}
   {% if f.spec.widget == "numbers" %}<small>кілька — через «;»</small>{% endif %}
 {% endmacro %}
 
+{% macro field(f) %}
+  {% set name = f.spec.name %}
+  <div class="field{% if f.yellow %} yellow{% endif %}{% if name in bad %} bad{% endif %}{% if name in layout.missing %} missing{% endif %}" data-field="{{ name }}">
+    <label class="fl" for="f-{{ name }}">{{ f.spec.label }}{% if f.yellow and name in was %} <span class="was">· було «{{ was[name] }}»</span>{% endif %}</label>
+    {{ widget(f) }}
+    {% if name == "price" and post_price %}<span class="hint">у пості {{ post_price }} · +15%</span>{% endif %}
+    {% if name == "sizes" and card.fields["insole"].value %}<span class="hint">устілка {{ card.fields["insole"].inputs[0] }} см</span>{% endif %}
+    {% if name in bad %}<p class="error">{{ bad_input.get(f.spec.widget, "неправильне значення") }}</p>
+    {% elif name in layout.missing %}<p class="error">обов'язкове поле — без нього не схвалити</p>{% endif %}
+    {% if f.yellow %}
+    <p class="reason">{{ f.reason or "перевірте" }}
+      {% if editable %}<button name="action" value="confirm:{{ name }}" class="ok">Так, вірно</button>{% endif %}
+    </p>
+    {% elif f.edited %}
+    <p class="edited">змінено вручну</p>
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{% block header %}
+<header class="top top-card">
+  <div class="top-in">
+    <a class="back-link" href="{{ nav.back }}"><span aria-hidden="true">←</span> {{ nav.title }}</a>
+    {% if nav.index %}<span class="place">{{ nav.index }} з {{ nav.total }}</span>{% endif %}
+    <div class="spacer"></div>
+    <div id="robot" class="mini-wrap" data-panel="/robot/panel?mini=1&amp;back={{ back | urlencode }}">
+{% include "panel_mini.html" %}
+    </div>
+  </div>
+</header>
+{% endblock %}
+{% block status %}{% endblock %}
+
 {% block main %}
 {% set order = card.fields["photo_order"] %}
-<p class="back"><a href="/{{ card.status }}">← {{ tabs.get(card.status, "Назад") }}</a></p>
-<h1>{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</h1>
-<p class="meta">
-  Папка {{ card.folder }}{% if card.post_id %} · пост {{ card.post_id }}{% endif %}{% if card.variant %} · <strong class="variant">розмір {{ card.variant }} · {{ card.place[0] }} з {{ card.place[1] }}</strong>{% endif %}{% if card.post_date %} від {{ card.post_date[:10] }}{% endif %}
-  {% if card.status == "archived" and card.archived_at %} · в Архіві, видалиться {{ deletion_date(card.archived_at).strftime("%d.%m.%Y") }}{% endif %}
-</p>
-{% if card.status == "review" and card.problem_code in ("post_changed", "photos_changed", "season_changed") %}
-<p class="changed-note">{{ card.problem_text }}</p>
+<div class="card-head">
+  <h1>{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</h1>
+  <p class="meta">
+    {% if card.post_id %}Пост {{ card.post_id }}{% if card.post_date %} від {{ card.post_date[:10] }}{% endif %} · {% endif %}папка {{ card.folder }}{% if card.variant %} · <strong class="variant">розмір {{ card.variant }} · {{ card.place[0] }} з {{ card.place[1] }}</strong>{% endif %}
+    {% if card.status == "archived" and card.archived_at %} · в Архіві, видалиться {{ deletion_date(card.archived_at).strftime("%d.%m.%Y") }}{% endif %}
+  </p>
+</div>
+
+{% if attention %}
+<div class="attention" role="note">
+  <span class="attn-icon" aria-hidden="true">!</span>
+  <div>
+    <div class="attn-title">{{ attention.title }}</div>
+    {% for line in attention.lines %}<div class="attn-line">{{ line }}</div>{% endfor %}
+    {% if attention.note %}<p class="changed-note">{{ attention.note }}</p>{% endif %}
+  </div>
+</div>
+{% endif %}
+{% if robot_error %}
+<p class="robot-error">Робот не зможе опублікувати: {{ robot_error }}</p>
+{% endif %}
+{% if block %}<p class="block alert">{{ block }}</p>{% endif %}
+{% if robot_notes %}
+<div class="robot-notes">
+  <p>Робот пропустить:</p>
+  <ul>{% for n in robot_notes %}<li>{{ n }}</li>{% endfor %}</ul>
+</div>
 {% endif %}
 
-<div class="card">
-  <section class="left">
+{% if card.status == "problem" and card.problem_code in sticky %}
+<div class="problem-box">
+  <p class="problem">{{ sticky_titles[card.problem_code] }}</p>
+  {% if hint %}<p>{{ hint }}</p>{% endif %}
+  {% if card.problem_code in ("publish_uncertain", "publish_error") %}
+  <p><a href="{{ my_items }}" target="_blank" rel="noopener noreferrer">Відкрити «Мої речі» на Шафі</a> і пошукати цей товар.</p>
+  <form method="post" action="/item/{{ card.id }}" class="decide">
+    {{ hidden() }}
+    <label for="shafa_link">Знайшли на Шафі — вставте посилання на товар (або його номер):</label>
+    <input id="shafa_link" name="shafa_link" required placeholder="https://shafa.ua/uk/…">
+    <button name="action" value="on_shafa" class="approve">На Шафі є → в Опубліковані</button>
+  </form>
+  <form method="post" action="/item/{{ card.id }}" class="decide">
+    {{ hidden() }}
+    <button name="action" value="not_on_shafa">На Шафі немає → у Схвалені</button>
+  </form>
+  {% elif card.problem_code == "shafa_declined" %}
+  <p>{{ card.problem_text }}</p>
+  <form method="post" action="/item/{{ card.id }}" class="decide">
+    {{ hidden() }}
+    {% if shafa_url %}<a href="{{ shafa_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a>{% endif %}
+    <button name="action" value="to_archive" class="reject">В архів</button>
+  </form>
+  {% elif card.problem_code == "possible_duplicate" %}
+  <div class="duplicate">
+    {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
+    <div>
+      {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
+      {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
+      {% if ai_verdict %}<p class="note">{{ ai_verdict }}</p>{% endif %}
+    </div>
+  </div>
+  <form method="post" action="/item/{{ card.id }}" class="decide">
+    {{ hidden() }}
+    <button name="action" value="other_item" class="approve">Це інший товар → у Схвалені</button>
+    <button name="action" value="to_archive" class="reject">Справді дубль → в Архів</button>
+  </form>
+  {% else %}
+  <form method="post" action="/item/{{ card.id }}" class="decide">
+    {{ hidden() }}
+    <button name="action" value="to_archive" class="reject">В Архів</button>
+  </form>
+  {% endif %}
+  <details><summary>Подробиці для Власника</summary><p>{{ card.problem_text }}</p></details>
+</div>
+{% elif card.status == "problem" %}
+<div class="problem-box">
+  <p class="problem">{{ card.problem_text }}</p>
+  {% if hint %}<p>{{ hint }}</p>{% endif %}
+  <form method="post" action="/item/{{ card.id }}" class="decide">
+    {{ hidden() }}
+    <button name="action" value="recheck">Перевірити ще раз</button>
+  </form>
+</div>
+{% endif %}
+{% if card.problem_code in ("duplicate", "duplicate_checked") and card.status in ("archived", "published") %}
+<div class="duplicate">
+  {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
+  <div>
+    <p class="note">{{ card.problem_text }}</p>
+    {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
+    {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
+  </div>
+</div>
+{% endif %}
+{% if card.status == "published" and shafa_url %}
+<p class="note"><a href="{{ shafa_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a></p>
+{% endif %}
+
+{% macro columns() %}
+{% set order = card.fields["photo_order"] %}
+<div class="card-cols{% if card.status == "problem" %} solo{% endif %}">
+  <section class="left" aria-label="Фото і текст поста">
+    <div class="gallery">
+      {% if card.photos %}
+      <a class="big" href="/photo/{{ card.id }}/{{ card.photos[0].position }}" title="Клік — на весь екран"><img src="/photo/{{ card.id }}/{{ card.photos[0].position }}" alt="Фото"></a>
+      <div class="thumbs">
+        {% for photo in card.photos %}
+        <a class="photo" href="/photo/{{ card.id }}/{{ photo.position }}" title="{{ photo.file_name }}"{% if loop.first %} aria-current="true"{% endif %}>
+          <img src="/thumb/{{ card.id }}/{{ photo.position }}" alt="Фото {{ loop.index }}" loading="lazy">
+        </a>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty noshot-big">Немає фото</p>
+      {% endif %}
+    </div>
     {% if order.yellow %}
     <p class="note yellow">Порядок фото: {{ order.reason }}</p>
+    {% if editable %}
+    <p class="order-buttons">
+      <button name="action" value="confirm:photo_order" class="ok">Порядок фото — так, вірно</button>
+      <button name="action" value="folder_order">Як у папці</button>
+    </p>
     {% endif %}
-    <div class="photos">
-      {% for photo in card.photos %}
-      <a class="photo" href="/photo/{{ card.id }}/{{ photo.position }}" title="{{ photo.file_name }}">
-        <img src="/thumb/{{ card.id }}/{{ photo.position }}" alt="Фото {{ loop.index }}" loading="lazy">
-      </a>
-      {% else %}
-      <p class="empty">Немає фото</p>
-      {% endfor %}
-    </div>
+    {% endif %}
     {% if card.post_text %}
-    <h2>Текст поста</h2>
-    <div class="post">{{ card.post_text }}</div>
+    <div class="post-box">
+      <h2>Текст поста</h2>
+      <div class="post">{{ card.post_text }}</div>
+    </div>
     {% endif %}
   </section>
 
-  <section class="right">
-    {% if card.status == "problem" and card.problem_code in sticky %}
-    <div class="problem-box">
-      <p class="problem">{{ sticky_titles[card.problem_code] }}</p>
-      {% if hint %}<p>{{ hint }}</p>{% endif %}
-      {% if card.problem_code in ("publish_uncertain", "publish_error") %}
-      <p><a href="{{ my_items }}" target="_blank" rel="noopener noreferrer">Відкрити «Мої речі» на Шафі</a> і пошукати цей товар.</p>
-      <form method="post" action="/item/{{ card.id }}" class="decide">
-        <input type="hidden" name="token" value="{{ token }}">
-        <label for="shafa_link">Знайшли на Шафі — вставте посилання на товар (або його номер):</label>
-        <input id="shafa_link" name="shafa_link" required placeholder="https://shafa.ua/uk/…">
-        <button name="action" value="on_shafa" class="approve">На Шафі є → в Опубліковані</button>
-      </form>
-      <form method="post" action="/item/{{ card.id }}" class="decide">
-        <input type="hidden" name="token" value="{{ token }}">
-        <button name="action" value="not_on_shafa">На Шафі немає → у Схвалені</button>
-      </form>
-      {% elif card.problem_code == "shafa_declined" %}
-      <p>{{ card.problem_text }}</p>
-      <form method="post" action="/item/{{ card.id }}" class="decide">
-        <input type="hidden" name="token" value="{{ token }}">
-        {% if shafa_url %}<a href="{{ shafa_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a>{% endif %}
-        <button name="action" value="to_archive" class="reject">В архів</button>
-      </form>
-      {% elif card.problem_code == "possible_duplicate" %}
-      <div class="duplicate">
-        {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
-        <div>
-          {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
-          {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
-          {% if ai_verdict %}<p class="note">{{ ai_verdict }}</p>{% endif %}
-        </div>
-      </div>
-      <form method="post" action="/item/{{ card.id }}" class="decide">
-        <input type="hidden" name="token" value="{{ token }}">
-        <button name="action" value="other_item" class="approve">Це інший товар → у Схвалені</button>
-        <button name="action" value="to_archive" class="reject">Справді дубль → в Архів</button>
-      </form>
-      {% else %}
-      <form method="post" action="/item/{{ card.id }}" class="decide">
-        <input type="hidden" name="token" value="{{ token }}">
-        <button name="action" value="to_archive" class="reject">В Архів</button>
-      </form>
-      {% endif %}
-      <details><summary>Подробиці для Власника</summary><p>{{ card.problem_text }}</p></details>
+  {% if card.status != "problem" %}
+  <section class="right" aria-label="Поля для Шафи">
+    {% for f in layout.yellow %}{{ field(f) }}{% endfor %}
+    {% for row in layout.rows %}
+    <div class="frow{% if row | length > 1 %} two{% endif %}">
+      {% for f in row %}{{ field(f) }}{% endfor %}
     </div>
-    {% elif card.status == "problem" %}
-    <div class="problem-box">
-      <p class="problem">{{ card.problem_text }}</p>
-      {% if hint %}<p>{{ hint }}</p>{% endif %}
-      <form method="post" action="/item/{{ card.id }}">
-        <input type="hidden" name="token" value="{{ token }}">
-        <button name="action" value="recheck">Перевірити ще раз</button>
-      </form>
-    </div>
+    {% endfor %}
+    {% if layout.rare %}
+    <details class="rare"{% if layout.rare_open %} open{% endif %}>
+      <summary>Ще поля: {{ layout.rare | map(attribute="spec.label") | map("replace", ", см", "") | map("lower") | join(", ") }}</summary>
+      {% for f in layout.rare %}{{ field(f) }}{% endfor %}
+    </details>
     {% endif %}
-    {% if card.problem_code in ("duplicate", "duplicate_checked") and card.status in ("archived", "published") %}
-    <div class="duplicate">
-      {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
-      <div>
-        <p class="note">{{ card.problem_text }}</p>
-        {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
-        {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
-      </div>
-    </div>
-    {% endif %}
-    {% if card.status == "published" and shafa_url %}
-    <p class="note"><a href="{{ shafa_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a></p>
-    {% endif %}
-
-    {% if card.status != "problem" %}
-    <form method="post" action="/item/{{ card.id }}" class="fields">
-      <input type="hidden" name="token" value="{{ token }}">
-      {# Перша кнопка форми — та, що спрацьовує від Enter: хай це буде «Зберегти». #}
-      <button name="action" value="save" class="hidden-default" tabindex="-1" aria-hidden="true">Зберегти</button>
-      {% if editable %}
-      <input type="hidden" name="photo_order" value="{{ order.inputs[0] }}">
-      {% if order.yellow %}
-      <p class="order-buttons">
-        <button name="action" value="confirm:photo_order" class="ok">Порядок фото — так, вірно</button>
-        <button name="action" value="folder_order">Як у папці</button>
-      </p>
-      {% endif %}
-      {% endif %}
-
-      {% if robot_error %}
-      <p class="robot-error">Робот не зможе опублікувати: {{ robot_error }}</p>
-      {% endif %}
-      {% if robot_notes %}
-      <div class="robot-notes">
-        <p>Робот пропустить:</p>
-        <ul>{% for n in robot_notes %}<li>{{ n }}</li>{% endfor %}</ul>
-      </div>
-      {% endif %}
-
-      {% for f in card.visible if f.spec.widget != "order" %}
-      <div class="field{% if f.yellow %} yellow{% endif %}{% if f.spec.name in bad %} bad{% endif %}">
-        <label for="f-{{ f.spec.name }}">{{ f.spec.label }}</label>
-        <div class="input">
-          {{ widget(f) }}
-          {% if f.spec.name in bad %}<p class="error">{{ bad_input.get(f.spec.widget, "неправильне значення") }}</p>{% endif %}
-          {% if f.yellow %}
-          <p class="reason">{{ f.reason or "перевірте" }}
-            {% if editable %}<button name="action" value="confirm:{{ f.spec.name }}" class="ok">Так, вірно</button>{% endif %}
-          </p>
-          {% elif f.edited %}
-          <p class="edited">змінено вручну</p>
-          {% endif %}
-        </div>
-      </div>
-      {% endfor %}
-
-      <div class="actions">
-        {% if card.status == "review" %}
-        <button name="action" value="save">Зберегти</button>
-        <button name="action" value="approve" class="approve"{% if robot_error %} disabled title="Робот не зможе опублікувати"{% endif %}>Схвалити</button>
-        <button name="action" value="reject" class="reject">Відхилити</button>
-        {% if block %}<p class="block">{{ block }}</p>{% endif %}
-        {% if robot_error %}<p class="block">Схвалити не можна: робот не зможе опублікувати.</p>{% endif %}
-        {% elif card.status == "approved" %}
-        <button name="action" value="unapprove">Скасувати схвалення</button>
-        {% elif card.status == "archived" and not has_shafa_id %}
-        <button name="action" value="restore">Повернути</button>
-        {% endif %}
-      </div>
-    </form>
     {% if card.old_rules and card.status in ("review", "problem") %}
     <p class="badge old-rules">заповнено старими правилами — варто перезаповнити</p>
     {% endif %}
-    {% if card.status == "review" %}
-    {# Окрема форма: незбережені правки не пропадуть мовчки — браузер перепитає. #}
-    <form method="post" action="/item/{{ card.id }}" class="ai-retry">
-      <input type="hidden" name="token" value="{{ token }}">
-      <button name="action" value="ai_retry">ШІ, спробуй ще раз</button>
-      <small>новий бланк одразу (≈ 5 ¢); ваші правки лишаються</small>
-      <button name="action" value="refill">Перезаповнити</button>
-      <small>пакетом, дешевше (≈ 1,5 ¢), результат до години; ваші правки лишаються</small>
-    </form>
-    {% endif %}
-    {% endif %}
   </section>
+  {% endif %}
 </div>
+{% endmacro %}
+
+{% if card.status != "problem" %}
+<form method="post" action="/item/{{ card.id }}" id="fields" class="fields">
+  {{ hidden() }}
+  {% if nav.next_url %}<input type="hidden" name="next" value="{{ nav.next_url }}">{% endif %}
+  {# Перша кнопка форми — та, що спрацьовує від Enter: хай це буде «Зберегти». #}
+  <button name="action" value="save" class="hidden-default" tabindex="-1" aria-hidden="true">Зберегти</button>
+  {% if editable %}<input type="hidden" name="photo_order" value="{{ order.inputs[0] }}">{% endif %}
+  {{ columns() }}
+</form>
+{% else %}
+{{ columns() }}
+{% endif %}
 
 <datalist id="sections">
   {% for section in sections %}<option value="{{ section }}">{% endfor %}
@@ -231,4 +286,34 @@
   <img alt="">
   <p>Закрити — клік або Esc · ← → інші фото</p>
 </dialog>
+{% endblock %}
+
+{% block after %}
+{% if card.status in ("review", "approved") or (card.status == "archived" and not has_shafa_id) %}
+<div class="actionbar" role="region" aria-label="Дії з Карткою">
+  <div class="actionbar-in">
+    {% if card.status == "review" %}
+    {# Окрема форма: незбережені правки не пропадуть мовчки — браузер перепитає. #}
+    <form method="post" action="/item/{{ card.id }}" class="ai-retry">
+      {{ hidden() }}
+      <button name="action" value="ai_retry" title="Новий бланк одразу; ваші правки лишаються">ШІ, спробуй ще раз · ≈ 5 ¢</button>
+      <button name="action" value="refill" title="Пакетом, дешевше, результат до години; ваші правки лишаються">Перезаповнити пакетом · ≈ 1,5 ¢</button>
+    </form>
+    <span class="spacer"></span>
+    {% if robot_error %}<p class="block">Схвалити не можна: робот не зможе опублікувати.</p>{% endif %}
+    <div class="bar-main">
+      <button form="fields" name="action" value="reject" class="reject">Відхилити</button>
+      <button form="fields" name="action" value="save" class="save">Зберегти</button>
+      <button form="fields" name="action" value="approve" class="approve"{% if robot_error %} disabled title="Робот не зможе опублікувати"{% endif %}><span aria-hidden="true">✓</span> Схвалити і далі</button>
+    </div>
+    {% elif card.status == "approved" %}
+    <span class="spacer"></span>
+    <button form="fields" name="action" value="unapprove">Скасувати схвалення</button>
+    {% else %}
+    <span class="spacer"></span>
+    <button form="fields" name="action" value="restore">Повернути</button>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 {% endblock %}

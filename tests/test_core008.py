@@ -229,7 +229,7 @@ def test_card_refill_button_marks_one_card(conn, root, app):
     first = refill_card(conn, root, "1", 1)
     second = refill_card(conn, root, "2", 2)
 
-    assert "Перезаповнити</button>" in html(get(app, f"/item/{first}"))
+    assert "Перезаповнити пакетом · ≈ 1,5 ¢</button>" in html(get(app, f"/item/{first}"))
     post(app, f"/item/{first}", action="refill")
 
     assert (status(conn, first), status(conn, second)) == (Status.NEW, Status.REVIEW)
