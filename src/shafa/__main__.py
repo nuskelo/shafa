@@ -296,8 +296,7 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
         )
         try:
             if args.sync_catalog:
-                snapshot = sync.crawl(session, sync.CACHE, log=log)
-                sync.save(snapshot)
+                snapshot = sync.sync_and_save(session, sync.CACHE, log=log)
                 print(f"Знімок збережено: розділів {len(snapshot['sections'])}")
                 print("Далі: fill --db <база> --precheck — схвалені, яких робот тепер не опублікує")
                 return 0
@@ -623,7 +622,7 @@ def run_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         if args.dry_run:
             print(format_plan(planned, skipped))
             return 0
-        results = [fill.fill(conn, client, p) for p in planned]
+        results = fill.fill_all(conn, client, planned)
     finally:
         conn.close()
     print(format_filled(results, skipped))
