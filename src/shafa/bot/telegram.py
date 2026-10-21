@@ -145,14 +145,15 @@ class Telegram:
     def get_chat(self, chat_id: int) -> dict:
         return self.call("getChat", {"chat_id": chat_id})
 
-    def send_media_group(self, chat_id: int, photos: list[Upload], reply_to: int) -> list[dict]:
-        """Альбом фото (2–10) завантаженням — відповіддю на повідомлення `reply_to`."""
+    def send_media_group(
+        self, chat_id: int, photos: list[Upload], reply_to: int | None
+    ) -> list[dict]:
+        """Альбом фото (2–10) завантаженням — відповіддю на повідомлення `reply_to` (None — просто
+        в чат, BOT-011)."""
         media = [{"type": "photo", "media": f"attach://p{i}"} for i in range(len(photos))]
-        params = {
-            "chat_id": chat_id,
-            "media": media,
-            "reply_parameters": {"message_id": reply_to},
-        }
+        params: dict[str, Any] = {"chat_id": chat_id, "media": media}
+        if reply_to is not None:
+            params["reply_parameters"] = {"message_id": reply_to}
         files = {f"p{i}": photo for i, photo in enumerate(photos)}
         return self.call("sendMediaGroup", params, files=files)
 

@@ -16,7 +16,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from shafa import batch, config
-from shafa.bot import report
+from shafa.bot import actions, report
 from shafa.db import Status
 from shafa.robot import control
 
@@ -29,7 +29,7 @@ HEALTH_REPEAT = timedelta(hours=6)  # той самий FAIL самоперев�
 PER_HOUR = 20  # повідомлень на годину, включно з «ще N подій»
 BUDGET_SHARE = 80  # % добового ліміту ШІ
 LIST_MAX = 10  # проблем в одному повідомленні
-LINE_MAX = 160  # символів на одну проблему
+LINE_MAX = actions.LINE_MAX  # символів на одну проблему
 CALM = {"done", "limit", "stop"}  # звичайне завершення (чи її власний «Стоп») — одним рядком
 
 
@@ -38,6 +38,8 @@ class Event:
     key: str
     text: str
     commit: Callable[[dict], None]  # що запам'ятати, коли повідомлення дійшло
+    markup: dict | None = None  # кнопки під повідомленням (BOT-011)
+    album_of: int | None = None  # Картка, чиї фото (+ схожого оголошення) йдуть перед повідомленням
 
 
 def enabled() -> bool:
@@ -168,7 +170,10 @@ def _session_events(conn: sqlite3.Connection, state: dict) -> list[Event]:
                 f"⛔ Робот зупинився: {_sentence(reason) or 'причина невідома — подивись екран'}."
             )
             text += f" Опубліковано {row['published']}, у Проблемах {row['problems']}."
-        events.append(Event(f"session:{row['id']}", text, _set("session_id", row["id"])))
+        keyboard = (
+            None if code in CALM or (not code and not reason) else actions.session_markup(row["id"])
+        )
+        events.append(Event(f"session:{row['id']}", text, _set("session_id", row["id"]), keyboard))
     return events
 
 
@@ -188,24 +193,26 @@ def _problem_events(conn: sqlite3.Connection, state: dict) -> list[Event]:
             state["problems"] = now
         return []
     rows = conn.execute(
-        "SELECT id, post_id, folder_name, problem_code, problem_text FROM items "
-        f"WHERE id IN ({','.join('?' * len(fresh))}) ORDER BY id",
+        "SELECT id, post_id, folder_name, problem_code, problem_text, shafa_id, shafa_url "
+        f"FROM items WHERE id IN ({','.join('?' * len(fresh))}) ORDER BY id",
         [int(i) for i in fresh],
     ).fetchall()
-    lines = []
-    for row in rows[:LIST_MAX]:
-        name = report.problem_name(row["problem_code"])
-        what = f"Пост {row['post_id'] or row['folder_name']}: {name}"
-        if why := " ".join(str(row["problem_text"] or "").split()):
-            what += f" — {why}"
-        lines.append(report.clip(what, LINE_MAX))
+    lines = [actions.card_text(row, LINE_MAX) for row in rows[:LIST_MAX]]
     more = len(rows) - len(lines)
     if len(rows) == 1:
         text = "⚠️ " + lines[0]
     else:
         text = f"⚠️ Нові Проблеми ({len(rows)}):\n" + "\n".join("• " + line for line in lines)
         text += f"\n…і ще {more}" if more else ""
-    return [Event("problems:" + ",".join(fresh), text, _set("problems", now))]
+        if len(rows) > actions.MULTI_MAX:
+            text += f"\nКнопки — для перших {actions.MULTI_MAX}, решту — у програмі."
+    album_of = None
+    if len(rows) == 1 and rows[0]["problem_code"] == "possible_duplicate":
+        album_of = rows[0]["id"]
+    event = Event(
+        "problems:" + ",".join(fresh), text, _set("problems", now), actions.markup(rows), album_of
+    )
+    return [event]
 
 
 def _health_events(data_dir: Path, state: dict, moment: datetime) -> list[Event]:
@@ -268,9 +275,9 @@ def collect(conn: sqlite3.Connection, data_dir: Path, state: dict, moment: datet
 
 
 def run(
-    conn: sqlite3.Connection, data_dir: Path, moment: datetime, send: Callable[[str], bool]
+    conn: sqlite3.Connection, data_dir: Path, moment: datetime, send: Callable[..., bool]
 ) -> int:
-    """Один цикл. `send(text)` каже, чи дійшло. Повертає, скільки повідомлень надіслано."""
+    """Один цикл. `send(text[, кнопки, Картка для фото])` каже, чи дійшло. Повертає, скільки повідомлень надіслано."""
     state = load(data_dir)
     if state is None:
         save(data_dir, snapshot(conn, data_dir, moment))
@@ -288,7 +295,8 @@ def run(
             event.commit(state)
         else:
             text = report.clip(report.scrub(event.text))
-            if not send(text):
+            extra = (event.markup, event.album_of) if event.markup or event.album_of else ()
+            if not send(text, *extra):
                 break  # Telegram не відповів: решта — наступним циклом
             event.commit(state)
             state["sent"][event.key] = _stamp(moment)
