@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from shafa import catalog, config, dup, review, rules, variants
+from shafa import borh, catalog, config, dup, review, rules, variants
 from shafa.bot.presence import GONE
 from shafa.db import Status, now
 from shafa.fill import STALE_RULES
@@ -423,6 +423,18 @@ def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> li
     return removed
 
 
+def purge_old_photos(conn: sqlite3.Connection, today: datetime) -> list[str]:
+    """PHOTO-001: фото старих постів (`<дані>/borh/<номер>/`) — через 3 дні після публікації, за тим
+    самим налаштуванням, що й «Опубліковано». Лише в теці даних; Картка лишається `published`."""
+    if not delete_enabled():
+        return []
+    cutoff = (today - DELETE_AFTER).astimezone(UTC).isoformat(timespec="seconds")
+    removed = borh.purge_photos(conn, cutoff)
+    if removed:
+        borh.record_purged(config.data_dir(), len(removed), today)
+    return removed
+
+
 class Run:
     """Одна сесія робота. Залежності передаються ззовні — тести без браузера й мережі."""
 
@@ -495,6 +507,8 @@ class Run:
         today = self.today()
         for name in purge_published(self.conn, self.root, today):
             report.notes.append(f"Видалено з «{PUBLISHED_DIR}»: {name}")
+        if old := purge_old_photos(self.conn, today):
+            report.notes.append(f"Прибрано фото старих постів: {len(old)}")
         allowed = min(limit, day_limit - started_today(self.conn, today))
         if allowed <= 0:
             return Stop("limit", f"ліміт доби ({day_limit}) вичерпано")

@@ -13,7 +13,7 @@ from collections import Counter
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
-from shafa import batch, changes, config
+from shafa import batch, borh, changes, config
 from shafa.db import Status
 from shafa.robot import control, rehearse
 
@@ -166,6 +166,20 @@ def _changed(data_dir: Path, day: date) -> str:
     return "\n".join(lines)
 
 
+def _purged(data_dir: Path, day: date) -> str:
+    """PHOTO-001: фото старих постів, прибрані за добу (через 3 дні після публікації)."""
+    count = borh.purged_on(data_dir, day)
+    if count <= 0:
+        return ""
+    if count % 10 == 1 and count % 100 != 11:
+        word = "пост"
+    elif 2 <= count % 10 <= 4 and not 12 <= count % 100 <= 14:
+        word = "пости"
+    else:
+        word = "постів"
+    return f"Прибрано фото: {count} {word}"
+
+
 def _rehearsal(data_dir: Path, day: date) -> str:
     last = rehearse.last_summary(data_dir)
     if last is None or not _on(last.get("at"), day):
@@ -269,6 +283,7 @@ def build(conn: sqlite3.Connection, data_dir: Path, day: date, *, late: bool = F
         _problems(conn, day),
         _waiting(conn),
         _changed(data_dir, day),
+        _purged(data_dir, day),
         _rehearsal(data_dir, day),
         _bot_site(conn, day),
         _ai(conn, day),

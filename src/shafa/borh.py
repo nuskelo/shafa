@@ -7,10 +7,14 @@
 """
 
 import io
+import json
+import os
 import re
 import shutil
 import sqlite3
+import tempfile
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -18,7 +22,15 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from shafa import variants
 from shafa.db import Status, now
 from shafa.export import Post
-from shafa.folders import OLD_PREFIX, Folder, item_folder, old_folder_name
+from shafa.folders import (
+    OLD_PREFIX,
+    Folder,
+    base_name,
+    item_folder,
+    old_folder_name,
+    old_root,
+    variant_size,
+)
 from shafa.scan import find_problem, save_posts
 
 PHOTO_NAME = "1.jpg"
@@ -189,3 +201,95 @@ def recheck(conn: sqlite3.Connection, item_id: int) -> str | None:
     )
     variants.split_card(conn, item_id)
     return conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()[0]
+
+
+# --- Фото опублікованих старих постів (PHOTO-001, TD-030) ---
+
+PURGE_LOG = "photos-purged.json"  # у теці даних: скільки постів прибрано і коли (для звіту)
+PURGE_KEEP = 60
+_OLD_NAME = re.compile(re.escape(OLD_PREFIX) + r"\d{1,7}")
+
+
+def purge_photos(conn: sqlite3.Connection, cutoff: str) -> list[str]:
+    """Видалити `<дані>/borh/<номер>/` Карток, опублікованих раніше за `cutoff` (UTC, ISO).
+
+    Лише коли Картка `published`; варіанти поста (CORE-014) ділять теку — вона йде, коли
+    опубліковано всіх сестер і найпізніша теж старша за `cutoff`. Видаляє лише всередині
+    `<дані>/borh/`. `purged_at` не ставить: він ховає Картку з усіх списків (це «очищений архів»),
+    а опублікована лишається у вкладці «Опубліковані»; фото опублікованої ніхто не шукає.
+    Повертає назви (`borh-<номер>`), теки яких видалено.
+    """
+    root = old_root().resolve()
+    removed: list[str] = []
+    seen: set[str] = set()
+    due = conn.execute(
+        "SELECT folder_name, post_id FROM items "
+        "WHERE status = ? AND published_at < ? AND folder_name LIKE ? || '%'",
+        (Status.PUBLISHED, cutoff, OLD_PREFIX),
+    ).fetchall()
+    for name, post_id in due:
+        base = base_name(name)
+        if base in seen or not _OLD_NAME.fullmatch(base):
+            continue
+        seen.add(base)
+        if variant_size(name) is not None and _not_done(conn, base, post_id, cutoff):
+            continue
+        folder = root / base.removeprefix(OLD_PREFIX)
+        if folder.is_symlink() or not folder.is_dir() or folder.resolve().parent != root:
+            continue
+        try:
+            shutil.rmtree(folder)
+        except OSError:  # Windows: файл відкритий — наступного разу
+            continue
+        removed.append(base)
+    return removed
+
+
+def _not_done(conn: sqlite3.Connection, base: str, post_id: int | None, cutoff: str) -> bool:
+    """Є сестра, яка ще не опублікована або опублікована пізніше за `cutoff`."""
+    for status, published_at in conn.execute(
+        "SELECT status, published_at FROM items "
+        "WHERE post_id = ? AND purged_at IS NULL AND (folder_name = ? OR folder_name LIKE ?)",
+        (post_id, base, f"{base}~%"),
+    ):
+        if status != Status.PUBLISHED or published_at is None or published_at >= cutoff:
+            return True
+    return False
+
+
+def record_purged(data_dir: Path, count: int, moment: datetime) -> None:
+    """Дописати «прибрано N постів» у `photos-purged.json` (помилка запису прибирання не ламає)."""
+    entries = _purge_entries(data_dir)
+    entries.append({"at": moment.astimezone().isoformat(timespec="seconds"), "count": count})
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        handle, name = tempfile.mkstemp(dir=data_dir, suffix=".tmp")
+        try:
+            with os.fdopen(handle, "w", encoding="utf-8") as out:
+                json.dump(entries[-PURGE_KEEP:], out, ensure_ascii=False)
+            os.replace(name, data_dir / PURGE_LOG)
+        except OSError:
+            Path(name).unlink(missing_ok=True)
+            raise
+    except OSError:
+        return
+
+
+def _purge_entries(data_dir: Path) -> list[dict]:
+    try:
+        data = json.loads((data_dir / PURGE_LOG).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+
+
+def purged_on(data_dir: Path, day: date) -> int:
+    """Скільки постів прибрано за місцеву добу `day`."""
+    total = 0
+    for entry in _purge_entries(data_dir):
+        try:
+            if datetime.fromisoformat(entry["at"]).astimezone().date() == day:
+                total += int(entry["count"])
+        except (KeyError, ValueError, TypeError):
+            continue
+    return total
