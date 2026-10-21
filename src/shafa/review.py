@@ -342,7 +342,7 @@ def _apply_edited_text(fields: dict[str, FieldView], edits: dict[str, Any], post
         return
     section = fields["section"].value
     path = catalog.find_section(section) if section else None
-    code, _ = rules.season(f"{post_text}\n{extra}")
+    code, _ = rules.season(f"{post_text}\n{extra}", path)
     if code is None:
         return
     checked = ai.check_season(season.value, path, f"{post_text}\n{extra}")
@@ -510,7 +510,8 @@ ACTIONS = {
 # CORE-015: примітка на Картці `review`, коли пост чи фото змінили після перевірки (у `problem_text`).
 # Не проблема: Картка лишається «На перевірку»; зникає, коли її схвалюють.
 POST_CHANGED, PHOTOS_CHANGED = "post_changed", "photos_changed"
-NOTE_CODES = (POST_CHANGED, PHOTOS_CHANGED)
+SEASON_CHANGED = "season_changed"  # CORE-016: сезон змінено правилом, Картка була схвалена
+NOTE_CODES = (POST_CHANGED, PHOTOS_CHANGED, SEASON_CHANGED)
 
 ON_SHAFA = "on_shafa_block"  # ROBOT-011: у Картки є `shafa_id` — товар уже на Шафі
 
@@ -549,7 +550,7 @@ def act(conn: sqlite3.Connection, item_id: int, action: str, root: Path | None =
         if action == "approve" and cursor.rowcount == 1:  # вона побачила примітку — знімаємо
             conn.execute(
                 "UPDATE items SET problem_code = NULL, problem_text = NULL "
-                "WHERE id = ? AND problem_code IN (?, ?)",
+                f"WHERE id = ? AND problem_code IN ({', '.join('?' * len(NOTE_CODES))})",
                 (item_id, *NOTE_CODES),
             )
         if action == "restore" and cursor.rowcount == 1:

@@ -189,13 +189,19 @@ def many_items(text: str) -> bool:
 
 WINTER = "Зима"
 DEMI = "Демісезон"
-# Ознаки зими: «термо», «на хутрі» (не «без хутра»), «утеплені», «зимові», «уги/угги», «дутики»,
+# Ознаки зими: «на хутрі» (не «без хутра»), «утеплені», «зимові», «уги/угги», «дутики»,
 # «на флісі» чи «всередині фліс» (QA-001: те саме). Мембрана й «не промокають» без них — демісезон.
+# CORE-016: «термо» — не ознака зими, так Вікторія називає мембранне взуття (`_TERMO` нижче).
 _WINTER_SIGN = re.compile(
-    r"термо|(?<!без )хутр|утепл|зимов|(?<![\w'’ʼ])у[гґ]{1,2}(?:и|і|ів|ах)?(?![\w'’ʼ])|"
+    r"(?<!без )хутр|утепл|зимов|(?<![\w'’ʼ])у[гґ]{1,2}(?:и|і|ів|ах)?(?![\w'’ʼ])|"
     r"(?<!\w)ugg|дутик|(?<!без )(?<!мікро)фліс",
     re.IGNORECASE,
 )
+_TERMO = re.compile(r"термо", re.IGNORECASE)
+# Тип взуття, до якого «термо» стосується: кросівки / кеди (+ опечатка «ккросівки») — демісезон,
+# черевики й вище — демісезон і зима (CORE-016).
+_SNEAKERS = re.compile(r"к?кросівк|(?<![\w'’ʼ])кед(?:и|ів|ах|ами)?(?![\w'’ʼ])", re.IGNORECASE)
+_BOOTS = re.compile(r"черевик|чобіт|чобот|сапожк|ботильйон", re.IGNORECASE)
 _WET = re.compile(
     r"мембран|gore[\s-]?tex|(?<!\w)gtx(?!\w)|не\s+промока|водонепроникн", re.IGNORECASE
 )
@@ -208,10 +214,28 @@ _SEASON_NAMED = (
 )
 
 
-def season(text: str) -> tuple[list[str] | None, str | None]:
+def has_termo(text: str) -> bool:
+    return bool(_TERMO.search(text))
+
+
+def _termo_season(text: str, section: str | None) -> list[str]:
+    """«Термо» без ознак зими: кросівки / кеди — Демісезон, черевики, чоботи, сапожки, ботильйони
+    й невідомий тип — Демісезон і Зима. Тип — з тексту, а коли в тексті його нема — з розділу."""
+    if _BOOTS.search(text):
+        return [DEMI, WINTER]
+    if _SNEAKERS.search(text):
+        return [DEMI]
+    kind = section.rsplit("/", 1)[-1] if section else ""
+    if _SNEAKERS.search(kind):
+        return [DEMI]
+    return [DEMI, WINTER]
+
+
+def season(text: str, section: str | None = None) -> tuple[list[str] | None, str | None]:
     """Сезон за текстом: (значення, причина жовтого). (None, None) — текст мовчить, вирішує ШІ.
 
     Названо прямо — як у тексті; «літні» разом з ознаками зими — текст суперечить сам собі.
+    `section` — розділ Картки (шлях Шафи): тип для «термо», коли в тексті його нема (CORE-016).
     """
     winter = bool(_WINTER_SIGN.search(text))
     named = [name for name, pattern in _SEASON_NAMED if pattern.search(text)]
@@ -221,6 +245,8 @@ def season(text: str) -> tuple[list[str] | None, str | None]:
         return named + ([WINTER] if winter and DEMI not in named else []), None
     if winter:
         return [WINTER], None
+    if _TERMO.search(text):
+        return _termo_season(text, section), None
     if _WET.search(text):
         return [DEMI], None
     return None, None

@@ -29,7 +29,7 @@
         {% endif %}
         <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date[:10] if card.post_date, ("видалиться " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if current == "archived" and card.archived_at] | select | join(" · ") }}</span>
       </span>
-      {% if card.status == "review" and card.problem_code in ("post_changed", "photos_changed") %}
+      {% if card.status == "review" and card.problem_code in ("post_changed", "photos_changed", "season_changed") %}
       <span class="badge changed" title="{{ card.problem_text }}">змінено</span>
       {% endif %}
       {% if card.old_rules %}

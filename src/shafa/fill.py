@@ -666,6 +666,88 @@ def recheck_sizes(conn: sqlite3.Connection, dry_run: bool = False) -> SizesResul
 
 
 @dataclass(frozen=True)
+class SeasonResult:
+    changed: list[tuple[int | None, str, str]]  # (номер поста, було, стало) — сезон змінився
+    returned: list[int | None]  # номери постів: схвалена Картка пішла «На перевірку»
+
+
+def _shown_season(value: Any) -> str:
+    return ", ".join(value) if isinstance(value, list) and value else "порожньо"
+
+
+def season_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Картки з бланком, які ще можна міняти: `new`, `review`, схвалені й проблеми, крім тих, що
+    могли вже вийти на Шафу (опубліковані, зі `shafa_id`, проблеми публікації)."""
+    marks = ", ".join("?" * len(_MAYBE_PUBLISHED))
+    return conn.execute(
+        f"""
+        SELECT id, post_id, status FROM items
+        WHERE post_id IS NOT NULL AND purged_at IS NULL AND shafa_id IS NULL
+          AND (status IN (?, ?, ?)
+               OR (status = ? AND COALESCE(problem_code, '') NOT IN ({marks})))
+          AND EXISTS (SELECT 1 FROM blanks WHERE item_id = items.id)
+        ORDER BY id
+        """,
+        (Status.NEW, Status.REVIEW, Status.APPROVED, Status.PROBLEM, *_MAYBE_PUBLISHED),
+    ).fetchall()
+
+
+def recheck_season(conn: sqlite3.Connection, dry_run: bool = False) -> SeasonResult:
+    """CORE-016: сезон за новим правилом «термо» — зі збереженої відповіді ШІ й тексту поста, без
+    запиту до ШІ й без нового `RULES_VERSION`. Міняється лише поле «Сезон» у бланку (решта бланка,
+    `edits`, статус — як були); її власна правка сезону сильніша за правило. Схвалена Картка, у якої
+    сезон змінився, — «На перевірку» з приміткою. Опубліковані не чіпаються. `dry_run` — лише порахувати.
+    """
+    changed: list[tuple[int | None, str, str]] = []
+    returned: list[int | None] = []
+    with conn:
+        for row in season_candidates(conn):
+            item_id = row["id"]
+            text = conn.execute(
+                "SELECT posts.text FROM items JOIN posts USING (post_id) WHERE items.id = ?",
+                (item_id,),
+            ).fetchone()
+            edits = edits_of(conn, item_id)
+            if text is None or "season" in edits:
+                continue
+            if not rules.has_termo(f"{text[0]}\n{rules.edit_text(edits)}"):
+                continue
+            stored = conn.execute(
+                "SELECT value FROM blanks WHERE item_id = ? AND field = 'season'", (item_id,)
+            ).fetchone()
+            was = json.loads(stored["value"]) if stored and stored["value"] else []
+            new = next(f for f in recalc(conn, item_id, text[0]).fields if f.name == "season")
+            if was == new.value:
+                continue
+            note = f"Сезон змінено правилом: було {_shown_season(was)} → стало {_shown_season(new.value)}"
+            changed.append((row["post_id"], _shown_season(was), _shown_season(new.value)))
+            if row["status"] == Status.APPROVED:
+                returned.append(row["post_id"])
+            if dry_run:
+                continue
+            conn.execute(
+                "UPDATE blanks SET value = ?, yellow = ?, reason = ? "
+                "WHERE item_id = ? AND field = 'season'",
+                (json.dumps(new.value, ensure_ascii=False), int(new.yellow), new.reason, item_id),
+            )
+            if row["status"] == Status.APPROVED:
+                conn.execute(
+                    "UPDATE items SET status = ?, problem_code = ?, problem_text = ?, "
+                    "updated_at = ? WHERE id = ? AND status = ?",
+                    (Status.REVIEW, review.SEASON_CHANGED, note, now(), item_id,
+                     Status.APPROVED),
+                )  # fmt: skip
+    if changed and not dry_run:
+        events.emit(
+            "ai.rules",
+            f"Сезон за новим правилом «термо»: {events.cards(len(changed))}"
+            + (f", з них на перевірку {len(returned)}" if returned else "")
+            + " (без ШІ)",
+        )
+    return SeasonResult(changed, returned)
+
+
+@dataclass(frozen=True)
 class PrecheckResult:
     returned: list[
         tuple[int | None, str]
