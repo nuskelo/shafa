@@ -51,7 +51,7 @@ from urllib.parse import quote
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import changes, config, rules, site
-from shafa.bot import report
+from shafa.bot import alerts, report
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
@@ -344,6 +344,8 @@ class Bot:
         self._report_last: date | None | bool = False  # False — ще не читали файл
         self._report_retry: datetime | None = None
         self._report_bad: str | None = None  # неправильне значення, про яке вже написали
+        # BOT-010: коли востаннє дивились на тривоги (раз на хвилину, а не на кожне опитування)
+        self._alerts_next: datetime | None = None
 
     # --- Надсилання без падінь (відповідь не дійшла — не привід ламати обробку) ---
 
@@ -569,6 +571,7 @@ class Bot:
         self._retry_links(now_)
         self._summaries()
         self._daily_report(now_)
+        self._alerts(now_)
 
     # --- Щоденний звіт Власнику (BOT-009) ---
 
@@ -612,6 +615,22 @@ class Bot:
         except Exception as error:  # noqa: BLE001
             self._report_retry = now_ + report.RETRY
             self.log(f"Звіт: {type(error).__name__}: {str(error)[:200]}")
+
+    def _alerts(self, now_: datetime) -> None:
+        """BOT-010: раз на хвилину — що нового для Власника (зупинка робота, Проблеми, самоперевірка,
+        бюджет ШІ). Немає Власника чи `SHAFA_ALERTS=off` — нічого. Помилка бота не зупиняє."""
+        owner = self.settings.owner_chat
+        if owner is None or (self._alerts_next and now_ < self._alerts_next):
+            return
+        self._alerts_next = now_ + alerts.EVERY
+        try:
+            data_dir = config.data_dir()
+            if not alerts.enabled():
+                alerts.forget(data_dir)
+                return
+            alerts.run(self.conn, data_dir, now_, lambda text: self.say(owner, text) is not None)
+        except Exception as error:  # noqa: BLE001
+            self.log(f"Тривоги: {type(error).__name__}: {str(error)[:200]}")
 
     def _report_log(self, text: str) -> None:
         if text != self._report_bad:
