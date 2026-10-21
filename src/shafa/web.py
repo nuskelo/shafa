@@ -307,6 +307,7 @@ class App:
             trim_blocks=True,
             lstrip_blocks=True,
         )
+        self.env.filters["dmy"] = dmy
 
     # --- Захист ---
 
@@ -405,6 +406,23 @@ class App:
         html = self.env.get_template(template).render(token=self.token, local=local_time, **context)
         return Response(status, html.encode("utf-8"))
 
+    def _panel_context(self, conn) -> dict:
+        """Смужка стану: що показати і якого кольору кружечок кожної плитки (UI-004)."""
+        robot, ai_, bot = self.robot_state(conn), self.ai_state(conn), self.bot_state(conn)
+        site_, health_ = self.site_state(conn), self.health_view()
+        return {
+            "robot": robot, "ai": ai_, "bot": bot, "site": site_, "health": health_,
+            "tones": {
+                "robot": ROBOT_TONES.get(robot.code, "warn"),
+                "ai": "ok" if ai_.busy else ("warn" if ai_.note else "ok"),
+                "bot": BOT_TONES.get(bot.code, "warn"),
+                "site": "warn" if site_ and site_[3] else "ok",
+                "health": HEALTH_TONES.get(health_.code, "idle")
+                if health_.code != "problems"
+                else ("bad" if any(r.status == health.FAIL for r in health_.rows) else "warn"),
+            },
+        }  # fmt: skip
+
     def _chrome(self, conn, request: Request) -> dict:
         """Спільне для всіх сторінок: вкладки з лічильниками і панель робота."""
         counts = review.counts(conn)
@@ -412,11 +430,7 @@ class App:
         return {
             "tabs": TAB_TITLES,
             "counts": counts,
-            "robot": self.robot_state(conn),
-            "ai": self.ai_state(conn),
-            "bot": self.bot_state(conn),
-            "site": self.site_state(conn),
-            "health": self.health_view(),
+            **self._panel_context(conn),
             "can_quit": self.on_quit is not None,
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
@@ -797,9 +811,8 @@ class App:
         conn = self.connect()
         try:
             html = self.env.get_template("panel.html").render(
-                token=self.token, local=local_time, robot=self.robot_state(conn),
-                ai=self.ai_state(conn), bot=self.bot_state(conn), site=self.site_state(conn), health=self.health_view(),
-                back=safe_back(request.arg("back")), fake=self.fake_shafa,
+                token=self.token, local=local_time, back=safe_back(request.arg("back")),
+                fake=self.fake_shafa, **self._panel_context(conn),
             )  # fmt: skip
         finally:
             conn.close()
@@ -872,12 +885,32 @@ class App:
                 photos.drop_thumbnails(self.cache_dir, item_id)
             query = request.arg("q").strip()
             cards = review.list_tab(conn, status, query)
+            checks = {c.id: self._precheck(c) for c in cards}
+            marks = {c.id: card_mark(c, checks[c.id]) for c in cards}
+            filters = []
+            chosen = ""
+            if status == Status.REVIEW:  # UI-004: «Усі / Треба глянути / Готові»
+                warn = sum(1 for m in marks.values() if m.tone != "ok")
+                for key, label, count in (
+                    ("", "Усі", len(cards)),
+                    ("warn", "Треба глянути", warn),
+                    ("ok", "Готові", len(cards) - warn),
+                ):
+                    args = {k: v for k, v in (("f", key), ("q", query)) if v}
+                    href = f"/{status}" + (f"?{urlencode(args)}" if args else "")
+                    filters.append((key, label, count, href))
+                chosen = request.arg("f") if request.arg("f") in ("warn", "ok") else ""
+                if chosen:
+                    cards = [c for c in cards if (marks[c.id].tone != "ok") == (chosen == "warn")]
             return self.page(
                 "list.html",
                 **self._chrome(conn, request),
                 current=status,
                 cards=cards,
-                checks={c.id: self._precheck(c) for c in cards},
+                checks=checks,
+                marks=marks,
+                filters=filters,
+                chosen=chosen,
                 query=query,
                 message=MESSAGES.get(request.arg("msg")),
                 deletion_date=review.deletion_date,
@@ -1121,6 +1154,70 @@ def safe_back(path: str) -> str:
 def shafa_link(url: str | None) -> str | None:
     """Посилання з бази — у сторінку лише якщо це справді shafa.ua (не `javascript:`)."""
     return url if url and url.startswith("https://shafa.ua/") else None
+
+
+ROBOT_TONES = {  # кружечок плитки «Робот»: ok — працює, idle — стоїть, warn — увага, bad — помилка
+    "running": "ok", "starting": "ok", "pausing": "ok", "stopping": "ok", "rehearsing": "ok",
+    "stopped": "idle", "paused": "idle",
+    "login_needed": "warn", "login_open": "warn", "busy": "warn",
+    "crashed": "bad", "failed": "bad",
+}  # fmt: skip
+BOT_TONES = {"running": "ok", "stopped": "idle", "no_token": "warn", "failed": "bad"}
+HEALTH_TONES = {"ok": "ok", "running": "idle", "none": "idle"}
+
+
+def plural(n: int, one: str, few: str, many: str) -> str:
+    """«1 пропуск», «2 пропуски», «5 пропусків»."""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} {one}"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} {few}"
+    return f"{n} {many}"
+
+
+@dataclass
+class Mark:
+    """Мітка на фото Картки у списку: `ok` — «Готово», `warn` — жовта, `bad` — червона."""
+
+    tone: str
+    text: str
+
+
+NOTE_TITLES = {
+    review.POST_CHANGED: "Пост змінено",
+    review.PHOTOS_CHANGED: "Фото змінено",
+    review.SEASON_CHANGED: "Сезон змінено",
+}
+
+
+def card_mark(card: review.Card, check: Precheck) -> Mark | None:
+    """Що сказати про Картку одним коротким підписом; None — вкладки без мітки (опубліковані, архів)."""
+    if card.status == Status.PROBLEM:
+        return Mark("bad", "Проблема")
+    if card.status not in (Status.REVIEW, Status.APPROVED):
+        return None
+    if check.error:
+        return Mark("bad", "Робот не зможе опублікувати")
+    parts = []
+    if card.status == Status.REVIEW and card.problem_code in review.NOTE_CODES:
+        parts.append(NOTE_TITLES[card.problem_code])
+    skips = len(check.notes)
+    if card.yellow:
+        if len(parts) + (1 if skips else 0) == 0:
+            parts.append(plural(card.yellow, "жовте поле", "жовті поля", "жовтих полів"))
+        else:
+            parts.append(plural(card.yellow, "жовте", "жовті", "жовтих"))
+    if skips:
+        parts.append(plural(skips, "пропуск", "пропуски", "пропусків"))
+    return Mark("warn", " · ".join(parts)) if parts else Mark("ok", "Готово")
+
+
+def dmy(stamp: str | None) -> str:
+    """`2026-03-13T10:00:00` → `13.03.2026`; не дата — як є."""
+    try:
+        return datetime.fromisoformat(stamp or "").strftime("%d.%m.%Y")
+    except ValueError:
+        return stamp or ""
 
 
 def local_time(stamp: str | None) -> str:

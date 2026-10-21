@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>Картка 6566 · Шафа-помічник</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F6F3}
+a{color:#1F4FD1}a:hover{color:#163A9C}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #F6F6F3; font-family: Inter, system-ui, sans-serif; color: #1A1A18; font-size: 15px; line-height: 1.45">
+
+  <!-- Тонка смужка стану (та сама, що на списку, згорнута) -->
+  <header style="background: #FFFFFF; border-bottom: 1px solid #E4E3DE">
+    <div style="max-width: 1280px; margin: 0 auto; padding: 0 24px; min-height: 56px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap">
+      <a href="Main.dc.html" style="display: inline-flex; align-items: center; gap: 6px; text-decoration: none; font-weight: 600; min-height: 44px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+        На перевірку
+      </a>
+      <span style="color: #5F5F5A">3 з 8</span>
+      <div style="flex: 1"></div>
+      <div style="display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: #3D3D39">
+        <span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #8A8A84"></span>Робот стоїть</span>
+        <span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #1E7A46"></span>ШІ</span>
+        <span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #1E7A46"></span>Бот</span>
+        <span style="display: inline-flex; align-items: center; gap: 6px"><span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: #1E7A46"></span>Сайт</span>
+      </div>
+    </div>
+  </header>
+
+  <main style="max-width: 1280px; margin: 0 auto; padding: 20px 24px 120px; display: flex; flex-direction: column; gap: 16px">
+    <div>
+      <h1 style="margin: 0; font-size: 24px; letter-spacing: -0.02em">Термо кросівки Keen з мембраною, 39 розмір</h1>
+      <p style="margin: 4px 0 0; color: #5F5F5A; font-size: 14px">Пост 6566 від 10.09.2026 · папка borh-6566</p>
+    </div>
+
+    <!-- Що перевірити -->
+    <div role="note" style="background: #FFF7DD; border: 1px solid #F0D98A; border-radius: 12px; padding: 12px 16px; display: flex; gap: 12px; align-items: flex-start">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#7A5500" stroke-width="2" aria-hidden="true" style="flex: none; margin-top: 2px"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"></path></svg>
+      <div>
+        <div style="font-weight: 600; color: #5C4000">Перевір 1 поле: Сезон</div>
+        <div style="color: #5C4000; font-size: 14px">Правило змінило «Зима» → «Демісезон»: «термо» у Вікторії — це мембрана, не утеплення.</div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start">
+
+      <!-- Ліво: фото + текст поста -->
+      <section aria-label="Фото і текст поста" style="flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 12px">
+        <div style="aspect-ratio: 4 / 3; background: #ECEBE6; border-radius: 14px; display: flex; align-items: center; justify-content: center; color: #6E6E68; font-size: 14px">
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 8px">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="12" cy="12" r="3.5"></circle></svg>
+            Велике фото {{ photo }} з 5 · клік — на весь екран
+          </div>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px">
+          <sc-for list="{{ thumbs }}" as="t" hint-placeholder-count="5">
+            <button type="button" onClick="{{ t.pick }}" aria-label="Фото {{ t.n }}" style="{{ t.style }}">{{ t.n }}</button>
+          </sc-for>
+        </div>
+        <div style="background: #FFFFFF; border: 1px solid #E4E3DE; border-radius: 14px; padding: 16px">
+          <div style="font-size: 13px; font-weight: 600; color: #5F5F5A; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px">Текст поста</div>
+          <p style="margin: 0; white-space: pre-line">Термо кросівки Keen в ідеальному стані. 39 розмір. Устілка 26см. Ширина устілки 9см. Верх — міцний практичний текстиль із водонепроникною мембраною. Чіпка амортизуюча підошва та анатомічна устілка з підтримкою стопи для тривалої ходьби та активного відпочинку. 1990грн</p>
+        </div>
+      </section>
+
+      <!-- Право: поля -->
+      <section aria-label="Поля для Шафи" style="flex: 1 1 520px; min-width: 0; background: #FFFFFF; border: 1px solid #E4E3DE; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 18px">
+
+        <!-- Сезон (жовте, нагорі) -->
+        <fieldset style="margin: 0; border: 2px solid #E9C24A; background: #FFFBEB; border-radius: 12px; padding: 12px 14px 14px">
+          <legend style="padding: 0 6px; font-weight: 600">Сезон <span style="font-weight: 500; color: #6B4A00; font-size: 13px">· було «Зима»</span></legend>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <sc-for list="{{ seasons }}" as="s" hint-placeholder-count="5">
+              <button type="button" onClick="{{ s.pick }}" aria-pressed="{{ s.pressed }}" style="{{ s.style }}">{{ s.label }}</button>
+            </sc-for>
+          </div>
+        </fieldset>
+
+        <label style="display: flex; flex-direction: column; gap: 6px">
+          <span style="font-weight: 600">Назва</span>
+          <input type="text" value="Термо кросівки Keen з мембраною в ідеальному стані 39 розміру" style="min-height: 44px; padding: 0 12px; border: 1px solid #CFCEC8; border-radius: 10px; font: inherit">
+        </label>
+
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
+          <label style="display: flex; flex-direction: column; gap: 6px">
+            <span style="font-weight: 600">Ціна на Шафі</span>
+            <span style="display: flex; align-items: center; border: 1px solid #CFCEC8; border-radius: 10px; min-height: 44px; padding: 0 12px; gap: 6px">
+              <input type="text" value="2290" style="border: 0; outline: none; font: inherit; font-weight: 700; font-size: 17px; width: 100%; min-width: 0">
+              <span style="color: #5F5F5A">грн</span>
+            </span>
+            <span style="font-size: 13px; color: #5F5F5A">у пості 1990 · +15%</span>
+          </label>
+          <label style="display: flex; flex-direction: column; gap: 6px">
+            <span style="font-weight: 600">Розмір</span>
+            <input type="text" value="39" style="min-height: 44px; padding: 0 12px; border: 1px solid #CFCEC8; border-radius: 10px; font: inherit">
+            <span style="font-size: 13px; color: #5F5F5A">устілка 26 см</span>
+          </label>
+        </div>
+
+        <label style="display: flex; flex-direction: column; gap: 6px">
+          <span style="font-weight: 600">Розділ</span>
+          <input type="text" value="Жіночий одяг / Взуття / Кросівки" style="min-height: 44px; padding: 0 12px; border: 1px solid #CFCEC8; border-radius: 10px; font: inherit">
+        </label>
+
+        <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px">
+          <label style="display: flex; flex-direction: column; gap: 6px">
+            <span style="font-weight: 600">Бренд</span>
+            <input type="text" value="Keen" style="min-height: 44px; padding: 0 12px; border: 1px solid #CFCEC8; border-radius: 10px; font: inherit">
+          </label>
+          <div style="display: flex; flex-direction: column; gap: 6px">
+            <span style="font-weight: 600">Стан</span>
+            <div role="group" aria-label="Стан" style="display: flex; gap: 6px">
+              <button type="button" aria-pressed="false" style="flex: 1; min-height: 44px; border-radius: 10px; border: 1px solid #CFCEC8; background: #FFFFFF; font: inherit; cursor: pointer">Новий</button>
+              <button type="button" aria-pressed="true" style="flex: 1; min-height: 44px; border-radius: 10px; border: 1px solid #1A1A18; background: #1A1A18; color: #FFFFFF; font: inherit; font-weight: 600; cursor: pointer">Ідеальний</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <span style="font-weight: 600">Колір</span>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <span style="display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border-radius: 999px; background: #EEF2FD; color: #163A9C; font-weight: 600"><span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 50%; background: #1F3A8A"></span>Синій
+              <button type="button" aria-label="Прибрати Синій" style="border: 0; background: transparent; padding: 4px; cursor: pointer; color: #163A9C; display: inline-flex"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></span>
+            <span style="display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border-radius: 999px; background: #EEF2FD; color: #163A9C; font-weight: 600"><span aria-hidden="true" style="width: 14px; height: 14px; border-radius: 50%; background: #7FB2E5"></span>Блакитний
+              <button type="button" aria-label="Прибрати Блакитний" style="border: 0; background: transparent; padding: 4px; cursor: pointer; color: #163A9C; display: inline-flex"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button></span>
+            <button type="button" style="min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px dashed #A9A8A1; background: #FFFFFF; font: inherit; color: #3D3D39; cursor: pointer">+ колір</button>
+          </div>
+        </div>
+
+        <div style="display: flex; flex-direction: column; gap: 6px">
+          <span style="font-weight: 600">Матеріал верху</span>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <span style="display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; border-radius: 999px; background: #EEF2FD; color: #163A9C; font-weight: 600">Текстиль</span>
+            <button type="button" style="min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px dashed #A9A8A1; background: #FFFFFF; font: inherit; color: #3D3D39; cursor: pointer">+ матеріал</button>
+          </div>
+        </div>
+
+        <details style="border-top: 1px solid #ECEBE6; padding-top: 12px">
+          <summary style="cursor: pointer; font-weight: 600; min-height: 32px">Ще поля: мембрана, устілка, ключові слова, опис</summary>
+          <p style="margin: 8px 0 0; color: #5F5F5A; font-size: 14px">Ті самі поля, що зараз, — згорнуті, бо їх рідко правлять.</p>
+        </details>
+      </section>
+    </div>
+  </main>
+
+  <!-- Панель дій: завжди видно внизу -->
+  <div style="position: sticky; bottom: 0; background: #FFFFFF; border-top: 1px solid #E4E3DE; box-shadow: 0 -4px 16px rgba(0,0,0,0.05)">
+    <div style="max-width: 1280px; margin: 0 auto; padding: 12px 24px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+      <button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid #D6D5CF; background: #FFFFFF; font: inherit; font-weight: 500; cursor: pointer">ШІ, спробуй ще раз · ≈ 5 ¢</button>
+      <button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid #D6D5CF; background: #FFFFFF; font: inherit; font-weight: 500; cursor: pointer">Перезаповнити пакетом · ≈ 1,5 ¢</button>
+      <div style="flex: 1"></div>
+      <button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid #E8B4AF; background: #FFFFFF; color: #A3211A; font: inherit; font-weight: 600; cursor: pointer">Відхилити</button>
+      <button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid #D6D5CF; background: #FFFFFF; font: inherit; font-weight: 600; cursor: pointer">Зберегти</button>
+      <a href="Main.dc.html" style="min-height: 48px; padding: 0 24px; border-radius: 10px; background: #1E7A46; color: #FFFFFF; font-weight: 700; font-size: 16px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="M5 12l5 5 9-10"></path></svg>
+        Схвалити і далі
+      </a>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(p){ super(p); this.state = { season: ['Демісезон'], photo: 1 }; }
+  renderVals() {
+    const chosen = this.state.season;
+    const chip = 'min-height: 40px; padding: 0 16px; border-radius: 999px; font: inherit; cursor: pointer; ';
+    const seasons = ['Весна', 'Демісезон', 'Зима', 'Літо', 'Осінь'].map(label => {
+      const on = chosen.includes(label);
+      return { label, pressed: String(on),
+        style: chip + (on ? 'background: #1A1A18; color: #FFFFFF; border: 1px solid #1A1A18; font-weight: 600' : 'background: #FFFFFF; color: #1A1A18; border: 1px solid #CFCEC8'),
+        pick: () => this.setState({ season: on ? chosen.filter(x => x !== label) : [...chosen, label] }) };
+    });
+    const thumbs = [1, 2, 3, 4, 5].map(n => ({ n,
+      style: 'aspect-ratio: 1; border-radius: 10px; font: inherit; font-size: 13px; color: #5F5F5A; cursor: pointer; background: #ECEBE6; ' + (n === this.state.photo ? 'border: 2px solid #1F4FD1' : 'border: 2px solid transparent'),
+      pick: () => this.setState({ photo: n }) }));
+    return { seasons, thumbs, photo: this.state.photo };
+  }
+}
+</script>
+</body>
+</html>

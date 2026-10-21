@@ -10,27 +10,39 @@
 </head>
 <body>
 <header class="top">
-  <nav class="tabs">
-    {% for status, title in tabs.items() %}
-    <a href="/{{ status }}" class="tab{% if status == current %} current{% endif %}">{{ title }} <span class="count">{{ counts[status] }}</span></a>
-    {% endfor %}
-    <a href="/settings" class="tab{% if current == "settings" %} current{% endif %}">Налаштування</a>
-  </nav>
-  {% if can_quit %}
-  <form method="post" action="/quit" class="quit">
-    <input type="hidden" name="token" value="{{ token }}">
-    <button title="Закрити програму: екран і бота">Вийти</button>
-  </form>
-  {% endif %}
+  <div class="top-in">
+    <a class="brand" href="/review">Шафа-помічник</a>
+    <nav class="tabs" aria-label="Розділи">
+      {% for status in ("review", "approved", "problem", "published") %}
+      <a{% if status == current %} aria-current="page"{% endif %} href="/{{ status }}" class="tab{% if status == current %} current{% endif %}">{{ tabs[status] }} <span class="count{% if status == "problem" and counts[status] %} alert{% endif %}">{{ counts[status] }}</span></a>
+      {% endfor %}
+      <details class="more{% if current in ("sessions", "archived", "settings") %} current{% endif %}">
+        <summary class="tab">Ще</summary>
+        <div class="menu">
+          <a href="/sessions">Сесії <span class="count">{{ counts["sessions"] }}</span></a>
+          <a href="/archived">Архів <span class="count">{{ counts["archived"] }}</span></a>
+          <a href="/settings">Налаштування</a>
+        </div>
+      </details>
+    </nav>
+    {% if can_quit %}
+    <form method="post" action="/quit" class="quit">
+      <input type="hidden" name="token" value="{{ token }}">
+      <button title="Закрити програму: екран і бота">Вийти</button>
+    </form>
+    {% endif %}
+  </div>
 </header>
-<div id="robot" data-panel="/robot/panel?back={{ back | urlencode }}">
+<div class="wrap">
+  <div id="robot" data-panel="/robot/panel?back={{ back | urlencode }}">
 {% include "panel.html" %}
-</div>
-{% if message %}
-<p class="message">{{ message }}</p>
-{% endif %}
-<main>
+  </div>
+  {% if message %}
+  <p class="message">{{ message }}</p>
+  {% endif %}
+  <main>
 {% block main %}{% endblock %}
-</main>
+  </main>
+</div>
 </body>
 </html>

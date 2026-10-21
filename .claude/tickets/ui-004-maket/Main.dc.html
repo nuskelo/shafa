@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>На перевірку · Шафа-помічник</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F6F6F3}
+a{color:#1F4FD1}a:hover{color:#163A9C}
+</style>
+</helmet>
+<div style="min-height: 100vh; background: #F6F6F3; font-family: Inter, system-ui, sans-serif; color: #1A1A18; font-size: 15px; line-height: 1.45">
+
+  <!-- Верх: назва + вкладки -->
+  <header style="background: #FFFFFF; border-bottom: 1px solid #E4E3DE">
+    <div style="max-width: 1280px; margin: 0 auto; padding: 0 24px; display: flex; align-items: center; gap: 24px; flex-wrap: wrap; min-height: 64px">
+      <div style="font-weight: 700; font-size: 17px; letter-spacing: -0.01em">Шафа-помічник</div>
+      <nav aria-label="Розділи" style="display: flex; gap: 4px; flex-wrap: wrap; flex: 1 1 auto">
+        <a href="Main.dc.html" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; background: #EEF2FD; color: #1F4FD1; font-weight: 600; text-decoration: none">На перевірку <span style="background: #1F4FD1; color: #FFFFFF; border-radius: 999px; padding: 1px 8px; font-size: 13px">8</span></a>
+        <a href="#" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; color: #3D3D39; font-weight: 500; text-decoration: none">Схвалені <span style="background: #EDECE8; border-radius: 999px; padding: 1px 8px; font-size: 13px">1</span></a>
+        <a href="Problems.dc.html" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; color: #3D3D39; font-weight: 500; text-decoration: none">Проблеми <span style="background: #FDECEA; color: #A3211A; border-radius: 999px; padding: 1px 8px; font-size: 13px; font-weight: 600">4</span></a>
+        <a href="#" style="display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 10px; color: #3D3D39; font-weight: 500; text-decoration: none">Опубліковані <span style="background: #EDECE8; border-radius: 999px; padding: 1px 8px; font-size: 13px">62</span></a>
+        <button type="button" aria-haspopup="menu" style="display: inline-flex; align-items: center; gap: 6px; padding: 10px 14px; border-radius: 10px; border: 0; background: transparent; color: #3D3D39; font: inherit; font-weight: 500; cursor: pointer">Ще
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+        </button>
+      </nav>
+      <button type="button" style="min-height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid #D6D5CF; background: #FFFFFF; font: inherit; color: #3D3D39; cursor: pointer">Вийти</button>
+    </div>
+  </header>
+
+  <main style="max-width: 1280px; margin: 0 auto; padding: 20px 24px 48px; display: flex; flex-direction: column; gap: 20px">
+
+    <!-- Смужка стану -->
+    <section aria-label="Стан програми" style="background: #FFFFFF; border: 1px solid #E4E3DE; border-radius: 14px; padding: 16px 20px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap">
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; flex: 1 1 560px">
+        <div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: #F6F6F3">
+          <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 50%; background: #8A8A84"></span>
+          <div><div style="font-weight: 600">Робот стоїть</div><div style="font-size: 13px; color: #5F5F5A">ліміт на сьогодні: 20 з 20 · завтра 6808 першим</div></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: #F6F6F3">
+          <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 50%; background: #1E7A46"></span>
+          <div><div style="font-weight: 600">ШІ</div><div style="font-size: 13px; color: #5F5F5A">885 чекають · 0 у роботі</div></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: #F6F6F3">
+          <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 50%; background: #1E7A46"></span>
+          <div><div style="font-weight: 600">Бот</div><div style="font-size: 13px; color: #5F5F5A">працює</div></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: #F6F6F3">
+          <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 50%; background: #1E7A46"></span>
+          <div><div style="font-weight: 600">Сайт</div><div style="font-size: 13px; color: #5F5F5A">24 чекають 7 днів · продано за тиждень 1</div></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 10px; background: #F6F6F3">
+          <span aria-hidden="true" style="width: 10px; height: 10px; border-radius: 50%; background: #1E7A46"></span>
+          <div><div style="font-weight: 600">Самоперевірка</div><div style="font-size: 13px; color: #5F5F5A">усе гаразд · 19:34</div></div>
+        </div>
+      </div>
+      <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+        <button type="button" style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid #D6D5CF; background: #FFFFFF; font: inherit; font-weight: 500; color: #1A1A18; cursor: pointer">Перевірити завтрашні</button>
+        <button type="button" onClick="{{ toggleStart }}" style="min-height: 48px; padding: 0 28px; border-radius: 10px; border: 0; background: {{ startBg }}; color: #FFFFFF; font: inherit; font-weight: 700; font-size: 16px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4l13 8-13 8z"></path></svg>
+          {{ startLabel }}
+        </button>
+      </div>
+    </section>
+
+    <!-- Заголовок і фільтри -->
+    <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap">
+      <div>
+        <h1 style="margin: 0; font-size: 26px; letter-spacing: -0.02em">На перевірку</h1>
+        <p style="margin: 4px 0 0; color: #5F5F5A">Переглянь і схвали — робот опублікує після «Старт».</p>
+      </div>
+      <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center">
+        <div role="group" aria-label="Фільтр" style="display: flex; gap: 6px; flex-wrap: wrap">
+          <sc-for list="{{ filters }}" as="f" hint-placeholder-count="3">
+            <button type="button" onClick="{{ f.pick }}" aria-pressed="{{ f.pressed }}" style="{{ f.style }}">{{ f.label }}</button>
+          </sc-for>
+        </div>
+        <label style="display: flex; align-items: center; gap: 8px; background: #FFFFFF; border: 1px solid #D6D5CF; border-radius: 10px; padding: 0 12px; min-height: 44px; min-width: 260px">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5F5F5A" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+          <span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Пошук</span>
+          <input type="search" placeholder="Назва, бренд або номер поста" style="border: 0; outline: none; font: inherit; flex: 1; background: transparent; min-width: 0">
+        </label>
+      </div>
+    </div>
+
+    <!-- Список -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px">
+      <sc-for list="{{ shown }}" as="it" hint-placeholder-count="8">
+        <a href="Card.dc.html" style="display: flex; flex-direction: column; background: #FFFFFF; border: 1px solid #E4E3DE; border-radius: 14px; overflow: hidden; text-decoration: none; color: #1A1A18">
+          <div style="aspect-ratio: 4 / 3; background: #ECEBE6; display: flex; align-items: center; justify-content: center; color: #6E6E68; font-size: 13px; position: relative">
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 6px">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="12" cy="12" r="3.5"></circle></svg>
+              фото поста {{ it.post }}
+            </div>
+            <span style="{{ it.badgeStyle }}">{{ it.badge }}</span>
+          </div>
+          <div style="padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 6px">
+            <div style="font-weight: 600; line-height: 1.35">{{ it.title }}</div>
+            <div style="display: flex; align-items: baseline; gap: 8px">
+              <span style="font-size: 18px; font-weight: 700">{{ it.price }} грн</span>
+            </div>
+            <div style="font-size: 13px; color: #5F5F5A">{{ it.section }}</div>
+            <div style="font-size: 13px; color: #5F5F5A">Пост {{ it.post }} · {{ it.date }}</div>
+          </div>
+        </a>
+      </sc-for>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1060}}'>
+class Component extends DCLogic {
+  constructor(p){ super(p); this.state = { filter: 'all', running: false }; }
+  renderVals() {
+    const ok = 'position: absolute; top: 10px; left: 10px; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; background: #E3F2E9; color: #155C34';
+    const warn = 'position: absolute; top: 10px; left: 10px; padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 600; background: #FFF1C7; color: #6B4A00';
+    const items = [
+      { post: 4564, title: 'Шкіряні рукавички в новому стані', price: '1001', section: 'Аксесуари · Рукавички', date: '13.03.2026', warn: false },
+      { post: 6454, title: 'Шапка Michael Kors в новому стані', price: '750', section: 'Аксесуари · Шапки', date: '02.09.2026', warn: false },
+      { post: 6566, title: 'Термо кросівки Keen з мембраною, 39 розмір', price: '2290', section: 'Жіноче · Взуття · Кросівки', date: '10.09.2026', warn: true, why: 'Сезон змінено' },
+      { post: 6581, title: 'Термо кросівки Merrell gore-tex, 36 розмір', price: '2070', section: 'Жіноче · Взуття · Кросівки', date: '11.09.2026', warn: true, why: '1 жовте поле' },
+      { post: 6719, title: 'Нові шкіряні рукавички Lorenz', price: '870', section: 'Аксесуари · Рукавички', date: '21.09.2026', warn: false },
+      { post: 6755, title: 'Термо кросівки Tamaris Active gore-tex, 36', price: '2070', section: 'Жіноче · Взуття · Кросівки', date: '23.09.2026', warn: true, why: '1 жовте поле' },
+      { post: 6761, title: 'Шкіряні чоботи Kennel &amp; Schmenger gore-tex, 39', price: '1840', section: 'Жіноче · Взуття · Чоботи', date: '27.09.2026', warn: false },
+      { post: 6802, title: 'Нові чоловічі шкіряні рукавички Tom Franks', price: '1100', section: 'Аксесуари · Рукавички', date: '29.09.2026', warn: true, why: '1 жовте · 1 пропуск' }
+    ].map(x => ({ ...x, title: x.title.replace('&amp;', '&'), badge: x.warn ? x.why : 'Готово', badgeStyle: x.warn ? warn : ok }));
+    const f = this.state.filter;
+    const shown = items.filter(x => f === 'all' || (f === 'warn' ? x.warn : !x.warn));
+    const base = 'min-height: 40px; padding: 0 14px; border-radius: 999px; font: inherit; font-size: 14px; cursor: pointer; ';
+    const filters = [
+      { id: 'all', label: 'Усі · 8' },
+      { id: 'warn', label: 'Треба глянути · 4' },
+      { id: 'ok', label: 'Готові · 4' }
+    ].map(x => ({ ...x, pressed: String(f === x.id), pick: () => this.setState({ filter: x.id }),
+      style: base + (f === x.id ? 'background: #1A1A18; color: #FFFFFF; border: 1px solid #1A1A18; font-weight: 600' : 'background: #FFFFFF; color: #1A1A18; border: 1px solid #D6D5CF') }));
+    return {
+      shown, filters,
+      startLabel: this.state.running ? 'Стоп' : 'Старт',
+      startBg: this.state.running ? '#A3211A' : '#1F4FD1',
+      toggleStart: () => this.setState({ running: !this.state.running })
+    };
+  }
+}
+</script>
+</body>
+</html>
