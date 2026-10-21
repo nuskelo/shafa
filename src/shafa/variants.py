@@ -15,8 +15,17 @@ from shafa import ai, rules
 from shafa.db import Status, now
 from shafa.folders import base_name, variant_name, variant_size
 
+# FIX-CORE-014-off (21.10, рішення Власника): пости з кількома розмірами не розбиваємо на Картки —
+# `many_items`, як до CORE-014. Код варіантів лишився; True вмикає його знову.
+SPLIT_SIZES = False
+
 GONE = "size_gone"
 GONE_TEXT = "Розмір {size} прибрано з поста — можливо, продано"
+
+
+def size_variants(text: str) -> list[rules.SizeVariant] | None:
+    """Варіанти поста для створення Карток; None, поки `SPLIT_SIZES` вимкнено."""
+    return rules.size_variants(text) if SPLIT_SIZES else None
 
 
 def find(folder_name: str, text: str) -> rules.SizeVariant | None:
@@ -212,6 +221,8 @@ def split_card(conn: sqlite3.Connection, item_id: int) -> list[int]:
     сестри — її копії. Є відповідь ШІ — бланки правилами без ШІ (`review` чи «Проблеми»), немає —
     усі `new`, і ШІ спитають один раз. Правка розміру не копіюється: у кожної свій. Картку з
     `shafa_id`, схвалену чи в роботі — не чіпає. Повертає id варіантів."""
+    if not SPLIT_SIZES:
+        return []
     from shafa import fill  # fill бере звідси перевірку відповіді
 
     row = conn.execute(
@@ -282,6 +293,8 @@ def split_card(conn: sqlite3.Connection, item_id: int) -> list[int]:
 def split_waiting(conn: sqlite3.Connection) -> int:
     """Старі Картки `many_items` (і `new`), пост яких тепер розбирається на розміри, → варіанти.
     Робиться разом із «Перерахувати правилами» і на старті програми. Повертає, скільки розділено."""
+    if not SPLIT_SIZES:
+        return 0
     rows = conn.execute(
         "SELECT id, folder_name FROM items WHERE purged_at IS NULL AND shafa_id IS NULL "
         "AND post_id IS NOT NULL AND (problem_code = 'many_items' OR status = ?) ORDER BY id",
