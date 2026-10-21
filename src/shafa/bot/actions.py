@@ -165,7 +165,14 @@ def _load(read: Any) -> list[Upload]:
     return [Upload(prepared.file_name or "photo.jpg", prepared.data)]
 
 
-def deliver(bot: Any, chat_id: int, text: str, keyboard: dict | None, album_of: int | None) -> bool:
+def deliver(
+    bot: Any,
+    chat_id: int,
+    text: str,
+    keyboard: dict | None,
+    album_of: int | None,
+    silent: bool = False,
+) -> bool:
     """Повідомлення Власнику; `album_of` — Картка, чиї фото йдуть перед ним (збій фото не заважає)."""
     if album_of is not None:
         files = album(bot.conn, bot.settings.root, album_of)
@@ -176,6 +183,8 @@ def deliver(bot: Any, chat_id: int, text: str, keyboard: dict | None, album_of: 
                 bot.tg.send_photo(chat_id, files[0], "")
         except TelegramError as error:
             bot.log(f"Фото до тривоги не надіслано: {error}")
+    if silent:  # збірка тихих подій (BOT-012)
+        return bot.say(chat_id, text, keyboard, silent=True) is not None
     return bot.say(chat_id, text, keyboard) is not None
 
 

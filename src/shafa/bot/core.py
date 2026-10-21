@@ -88,6 +88,7 @@ CHANNEL_PHOTO_MAX = 10 * 1024 * 1024  # Bot API: фото завантаженн
 CHANNEL_SIDE = 2560  # якщо оригінал не влазить у ліміти фото — зменшуємо копію для каналу
 
 REPORT_COMMAND = "/zvit"  # звіт за сьогодні зараз; лише від Власника (BOT-009)
+DETAIL_COMMAND = "/detali"  # «Детально» ↔ «Лише важливе»; лише від Власника (BOT-012)
 PUBLISH = "pub"
 CANCEL = "cancel"
 EDIT = "edit"
@@ -99,6 +100,9 @@ SUMMARY_DELAY = timedelta(seconds=2)  # «Чернеток: N» — після �
 OPEN = ("collecting", "preview", "editing")  # відкриті чернетки
 
 TEXTS = {
+    "detail_on": "Детально: бачиш усе, що відбувається у фоні (ШІ, робот, довідники). "
+    "Щоб лишити лише важливе — /detali.",
+    "detail_off": "Лише важливе: тривоги, Проблеми, зупинки. Щоб бачити все — /detali.",
     "help": "Надішли текст поста і фото (до 10) — я покажу, як буде в каналі, і чекатиму "
     "«Опублікувати».",
     "unsupported": "Цей файл я не прочитаю. Надішли це фото як звичайне фото або JPG.",
@@ -381,10 +385,14 @@ class Bot:
 
     # --- Надсилання без падінь (відповідь не дійшла — не привід ламати обробку) ---
 
-    def say(self, chat_id: int | None, text: str, markup: dict | None = None) -> dict | None:
+    def say(
+        self, chat_id: int | None, text: str, markup: dict | None = None, silent: bool = False
+    ) -> dict | None:
         if chat_id is None:
             return None
         try:
+            if silent:  # без звуку: збірка тихих подій (BOT-012)
+                return self.tg.send_message(chat_id, text, markup, silent=True)
             return self.tg.send_message(chat_id, text, markup)
         except TelegramError as error:
             self.log(f"Не вдалося відповісти в чат: {error}")
@@ -473,6 +481,8 @@ class Bot:
             self._mark(update_id)
             if chat_id == self.settings.owner_chat and is_command(text, REPORT_COMMAND):
                 self._report_now(chat_id)  # позначку «надіслано» не міняє
+            elif chat_id == self.settings.owner_chat and is_command(text, DETAIL_COMMAND):
+                self._detail(chat_id)
             else:
                 self.say(chat_id, TEXTS["help"])
             return
@@ -623,6 +633,19 @@ class Bot:
             return
         self.say(chat_id, text)
 
+    def _detail(self, chat_id: int) -> None:
+        """`/detali`: «Детально» (усе, що відбувається у фоні) ↔ «Лише важливе» (BOT-012)."""
+        if not alerts.enabled():
+            self.say(chat_id, "Тривоги вимкнено (SHAFA_ALERTS) — перемикати нічого.")
+            return
+        try:
+            detail = alerts.toggle(self.conn, config.data_dir(), self.clock().astimezone())
+        except Exception as error:  # noqa: BLE001
+            self.log(f"Тривоги: {type(error).__name__}: {str(error)[:200]}")
+            self.say(chat_id, "Не вдалося перемкнути — подивись журнал бота.")
+            return
+        self.say(chat_id, TEXTS["detail_on" if detail else "detail_off"])
+
     def _daily_report(self, now_: datetime) -> None:
         """Раз на добу о `SHAFA_REPORT_AT` — звіт Власнику. Ноутбук спав — при першому `tick` тієї
         ж доби; пропущену добу — один раз «за вчора». Помилка Telegram — позначки немає, нова спроба
@@ -664,8 +687,8 @@ class Bot:
                 return
             alerts.run(
                 self.conn, data_dir, now_,
-                lambda text, markup=None, album_of=None: actions.deliver(
-                    self, owner, text, markup, album_of
+                lambda text, markup=None, album_of=None, silent=False: actions.deliver(
+                    self, owner, text, markup, album_of, silent
                 ),
             )  # fmt: skip
         except Exception as error:  # noqa: BLE001

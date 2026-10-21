@@ -21,7 +21,7 @@ from datetime import time as clock_time
 from pathlib import Path
 from typing import Any
 
-from shafa import config, review, rules
+from shafa import config, events, review, rules
 from shafa.db import Status
 from shafa.robot import browser, publish
 from shafa.robot.form import (
@@ -283,6 +283,9 @@ def rehearse(
     if not 1 <= len(cards) <= REHEARSE_MAX:
         raise ValueError(f"За прогін — від 1 до {REHEARSE_MAX} Карток")
     report = RehearsalReport(reason="збій", code="error")
+    events.emit(
+        "rehearse.start", f"Пробний прогін: перевіряю {len(cards)} Карток (нічого не публікую)"
+    )
     try:
         _loop(report, conn, root, cards, session, make_driver, screens, log, sleep, rand)
     except KeyboardInterrupt:
@@ -293,9 +296,28 @@ def rehearse(
         raise
     finally:
         path = save(report, today(), folder)
+        events.emit(*_event(report))
         log(report.summary())
         log(f"Звіт: {path}")
     return report
+
+
+def _event(report: RehearsalReport) -> tuple[str, str]:
+    """BOT-012: підсумок для журналу подій — «добре» тихо, будь-що інше гучно. Людською мовою:
+    без кодів, а що не так — словами першої невдалої Картки."""
+    if report.code == "done" and not report.failed:
+        return "rehearse.done", f"Пробний прогін: {report.good} з {report.checked} добре"
+    text = f"Пробний прогін: добре {report.good} з {report.checked}"
+    if failed := report.failed:
+        posts = ", ".join(str(o.post_id) for o in failed[:5]) + ("…" if len(failed) > 5 else "")
+        text += f", не пройшли {len(failed)} (пости {posts})"
+        if report.moved:
+            text += f"; Схвалених серед них — {len(report.moved)}, вони в «Проблемах»"
+        if failed[0].text:
+            text += f". Перша: {failed[0].text[:150]}"
+    if report.code != "done":
+        text += f". Зупинка: {report.reason}"
+    return "rehearse.bad", text
 
 
 def _loop(report, conn, root, cards, session, make_driver, screens, log, sleep, rand) -> None:

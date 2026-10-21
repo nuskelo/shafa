@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from shafa import borh, catalog, config, dup, review, rules, variants
+from shafa import borh, catalog, config, dup, events, review, rules, variants
 from shafa.bot.presence import GONE
 from shafa.db import Status, now
 from shafa.fill import STALE_RULES
@@ -437,6 +437,12 @@ def purge_old_photos(conn: sqlite3.Connection, today: datetime) -> list[str]:
     return removed
 
 
+def _label(card: review.Card) -> str:
+    """Як Картку називає Власник: номер поста (розмір — для варіантів), у старих — назва папки."""
+    name = str(card.post_id) if card.post_id else card.folder_name
+    return f"{name} (розмір {card.variant})" if card.variant else name
+
+
 class Run:
     """Одна сесія робота. Залежності передаються ззовні — тести без браузера й мережі."""
 
@@ -495,7 +501,33 @@ class Run:
             self._finish(report)
         return report
 
+    def _announce_end(self, report: Report) -> None:
+        """BOT-012: кінець сесії — в журнал подій. Спокійний (`done`/`limit`/`stop`) — тихо, замість
+        «✅ Сесія N» з бази; інший — `robot.stop` (бот його не шле: ⛔ з кнопкою йде з бази). Пишемо до
+        запису в базу: бот, що побачив закриту сесію, уже має цей рядок і не дублює її."""
+        row = self.conn.execute(
+            "SELECT started_at FROM sessions WHERE id = ?", (report.session_id,)
+        ).fetchone()
+        span = ""
+        if row and row[0]:
+            minutes = round(
+                (datetime.now(UTC) - datetime.fromisoformat(row[0])).total_seconds() / 60
+            )
+            span = f" · {minutes} хв" if minutes else " · менше хвилини"
+        reason = (report.reason or "").strip().rstrip(".")
+        text = (
+            f"Сесія {report.session_id}: опубліковано {len(report.published)}, "
+            f"у Проблемах {len(report.problems)}{span}"
+            + (f" · {reason[:1].lower() + reason[1:]}" if reason else "")
+        )
+        calm = report.code in ("done", "limit", "stop") or not (report.code or report.reason)
+        events.emit(
+            "robot.end" if calm else "robot.stop", text,
+            data={"session": report.session_id, "code": report.code},
+        )  # fmt: skip
+
     def _finish(self, report: Report) -> None:
+        self._announce_end(report)
         with self.conn:
             self.conn.execute(
                 "UPDATE sessions SET ended_at = ?, published = ?, problems = ?, stop_reason = ?, "
@@ -518,8 +550,15 @@ class Run:
         if not rows:
             return Stop("done", "черга порожня")
         limits, started = group_limits(), started_groups(self.conn, today)
-        if not take(rows, started, limits, allowed):
+        if not (taken := take(rows, started, limits, allowed)):
             return Stop("limit", f"на сьогодні все: {started.text(limits)}")
+        old = sum(1 for row in taken if is_old(row["folder_name"]))
+        events.emit(
+            "robot.start",
+            f"Сесія {report.session_id} почалась: у черзі {len(taken)} (старих {old}, "
+            f"нових {len(taken) - old}), ліміт сьогодні ще {day_limit - started_today(self.conn, today)}",
+            data={"session": report.session_id, "queue": len(taken)},
+        )
         if (stop := self._open_form(None)) is not None:
             return stop
         try:
@@ -729,6 +768,7 @@ class Run:
         if _problem(self.conn, card.id, source, code, text):
             report.problems.append((card.post_id, code, text))
             self.log(f"Пост {card.post_id}: {text}")
+            events.emit("robot.problem", f"{_label(card)}: {text}", data={"code": code})
 
     def _url(self) -> str:
         try:
@@ -944,6 +984,14 @@ class Run:
                 )
             report.published.append((card.post_id, url))
             self.log(f"Пост {card.post_id}: опубліковано {url}")
+            price = card.fields["price"].value
+            events.emit(
+                "robot.post",
+                f"{_label(card)} опубліковано"
+                + (f" · {price} грн" if price else "")
+                + f" · {events.clean_url(url)}",
+                data={"post": card.post_id},
+            )
             listing = card_listing(card, result.product_id, url)  # дубль не пройде до перечитування
             listings.append(listing)
             listings_mod.add(self.conn, listing)

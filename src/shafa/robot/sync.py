@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from shafa import config
+from shafa import config, events
 from shafa.robot import browser, lang
 
 SNAPSHOT = Path(__file__).resolve().parents[1] / "data" / "shafa-catalog.json"
@@ -263,16 +263,52 @@ def crawl(session: browser.Session, cache: Path, log=print) -> dict:
     )
 
 
+def _changed_text(old: dict | None, new: dict) -> str:
+    """Що змінилось у знімку (для журналу подій): розділи нові, зниклі й змінені, бренди."""
+    now_sections = new.get("sections", {})
+    line = f"розділів {len(now_sections)}"
+    if not old:
+        return line + " (попереднього знімка не було)"
+    before = old.get("sections", {})
+    added = [k for k in now_sections if k not in before]
+    removed = [k for k in before if k not in now_sections]
+    changed = [k for k in now_sections if k in before and now_sections[k] != before[k]]
+    brands = len(set(new.get("brands", [])) ^ set(old.get("brands", [])))
+    if not (added or removed or changed or brands):
+        return line + ", без змін"
+    parts = [f"нових {len(added)}", f"зниклих {len(removed)}", f"змінених {len(changed)}"]
+    return f"{line}: {', '.join(parts)}, брендів змінилось {brands}"
+
+
+def sync_and_save(session: browser.Session, cache: Path = CACHE, log=print) -> dict:
+    """`robot --sync-catalog`: обхід і збереження знімка; початок, кінець і помилка — в журнал подій."""
+    events.emit("catalog.start", "Довідники Шафи: починаю оновлення (лише читання, до 2 год)")
+    try:
+        old = json.loads(SNAPSHOT.read_text(encoding="utf-8")) if SNAPSHOT.is_file() else None
+    except (OSError, ValueError):
+        old = None
+    try:
+        snapshot = crawl(session, cache, log=log)
+        save(snapshot, SNAPSHOT)
+    except Exception as error:
+        events.emit(
+            "catalog.error",
+            f"Довідники Шафи не оновлено: {type(error).__name__}: {str(error)[:200]}",
+        )
+        raise
+    events.emit("catalog.done", f"Довідники Шафи оновлено: {_changed_text(old, snapshot)}")
+    return snapshot
+
+
 def main() -> int:  # pragma: no cover — живий обхід
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
         session = browser.Session(p)
         try:
-            snapshot = crawl(session, CACHE, log=lambda s: print(s, flush=True))
+            snapshot = sync_and_save(session, CACHE, log=lambda s: print(s, flush=True))
         finally:
             session.close()
-    save(snapshot)
     print(f"Збережено {SNAPSHOT}: розділів {len(snapshot['sections'])}")
     return 0
 

@@ -26,7 +26,7 @@ from typing import Any
 
 import anthropic
 
-from shafa import ai, config, fill, rules, variants
+from shafa import ai, config, events, fill, rules, variants
 from shafa.db import Status, now
 from shafa.folders import OLD_PREFIX, is_old
 from shafa.robot import publish
@@ -304,6 +304,12 @@ def send(
                 (Status.PROBLEM, skipped.text, now(), skipped.folder_name, Status.NEW),
             )
     if not plan.planned:
+        if plan.over_budget:  # гучно: нові Картки стоять, поки не вичерпається доба
+            events.emit(
+                "ai.stop",
+                f"ШІ не взявся за нові Картки: ліміт витрат на добу ({dollars(lim.daily_micro_usd)}) "
+                "вичерпано — решта завтра",
+            )
         return Sent(plan)
     with conn:
         batch_id = conn.execute(
@@ -323,16 +329,27 @@ def send(
         with conn:
             if _definitely_not_created(error):
                 _fail(conn, batch_id, text)
+                events.emit("ai.stop", f"ШІ не взяв Картки: {text}. Вони лишились у черзі")
                 return Sent(plan, batch_id, error=text)
             conn.execute(
                 "UPDATE ai_batches SET status = 'uncertain', note = ? WHERE id = ?",
                 (text, batch_id),
             )
+        events.emit(
+            "ai.stop",
+            f"ШІ не відповів на пакет ({text}): перевірю його пізніше, вдруге не відправляю",
+        )
         return Sent(plan, batch_id, uncertain=True)
     with conn:
         conn.execute(
             "UPDATE ai_batches SET anthropic_id = ?, status = 'in_progress' WHERE id = ?",
             (created.id, batch_id),
+        )
+    if len(plan.planned) > 1:  # одну Картку (пост з бота) не оголошуємо: лише результат
+        events.emit(
+            "ai.start",
+            f"ШІ почав аналіз: {events.cards(len(plan.planned))} (пакет, ≈ {cents(plan.estimate)}, "
+            "результат зазвичай до години)",
         )
     return Sent(plan, batch_id)
 
@@ -360,6 +377,23 @@ class Collected:
     lost: int = 0
     waiting: int = 0  # пакетів ще в роботі
     note: str | None = None  # не вдалося спитати API
+    tally: fill.Tally = field(default_factory=fill.Tally)  # для журналу подій (BOT-012)
+
+
+def _folder(conn: sqlite3.Connection, item_id: int) -> str:
+    row = conn.execute("SELECT folder_name FROM items WHERE id = ?", (item_id,)).fetchone()
+    return row[0] if row else str(item_id)
+
+
+def _announce(conn: sqlite3.Connection, report: Collected) -> None:
+    """BOT-012: пакет(и) оброблено — підсумок в журнал подій (одна Картка — один короткий рядок)."""
+    tally = report.tally
+    if tally.total:
+        events.emit("ai.done", fill.tally_text(conn, tally))
+    elif tally.returned:
+        events.emit(
+            "ai.done", f"ШІ: пакет не обробив {events.cards(tally.returned)} — вони знову в черзі"
+        )
 
 
 def _card_inputs(conn: sqlite3.Connection, item_id: int) -> tuple[list[str], str, str, str]:
@@ -399,6 +433,7 @@ def apply_result(conn: sqlite3.Connection, batch_id: int, line: Any, report: Col
         if result.type in ("expired", "canceled"):  # не оброблено й не оплачено
             state = "returned"
             report.returned += 1
+            report.tally.returned += 1
         elif result.type == "succeeded":
             try:
                 answer, usage = ai.parse(result.message, batch=True)
@@ -407,6 +442,7 @@ def apply_result(conn: sqlite3.Connection, batch_id: int, line: Any, report: Col
                 fill.set_status(conn, item_id, str(error))
                 state = "error"
                 report.errors += 1
+                report.tally.card(_folder(conn, item_id), problem=True)
             else:
                 names, folder, text, edited = _card_inputs(conn, item_id)
                 fields = variants.check_answer(answer, names, folder, text, edited)
@@ -418,12 +454,17 @@ def apply_result(conn: sqlite3.Connection, batch_id: int, line: Any, report: Col
                     variants.spread(conn, item_id, answer)  # сестрам — та сама відповідь
                 state = "done"
                 report.filled += 1
+                report.tally.card(
+                    folder, yellow=any(f.yellow for f in fields),
+                    problem=fill.no_section(fields), cost=usage.cost_micro_usd,
+                )  # fmt: skip
         else:  # errored: не оплачується
             text = _errored_text(result)
             fill.log_request(conn, item_id, None, text, batch_id)
             fill.set_status(conn, item_id, text)
             state = "error"
             report.errors += 1
+            report.tally.card(_folder(conn, item_id), problem=True)
         conn.execute(
             "UPDATE ai_batch_items SET state = ? WHERE batch_id = ? AND item_id = ?",
             (state, batch_id, item_id),
@@ -438,6 +479,7 @@ def _finish(conn: sqlite3.Connection, batch_id: int, report: Collected) -> None:
             (batch_id,),
         )
         report.returned += cursor.rowcount
+        report.tally.returned += cursor.rowcount
         conn.execute(
             "UPDATE ai_batches SET status = 'ended', ended_at = ? WHERE id = ?", (now(), batch_id)
         )
@@ -464,6 +506,8 @@ def _lose(conn: sqlite3.Connection, batch_id: int, report: Collected) -> None:
             (LOST_TEXT, now(), batch_id),
         )
     report.lost += len(items)
+    for item_id in items:
+        report.tally.card(_folder(conn, item_id), problem=True)
 
 
 def _adopt(conn: sqlite3.Connection, client: Any, today: datetime, report: Collected) -> None:
@@ -528,6 +572,7 @@ def collect(conn: sqlite3.Connection, client: Any, today: datetime) -> Collected
             _finish(conn, batch["id"], report)
     except anthropic.AnthropicError as error:
         report.note = ai.error_text(error)
+    _announce(conn, report)
     return report
 
 
