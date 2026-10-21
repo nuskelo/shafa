@@ -59,11 +59,25 @@ def chat_id(name: str) -> int | None:
     return int(raw)
 
 
+def export_channel() -> int | None:
+    """Канал, з якого Експорт (`TELEGRAM_CHANNEL_ID`); немає чи неправильний — None."""
+    raw = config.setting("TELEGRAM_CHANNEL_ID")
+    if raw is None:
+        return None
+    try:
+        return channel_id(raw)
+    except SetupError:
+        return None
+
+
 def settings(root: Path) -> Settings:
     seller, owner = chat_id(SELLER), chat_id(OWNER)
     if seller is None and owner is None:
         raise SetupError(f"Немає {SELLER} і {OWNER} у .env — бот нікого не слухатиме")
-    return Settings(channel_id(config.setting(CHANNEL)), seller, owner, root)
+    return Settings(
+        channel_id(config.setting(CHANNEL)), seller, owner, root,
+        export_channel_id=export_channel(),
+    )  # fmt: skip
 
 
 def _is_admin(member: dict, can_post: bool = False) -> bool:

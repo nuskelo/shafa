@@ -13,7 +13,7 @@ from collections import Counter
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
-from shafa import batch, config
+from shafa import batch, changes, config
 from shafa.db import Status
 from shafa.robot import control, rehearse
 
@@ -151,6 +151,19 @@ def _waiting(conn: sqlite3.Connection) -> str:
     return "Чекають тебе: " + " · ".join(parts) if parts else ""
 
 
+def _changed(data_dir: Path, day: date) -> str:
+    """CORE-015: пост змінили вже після публікації на Шафі — там правимо вручну."""
+    found = changes.published_on(data_dir, day)
+    if not found:
+        return ""
+    lines = [
+        f"Пост {number} змінено після публікації на Шафі: {what}" for number, what in found[:5]
+    ]
+    if len(found) > 5:
+        lines.append(f"…і ще {len(found) - 5}")
+    return "\n".join(lines)
+
+
 def _rehearsal(data_dir: Path, day: date) -> str:
     last = rehearse.last_summary(data_dir)
     if last is None or not _on(last.get("at"), day):
@@ -253,6 +266,7 @@ def build(conn: sqlite3.Connection, data_dir: Path, day: date, *, late: bool = F
         _shafa(conn, day),
         _problems(conn, day),
         _waiting(conn),
+        _changed(data_dir, day),
         _rehearsal(data_dir, day),
         _bot_site(conn, day),
         _ai(conn, day),

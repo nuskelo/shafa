@@ -375,6 +375,32 @@ def _stored_answer(conn: sqlite3.Connection, item_id: int) -> tuple[dict[str, An
     return json.loads(row["answer"]), row["prompt_version"], bool(row["rebuilt"])
 
 
+@dataclass(frozen=True)
+class Recalc:
+    """Поля Картки за збереженою відповіддю ШІ, текстом поста й її правками — без запиту до ШІ."""
+
+    answer: dict[str, Any]
+    version: int
+    rebuilt: bool
+    fields: list[ai.Field]
+    problem: tuple[str, str] | None  # (код, текст): кілька товарів, немає розділу
+
+
+def recalc(conn: sqlite3.Connection, item_id: int, text: str) -> Recalc:
+    names = [
+        r[0]
+        for r in conn.execute(
+            "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
+        )
+    ]
+    answer, version, rebuilt = _stored_answer(conn, item_id)
+    fields = ai.check_answer(answer, names, text, rules.edit_text(edits_of(conn, item_id)))
+    problem = scan.text_problem(text)
+    if problem is None and no_section(fields):
+        problem = ("no_section", NO_SECTION_TEXT)
+    return Recalc(answer, version, rebuilt, fields, problem)
+
+
 def recheck(conn: sqlite3.Connection, item_ids: list[int] | None = None) -> int:
     """Поточні правила коду — до збереженої відповіді ШІ, тексту поста і її правок (`edits` не
     чіпаються). ШІ не викликається. Заодно — чи потрібне Картці ШІ (нова інструкція). Повертає,
@@ -392,36 +418,29 @@ def recheck(conn: sqlite3.Connection, item_ids: list[int] | None = None) -> int:
             ).fetchone()
             if text is None:
                 continue
-            names = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
-                )
-            ]
-            answer, version, rebuilt = _stored_answer(conn, item_id)
-            fields = ai.check_answer(
-                answer, names, text[0], rules.edit_text(edits_of(conn, item_id))
-            )
-            problem = scan.text_problem(text[0])
-            if problem is None and no_section(fields):
-                problem = ("no_section", NO_SECTION_TEXT)
+            now_ = recalc(conn, item_id, text[0])
             status, code, why = (
-                (Status.PROBLEM, *problem) if problem else (Status.REVIEW, None, None)
+                (Status.PROBLEM, *now_.problem) if now_.problem else (Status.REVIEW, None, None)
             )
+            # примітка «Пост/фото змінено» (CORE-015) на Картці `review` переживає перерахунок
+            keep = f"problem_code IN ({', '.join('?' * len(review.NOTE_CODES))})"
             cursor = conn.execute(
                 f"""
-                UPDATE items SET status = ?, problem_code = ?, problem_text = ?, updated_at = ?
+                UPDATE items SET status = ?,
+                    problem_code = CASE WHEN ? = 'review' AND {keep} THEN problem_code ELSE ? END,
+                    problem_text = CASE WHEN ? = 'review' AND {keep} THEN problem_text ELSE ? END,
+                    updated_at = ?
                 WHERE id = ? AND (status = ? OR (status = ? AND problem_code IN ({marks})))
                 """,
-                (status, code, why, now(), item_id, Status.REVIEW, Status.PROBLEM,
-                 *RECHECK_PROBLEMS),
+                (status, status, *review.NOTE_CODES, code, status, *review.NOTE_CODES, why, now(),
+                 item_id, Status.REVIEW, Status.PROBLEM, *RECHECK_PROBLEMS),
             )  # fmt: skip
             if cursor.rowcount != 1:
                 continue
             # кілька товарів у пості ШІ не виправить — «Перезаповнити» їм не пропонуємо
-            needs = code != "many_items" and ai.needs_ai(version, answer, text[0])
-            save_answer(conn, item_id, answer, version, rebuilt, needs)
-            save_blank(conn, item_id, fields)
+            needs = code != "many_items" and ai.needs_ai(now_.version, now_.answer, text[0])
+            save_answer(conn, item_id, now_.answer, now_.version, now_.rebuilt, needs)
+            save_blank(conn, item_id, now_.fields)
             done += 1
     return done
 

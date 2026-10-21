@@ -492,6 +492,11 @@ ACTIONS = {
 }
 
 
+# CORE-015: примітка на Картці `review`, коли пост чи фото змінили після перевірки (у `problem_text`).
+# Не проблема: Картка лишається «На перевірку»; зникає, коли її схвалюють.
+POST_CHANGED, PHOTOS_CHANGED = "post_changed", "photos_changed"
+NOTE_CODES = (POST_CHANGED, PHOTOS_CHANGED)
+
 ON_SHAFA = "on_shafa_block"  # ROBOT-011: у Картки є `shafa_id` — товар уже на Шафі
 
 
@@ -526,6 +531,12 @@ def act(conn: sqlite3.Connection, item_id: int, action: str, root: Path | None =
             """,
             (target, archived_at, now(), item_id, source),
         )
+        if action == "approve" and cursor.rowcount == 1:  # вона побачила примітку — знімаємо
+            conn.execute(
+                "UPDATE items SET problem_code = NULL, problem_text = NULL "
+                "WHERE id = ? AND problem_code IN (?, ?)",
+                (item_id, *NOTE_CODES),
+            )
         if action == "restore" and cursor.rowcount == 1:
             # DUP-001: ШІ відправив Картку в Архів як дубль, а вона її повертає — значить, це інший
             # товар: на схожі оголошення Картка більше не перевіряється (інакше ШІ знову б сказав «так»)

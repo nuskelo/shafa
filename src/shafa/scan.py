@@ -228,6 +228,10 @@ def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]
             _save_item(conn, folder, folder_problem(folder, texts, twins, old))
         _mark_missing(conn, {f.name for f in folders})
 
+    from shafa import changes  # changes бере правила звідси
+
+    changes.sync_photos(conn, folders)  # TD-004: фото Карток review/approved
+
     new = conn.execute("SELECT count(*) FROM items WHERE status = ?", (Status.NEW,)).fetchone()[0]
     problems = [
         Problem(r["folder_name"], r["problem_code"], r["problem_text"])
