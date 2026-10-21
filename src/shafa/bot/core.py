@@ -6,7 +6,8 @@
   невизначена відповідь — не повторюємо, кажемо Власнику.
 - D3: фото «як фото» і файлами; у папку — що прийшло (файл — оригінал), у канал — перше фото,
   завантажене як фото.
-- D4: файлом лише JPG і PNG (PNG → JPG), інше — «Надішли як звичайне фото або JPG».
+- D4: файлом JPG, PNG (PNG → JPG) і HEIC/HEIF з iPhone (→ JPG, PHOTO-001), інше — «Надішли як
+  звичайне фото або JPG».
 - D5 (уточнено Власником): кожен підписаний пост — фото з підписом або альбом, де є підпис, —
   окрема чернетка й окреме прев'ю (вона може переслати кілька готових постів поспіль). Частини
   одного альбому — завжди разом (`media_group_id`). Правило «2 хв» лише для неповного: фото без
@@ -48,6 +49,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import pillow_heif
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import changes, config, rules, site
@@ -55,6 +57,8 @@ from shafa.bot import alerts, report
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
+
+pillow_heif.register_heif_opener()  # Pillow читає HEIC/HEIF (PHOTO-001)
 
 SELLER_USERNAME = "viktoriaviktoriatg"
 SIGNATURE = f"Пишіть сюди 👉 @{SELLER_USERNAME}"  # як у її постах (звірено з Експортом)
@@ -75,6 +79,10 @@ SETTLE = timedelta(seconds=3)  # тиша після останнього пов
 PREVIEW_VALID = timedelta(hours=24)  # D2
 MAX_PHOTOS = 10
 CAPTION_MAX = 1024  # Bot API: підпис фото 0–1024 символи
+HEIC_MIMES = {"image/heic", "image/heif", "image/heic-sequence", "image/heif-sequence"}
+# `bot_draft_parts.kind` у базі приймає лише photo/jpeg/png (CHECK у `db.py`), тож HEIC-документ
+# записується як «jpeg», а HEIC пізнається за вмістом (`ftyp` + марка) — як і має бути.
+HEIC_BRANDS = {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"}
 DOWNLOAD_MAX = 20 * 1024 * 1024  # Bot API: бот завантажує файли до 20 МБ
 CHANNEL_PHOTO_MAX = 10 * 1024 * 1024  # Bot API: фото завантаженням до 10 МБ
 CHANNEL_SIDE = 2560  # якщо оригінал не влазить у ліміти фото — зменшуємо копію для каналу
@@ -94,6 +102,7 @@ TEXTS = {
     "help": "Надішли текст поста і фото (до 10) — я покажу, як буде в каналі, і чекатиму "
     "«Опублікувати».",
     "unsupported": "Цей файл я не прочитаю. Надішли це фото як звичайне фото або JPG.",
+    "heic_failed": "Не можу відкрити це фото — надішліть, будь ласка, як звичайне фото.",
     "too_big": "Файл більший за 20 МБ — Telegram не дає його боту. Надішли як звичайне фото.",
     "not_photo": "Я приймаю лише текст і фото. Надішли фото як звичайне фото або JPG.",
     "need_photos": "Надішли фото до цього тексту (до 10).",
@@ -137,7 +146,12 @@ TEXTS = {
 
 
 class PhotoError(Exception):
-    """Фото не прочитати. Текст — для Продавчині."""
+    """Фото не прочитати. Текст — для Продавчині. `heic` — це HEIC-файл, який не вдалося відкрити
+    (їй — окреме повідомлення, Власнику — рядок, PHOTO-001)."""
+
+    def __init__(self, text: str, heic: bool = False) -> None:
+        super().__init__(text)
+        self.heic = heic
 
 
 @dataclass(frozen=True)
@@ -291,11 +305,27 @@ def local_date(unix: int) -> str:
     return datetime.fromtimestamp(unix, UTC).astimezone().strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def is_heic(data: bytes) -> bool:
+    return data[4:8] == b"ftyp" and data[8:12] in HEIC_BRANDS
+
+
+def heic_to_jpeg(image: Image.Image) -> bytes:
+    """HEIC/HEIF → JPG тієї самої якості, що й PNG; поворот за EXIF, профіль кольору зберігається
+    (iPhone знімає в Display P3). У `pillow-heif` пікселі вже повернуті, `exif_transpose` — страховка."""
+    picture = ImageOps.exif_transpose(image).convert("RGB")
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=95, icc_profile=image.info.get("icc_profile"))
+    return out.getvalue()
+
+
 def as_jpeg(data: bytes, kind: str) -> bytes:
-    """Фото для папки: JPG як є (оригінал), PNG → JPG (D4). Бите → PhotoError."""
+    """Фото для папки: JPG як є (оригінал), PNG й HEIC → JPG (D4, PHOTO-001). Бите → PhotoError."""
+    heic = is_heic(data)
     try:
         with Image.open(io.BytesIO(data)) as image:
             image.load()
+            if heic or image.format == "HEIF":
+                return heic_to_jpeg(image)
             if kind != "png":
                 if image.format != "JPEG":
                     raise PhotoError("фото не JPG")
@@ -306,7 +336,9 @@ def as_jpeg(data: bytes, kind: str) -> bytes:
             out = io.BytesIO()
             background.save(out, "JPEG", quality=95)
             return out.getvalue()
-    except (UnidentifiedImageError, OSError) as error:
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        if heic:
+            raise PhotoError(TEXTS["heic_failed"], heic=True) from error
         raise PhotoError("фото не відкривається") from error
 
 
@@ -490,6 +522,8 @@ class Bot:
                 return (document["file_id"], "jpeg"), None
             if mime == "image/png" or name.endswith(".png"):
                 return (document["file_id"], "png"), None
+            if mime in HEIC_MIMES or name.endswith((".heic", ".heif")):
+                return (document["file_id"], "jpeg"), None  # вид у базі — jpeg, див. HEIC_BRANDS
             return None, "unsupported"
         if any(k in message for k in ("video", "sticker", "voice", "audio", "animation")):
             return None, "not_photo"
@@ -698,8 +732,7 @@ class Bot:
         except (TelegramError, PhotoError, OSError) as error:
             self.log(f"Прев'ю не надіслано: {error}")
             self._set(draft_id, asked=1)  # без кнопок публікувати нічого; вона надішле ще раз
-            why = str(error) if isinstance(error, PhotoError) else "прев'ю не надіслалось"
-            self.say(chat_id, TEXTS["failed"].format(why=why))
+            self._photo_failed(draft_id, chat_id, error, "прев'ю не надіслалось")
             return
         self._set(
             draft_id, state="preview", preview_message_id=sent.get("message_id"),
@@ -822,10 +855,9 @@ class Bot:
             photos = [self._download(p) for p in files]
             channel_photo = for_channel(photos[0])
         except (TelegramError, PhotoError, OSError) as error:
-            why = str(error) if isinstance(error, PhotoError) else "фото не завантажились"
             self.log(f"Чернетка {draft_id}: {error}")
-            self._set(draft_id, state="failed", note=why)
-            self.say(chat_id, TEXTS["failed"].format(why=why))
+            self._set(draft_id, state="failed", note=self._why(error, "фото не завантажились"))
+            self._photo_failed(draft_id, chat_id, error, "фото не завантажились")
             return
         try:
             sent = self.tg.send_photo(
@@ -836,6 +868,18 @@ class Bot:
             self._channel_failed(draft_id, chat_id, error)
             return
         self._published(draft, sent, caption, photos)
+
+    @staticmethod
+    def _why(error: Exception, other: str) -> str:
+        return str(error) if isinstance(error, PhotoError) else other
+
+    def _photo_failed(self, draft_id: int, chat_id: int, error: Exception, other: str) -> None:
+        """Їй — що не вийшло; HEIC, який не відкрився, — окремий текст і рядок Власнику."""
+        if isinstance(error, PhotoError) and error.heic:
+            self.say(chat_id, TEXTS["heic_failed"])
+            self.tell_owner(f"не вдалося прочитати HEIC-фото чернетки {draft_id}")
+            return
+        self.say(chat_id, TEXTS["failed"].format(why=self._why(error, other)))
 
     def _download(self, part: sqlite3.Row) -> bytes:
         info = self.tg.get_file(part["file_id"])

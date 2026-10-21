@@ -1,5 +1,6 @@
 import io
 from datetime import UTC, datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import unquote
 
 import pytest
@@ -606,13 +607,71 @@ def test_png_file_converted_to_jpeg(conn, bot, tg, upd, clock, root):
         assert (image.format, image.size) == ("JPEG", (300, 400))
 
 
-@pytest.mark.parametrize(
-    ("name", "mime"), [("IMG_1.HEIC", "image/heic"), ("фото.webp", "image/webp"), ("a.pdf", "")]
-)
+@pytest.mark.parametrize(("name", "mime"), [("фото.webp", "image/webp"), ("a.pdf", "")])
 def test_unsupported_file_explained(conn, bot, tg, upd, name, mime):
     bot.handle(upd(message=document(11, "d1", name, mime)))
     assert tg.texts(SELLER) == ["Цей файл я не прочитаю. Надішли це фото як звичайне фото або JPG."]
     assert conn.execute("SELECT count(*) FROM bot_draft_parts").fetchone()[0] == 0
+
+
+HEIC = Path(__file__).parent / "fixtures" / "photo.heic"  # 48×32, EXIF-поворот 6 (→ 32×48)
+
+
+@pytest.mark.parametrize(
+    ("name", "mime"),
+    [("IMG_1377.HEIC", "image/heic"), ("IMG_1.heif", ""), ("фото", "image/heif")],
+)
+def test_heic_file_converted_to_jpeg(conn, bot, tg, upd, clock, root, name, mime):
+    tg.files["d1"] = HEIC.read_bytes()
+    bot.handle(upd(message={**document(11, "d1", name, mime), "caption": TEXT}))
+    clock.pass_(seconds=4)
+    bot.tick()
+    preview = tg.last_preview
+    assert preview is not None and tg.texts(OWNER) == []
+    press(upd, bot, tg)
+
+    with Image.open(root / "1401" / "1.jpg") as image:
+        assert (image.format, image.size) == ("JPEG", (32, 48))  # повернуто за EXIF
+        assert image.getexif().get(0x0112, 1) == 1
+    assert tg.channel_posts and state(conn) == "published"
+
+
+def test_heic_as_photo_content_converted(conn, bot, tg, upd, clock, root):
+    """Telegram зазвичай сам робить JPEG, але HEIC під видом фото теж приймаємо."""
+    tg.files["f1"] = HEIC.read_bytes()
+    bot.handle(upd(message=photo(11, "f1", caption=TEXT)))
+    clock.pass_(seconds=4)
+    bot.tick()
+    press(upd, bot, tg)
+
+    with Image.open(root / "1401" / "1.jpg") as image:
+        assert image.format == "JPEG"
+
+
+def test_broken_heic_explained_to_seller_and_owner(conn, bot, tg, upd, clock, root):
+    tg.files["d1"] = HEIC.read_bytes()[:200]
+    bot.handle(upd(message={**document(11, "d1", "IMG_2.HEIC", "image/heic"), "caption": TEXT}))
+    clock.pass_(seconds=4)
+    bot.tick()
+
+    assert tg.texts(SELLER)[-1] == (
+        "Не можу відкрити це фото — надішліть, будь ласка, як звичайне фото."
+    )
+    assert any("HEIC-фото чернетки 1" in t for t in tg.texts(OWNER))
+    assert tg.channel_posts == [] and not (root / "1401").exists()
+
+
+def test_broken_heic_on_publish_publishes_nothing(conn, bot, tg, upd, clock):
+    tg.files["d1"] = HEIC.read_bytes()
+    bot.handle(upd(message={**document(11, "d1", "IMG_2.HEIC", "image/heic"), "caption": TEXT}))
+    clock.pass_(seconds=4)
+    bot.tick()
+    tg.files["d1"] = HEIC.read_bytes()[:200]  # між прев'ю й «Опублікувати» файл не відкривається
+    press(upd, bot, tg)
+
+    assert tg.channel_posts == [] and state(conn) == "failed"
+    assert tg.texts(SELLER)[-1].startswith("Не можу відкрити це фото")
+    assert any("HEIC-фото" in t for t in tg.texts(OWNER))
 
 
 def test_too_big_file(conn, bot, tg, upd):

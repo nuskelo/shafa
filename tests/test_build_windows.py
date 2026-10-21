@@ -1,6 +1,7 @@
 """Збірка для Windows (ops/build_windows.py) — без мережі: закріплення, ._pth, Встановити.cmd."""
 
 import importlib.util
+import re
 import tomllib
 from pathlib import Path
 
@@ -21,10 +22,17 @@ def test_lock_has_every_dependency_pinned_with_hash():
 
 def test_lock_matches_pyproject_pins():
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    locked = build.pinned(build.REQUIREMENTS.read_text(encoding="utf-8").splitlines())
+    locked = {  # pip у звіті пише `pillow_heif`, у pyproject — `pillow-heif`: назви за PEP 503
+        re.sub(r"[-_.]+", "-", name): version
+        for name, version in build.pinned(
+            build.REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+        ).items()
+    }
     for requirement in project["dependencies"]:
         name, version = requirement.split("==")
-        assert locked[name.lower()] == version, f"{name}: перезапусти ops/build_windows.py lock"
+        assert locked[re.sub(r"[-_.]+", "-", name.lower())] == version, (
+            f"{name}: перезапусти ops/build_windows.py lock"
+        )
 
 
 def test_python_is_312_10_with_checksum():
