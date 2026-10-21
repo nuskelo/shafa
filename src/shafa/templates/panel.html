@@ -1,47 +1,109 @@
-<section class="ai health health-{{ health.code }}" aria-live="polite">
-  <div class="robot-state">
-    {% if health.code == "running" %}
-    <strong>Перевіряю…</strong>
-    {% elif health.code == "none" %}
-    <strong>Самоперевірка ще не проходила</strong>
-    {% elif health.code == "ok" %}
-    <strong>Все гаразд</strong>
-    <span class="robot-counts">перевірено {{ local(health.at) }}</span>
-    {% else %}
-    <strong>Є що виправити</strong>
-    <span class="robot-counts">перевірено {{ local(health.at) }} · решта ({{ health.ok }}) — гаразд</span>
-    {% endif %}
-  </div>
-  {% if health.rows %}
-  <ul class="health-rows">
-    {% for row in health.rows %}
-    <li class="health-{{ row.status }}"><strong>{{ row.name }}:</strong> {{ row.text }}{% if row.fix %} <span class="health-fix">Що зробити: {{ row.fix }}</span>{% endif %}</li>
-    {% endfor %}
-  </ul>
-  {% endif %}
-  {% if health.code != "running" %}
-  <form method="post" action="/health" class="robot-buttons">
-    <input type="hidden" name="token" value="{{ token }}">
-    <input type="hidden" name="back" value="{{ back }}">
-    <button>Перевірити ще раз</button>
-  </form>
-  {% endif %}
-</section>
-<section class="robot robot-{{ robot.code }}" aria-live="polite">
+<section class="status" aria-label="Стан програми" aria-live="polite">
   {% if fake %}<p class="fake">ПІДСТАВНА ШАФА — тест, нічого не публікується на справжній сайт</p>{% endif %}
-  <div class="robot-state">
-    <strong>{{ robot.text }}</strong>
-    <span class="robot-counts">{{ robot.groups_text }} · Схвалених {{ robot.approved }}</span>
-    {% if robot.last and "start" in robot.buttons %}<span class="robot-last">Останній запуск: {{ robot.last }}</span>{% endif %}
-    {% if robot.rehearsal and "start" in robot.buttons %}<span class="robot-last">{{ robot.rehearsal }}{% if robot.rehearsal_problems %} · <a href="/problem">Проблеми</a>{% endif %}</span>{% endif %}
+  <div class="tiles">
+    <div class="tile robot robot-{{ robot.code }}">
+      <span class="dot dot-{{ tones.robot }}" aria-hidden="true"></span>
+      <div class="tile-body">
+        <strong class="tile-title">{{ robot.text }}</strong>
+        <span class="tile-sub">{{ robot.groups_text }} · Схвалених {{ robot.approved }}</span>
+        {% if robot.session_published is not none %}<span class="tile-sub">Публікує: у цій сесії {{ robot.session_published }} · у черзі {{ robot.approved }}</span>{% endif %}
+        {% if "start" in robot.buttons and robot.why_not %}<span class="tile-sub why">{{ robot.why_not }}</span>{% endif %}
+        {% if robot.last and "start" in robot.buttons %}<span class="tile-sub robot-last">Останній запуск: {{ robot.last }}</span>{% endif %}
+        {% if robot.rehearsal and "start" in robot.buttons %}<span class="tile-sub robot-last">{{ robot.rehearsal }}{% if robot.rehearsal_problems %} · <a href="/problem">Проблеми</a>{% endif %}</span>{% endif %}
+        {% if robot.code == "login_needed" %}
+        <p class="robot-help">Робот вийшов із Шафи. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="tile ai{% if ai.busy %} ai-busy{% endif %}">
+      <span class="dot dot-{{ tones.ai }}" aria-hidden="true"></span>
+      <div class="tile-body">
+        <strong class="tile-title">ШІ{% if ai.busy %}: {{ ai.busy }}{% endif %}</strong>
+        <span class="tile-sub">готові {{ ai.ready }} · чекають відповіді {{ ai.pending }}</span>
+        {% if ai.note %}<span class="tile-sub ai-note">{{ ai.note }}</span>{% endif %}
+        <form method="post" action="/ai" class="tile-buttons">
+          <input type="hidden" name="token" value="{{ token }}">
+          <input type="hidden" name="back" value="{{ back }}">
+          <button name="action" value="update"{% if ai.busy %} disabled{% endif %}>Оновити</button>
+          {% if ai.recheckable and not ai.busy %}
+          <button name="action" value="recheck">Перерахувати правилами ({{ ai.recheckable }})</button>
+          {% endif %}
+          {% if ai.refillable and not ai.busy %}
+          <a class="button" href="/refill">Перезаповнити ({{ ai.refillable }})</a>
+          {% endif %}
+        </form>
+        <details class="more-info" data-key="ai">
+          <summary>Детальніше</summary>
+          <p class="why">Готові до ШІ {{ ai.ready }} · Чекають відповіді ШІ {{ ai.pending }} · Нові чекають {{ ai.wait_days }} днів після посту {{ ai.young }}</p>
+          <p class="why">«Оновити»: нові папки → ШІ пакетом; результати зазвичай до години</p>
+          {% if ai.recheckable and not ai.busy %}<p class="why">«Перерахувати правилами»: нові правила — без ШІ, безкоштовно; ваші правки лишаються</p>{% endif %}
+        </details>
+      </div>
+    </div>
+
+    <div class="tile bot-{{ bot.code }}">
+      <span class="dot dot-{{ tones.bot }}" aria-hidden="true"></span>
+      <div class="tile-body">
+        <strong class="tile-title">Бот: {{ bot.text }}</strong>
+        {% if bot.can_start %}
+        <form method="post" action="/bot" class="tile-buttons">
+          <input type="hidden" name="token" value="{{ token }}">
+          <input type="hidden" name="back" value="{{ back }}">
+          <button name="action" value="start">Запустити бота</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if site %}
+    <div class="tile">
+      <span class="dot dot-{{ tones.site }}" aria-hidden="true"></span>
+      <div class="tile-body">
+        <strong class="tile-title">Сайт</strong>
+        <span class="tile-sub">чекає {{ site[0] }} · вийде сьогодні {{ site[1] }} · продано за тиждень {{ site[2] }} · відкладено (запобіжник) {{ site[3] }}</span>
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="tile health health-{{ health.code }}">
+      <span class="dot dot-{{ tones.health }}" aria-hidden="true"></span>
+      <div class="tile-body">
+        {% if health.code == "running" %}
+        <strong class="tile-title">Перевіряю…</strong>
+        {% elif health.code == "none" %}
+        <strong class="tile-title">Самоперевірка ще не проходила</strong>
+        {% elif health.code == "ok" %}
+        <strong class="tile-title">Все гаразд</strong>
+        <span class="tile-sub">перевірено {{ local(health.at) }}</span>
+        {% else %}
+        <strong class="tile-title">Є що виправити</strong>
+        <span class="tile-sub">перевірено {{ local(health.at) }} · решта ({{ health.ok }}) — гаразд</span>
+        {% endif %}
+        {% if health.rows %}
+        <details class="more-info" data-key="health" open>
+          <summary>Детальніше</summary>
+          <ul class="health-rows">
+            {% for row in health.rows %}
+            <li class="health-{{ row.status }}"><strong>{{ row.name }}:</strong> {{ row.text }}{% if row.fix %} <span class="health-fix">Що зробити: {{ row.fix }}</span>{% endif %}</li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
+        {% if health.code != "running" %}
+        <form method="post" action="/health" class="tile-buttons">
+          <input type="hidden" name="token" value="{{ token }}">
+          <input type="hidden" name="back" value="{{ back }}">
+          <button>Перевірити ще раз</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
   </div>
-  <form method="post" action="/robot" class="robot-buttons">
+
+  <form method="post" action="/robot" class="status-actions">
     <input type="hidden" name="token" value="{{ token }}">
     <input type="hidden" name="back" value="{{ back }}">
-    {% if "start" in robot.buttons %}
-    <button name="action" value="start" class="approve"{% if not robot.can_start %} disabled{% endif %}>Старт</button>
-    {% if robot.why_not %}<span class="why">{{ robot.why_not }}</span>{% endif %}
-    {% endif %}
     {% if "rehearse" in robot.buttons %}
     <button name="action" value="rehearse">Перевірити завтрашні</button>
     {% endif %}
@@ -50,48 +112,8 @@
     {% if "stop" in robot.buttons %}<button name="action" value="stop" class="reject">Стоп</button>{% endif %}
     {% if "login" in robot.buttons %}<button name="action" value="login">Увійти на Шафу</button>{% endif %}
     {% if "login_done" in robot.buttons %}<button name="action" value="login_done">Я увійшов — закрити вікно</button>{% endif %}
-  </form>
-  {% if robot.code == "login_needed" %}
-  <p class="robot-help">Робот вийшов із Шафи. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».</p>
-  {% endif %}
-</section>
-<section class="ai{% if ai.busy %} ai-busy{% endif %}" aria-live="polite">
-  <div class="robot-state">
-    <strong>ШІ{% if ai.busy %}: {{ ai.busy }}{% endif %}</strong>
-    <span class="robot-counts">Готові до ШІ {{ ai.ready }} · Чекають відповіді ШІ {{ ai.pending }} · Нові чекають {{ ai.wait_days }} днів після посту {{ ai.young }}</span>
-    {% if ai.note %}<span class="ai-note">{{ ai.note }}</span>{% endif %}
-  </div>
-  <form method="post" action="/ai" class="robot-buttons">
-    <input type="hidden" name="token" value="{{ token }}">
-    <input type="hidden" name="back" value="{{ back }}">
-    <button name="action" value="update"{% if ai.busy %} disabled{% endif %}>Оновити</button>
-    <span class="why">нові папки → ШІ пакетом; результати зазвичай до години</span>
-    {% if ai.recheckable and not ai.busy %}
-    <button name="action" value="recheck">Перерахувати правилами ({{ ai.recheckable }})</button>
-    <span class="why">нові правила — без ШІ, безкоштовно; ваші правки лишаються</span>
-    {% endif %}
-    {% if ai.refillable and not ai.busy %}
-    <a class="button" href="/refill">Перезаповнити ({{ ai.refillable }})</a>
+    {% if "start" in robot.buttons %}
+    <button name="action" value="start" class="approve"{% if not robot.can_start %} disabled{% endif %}>Старт</button>
     {% endif %}
   </form>
 </section>
-<section class="ai bot-{{ bot.code }}" aria-live="polite">
-  <div class="robot-state">
-    <strong>Бот: {{ bot.text }}</strong>
-  </div>
-  {% if bot.can_start %}
-  <form method="post" action="/bot" class="robot-buttons">
-    <input type="hidden" name="token" value="{{ token }}">
-    <input type="hidden" name="back" value="{{ back }}">
-    <button name="action" value="start">Запустити бота</button>
-  </form>
-  {% endif %}
-</section>
-{% if site %}
-<section class="ai" aria-live="polite">
-  <div class="robot-state">
-    <strong>Сайт</strong>
-    <span class="robot-counts">чекає {{ site[0] }} · вийде сьогодні {{ site[1] }} · продано за тиждень {{ site[2] }} · відкладено (запобіжник) {{ site[3] }}</span>
-  </div>
-</section>
-{% endif %}

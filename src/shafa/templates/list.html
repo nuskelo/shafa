@@ -1,48 +1,61 @@
 {% extends "base.html" %}
 {% block title %}{{ tabs[current] }} · Шафа-помічник{% endblock %}
 {% block main %}
-<form class="search" method="get" action="/{{ current }}">
-  <input type="search" name="q" value="{{ query }}" placeholder="Назва, бренд, номер поста або слово з тексту" aria-label="Пошук">
-  <button type="submit">Шукати</button>
-  {% if query %}<a href="/{{ current }}">Скинути</a>{% endif %}
-</form>
+{% set intro = {
+  "review": "Переглянь і схвали — робот опублікує після «Старт».",
+  "approved": "Схвалені Картки — їх опублікує робот після «Старт».",
+  "problem": "Тут Картки, з якими треба розібратись самій.",
+  "archived": "Архів: Картки видаляються через 7 днів.",
+} %}
+<div class="page-head">
+  <div>
+    <h1>{{ tabs[current] }}</h1>
+    {% if intro[current] %}<p class="intro">{{ intro[current] }}</p>{% endif %}
+  </div>
+  <div class="page-tools">
+    {% if filters %}
+    <div class="filters" role="group" aria-label="Фільтр">
+      {% for key, label, n, href in filters %}
+      <a class="pill{% if chosen == key %} on{% endif %}" href="{{ href }}"{% if chosen == key %} aria-current="true"{% endif %}>{{ label }} · {{ n }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <form class="search" method="get" action="/{{ current }}">
+      {% if chosen %}<input type="hidden" name="f" value="{{ chosen }}">{% endif %}
+      <input type="search" name="q" value="{{ query }}" placeholder="Назва, бренд, номер поста або слово з тексту" aria-label="Пошук">
+      <button type="submit">Шукати</button>
+      {% if query %}<a href="/{{ current }}{% if chosen %}?f={{ chosen }}{% endif %}">Скинути</a>{% endif %}
+    </form>
+  </div>
+</div>
 
 {% if not cards %}
-<p class="empty">{% if query %}Нічого не знайдено.{% else %}Тут поки порожньо.{% endif %}</p>
+<p class="empty">{% if query %}Нічого не знайдено.{% elif chosen %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
 {% endif %}
 
-<ul class="rows">
+<ul class="grid">
 {% for card in cards %}
+  {% set mark = marks[card.id] %}
   <li>
-    <a class="row" href="/item/{{ card.id }}">
-      {% if card.photos %}
-      <img class="thumb" src="/thumb/{{ card.id }}/{{ card.photos[0].position }}" alt="" loading="lazy">
-      {% else %}
-      <span class="thumb none">немає фото</span>
-      {% endif %}
-      <span class="info">
-        <span class="name">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</span>
-        {% if current == "problem" or (current == "archived" and card.problem_code in ("post_deleted", "duplicate")) %}
-        <span class="problem">{{ card.problem_text }}</span>
+    <a class="tilecard" href="/item/{{ card.id }}">
+      <span class="shot">
+        {% if card.photos %}
+        <img src="/thumb/{{ card.id }}/{{ card.photos[0].position }}" alt="" loading="lazy">
         {% else %}
-        <span class="details">{{ [(card.fields["price"].value ~ " грн") if card.fields["price"].value, card.fields["section"].value] | select | join(" · ") }}</span>
+        <span class="noshot">немає фото</span>
         {% endif %}
-        <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date[:10] if card.post_date, ("видалиться " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if current == "archived" and card.archived_at] | select | join(" · ") }}</span>
+        {% if mark %}<span class="mark mark-{{ mark.tone }}{% if mark.tone == "warn" and card.status == "review" and card.problem_code in ("post_changed", "photos_changed", "season_changed") %} changed{% endif %}" title="{{ card.problem_text if card.problem_code else mark.text }}">{{ mark.text }}</span>{% endif %}
       </span>
-      {% if card.status == "review" and card.problem_code in ("post_changed", "photos_changed", "season_changed") %}
-      <span class="badge changed" title="{{ card.problem_text }}">змінено</span>
-      {% endif %}
-      {% if card.old_rules %}
-      <span class="badge old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто перезаповнити">заповнено старими правилами</span>
-      {% endif %}
-      {% if checks[card.id].error %}
-      <span class="badge robot-error" title="Робот не зможе опублікувати — відкрийте Картку">робот не зможе</span>
-      {% elif checks[card.id].notes %}
-      <span class="badge" title="Робот пропустить деякі поля — відкрийте Картку">пропуски: {{ checks[card.id].notes | length }}</span>
-      {% endif %}
-      {% if card.yellow and current != "problem" %}
-      <span class="badge">Жовтих: {{ card.yellow }}</span>
-      {% endif %}
+      <span class="body">
+        <span class="name">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</span>
+        {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
+        {% if current == "problem" or (current == "archived" and card.problem_code in ("post_deleted", "duplicate")) %}
+        {% if card.problem_text %}<span class="problem">{{ card.problem_text }}</span>{% endif %}
+        {% endif %}
+        {% if card.fields["section"].value %}<span class="details">{{ card.fields["section"].value | replace(" / ", " · ") }}</span>{% endif %}
+        <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date, ("видалиться " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if current == "archived" and card.archived_at] | select | join(" · ") }}</span>
+        {% if card.old_rules %}<span class="tag old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто перезаповнити">заповнено старими правилами</span>{% endif %}
+      </span>
     </a>
   </li>
 {% endfor %}

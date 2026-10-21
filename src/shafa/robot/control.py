@@ -72,6 +72,7 @@ class State:
     limits: publish.Groups = field(default_factory=lambda: publish.Groups(0, 0))
     rehearsal: str = ""  # QA-003: підсумок останнього пробного прогону
     rehearsal_problems: int = 0
+    session_published: int | None = None  # UI-004: скільки опубліковано в поточній сесії
 
     @property
     def groups_text(self) -> str:
@@ -180,10 +181,16 @@ def state(
         if last["stop_code"] == "done" and last["problems"]:  # не всі Схвалені опубліковано
             last_text = f"Опубліковано {last['published']}, у Проблемах {last['problems']}"
     summary = rehearse.last_summary()
+    in_session = None
+    if code in ("running", "pausing", "paused", "stopping") and open_session:
+        in_session = conn.execute(
+            "SELECT count(*) FROM items WHERE session_id = ? AND status = 'published'",
+            (open_session["id"],),
+        ).fetchone()[0]
     return State(code, text, today, day_limit, approved, can_start, why_not, wait, last_text,
                  buttons, started, limits or publish.Groups(0, 0),
                  summary["summary"] if summary else "",
-                 int(summary.get("problems") or 0) if summary else 0)  # fmt: skip
+                 int(summary.get("problems") or 0) if summary else 0, in_session)  # fmt: skip
 
 
 def log_line(text: str, log: Path | None = None) -> None:
