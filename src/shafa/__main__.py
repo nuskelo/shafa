@@ -155,6 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="повернути розмір Карткам, де він зник (CORE-013); з --dry-run — лише показати; без ШІ",
     )
     cmd.add_argument(
+        "--recheck-season",
+        action="store_true",
+        help="сезон за правилом «термо» (CORE-016); з --dry-run — лише показати; без ШІ",
+    )
+    cmd.add_argument(
         "--precheck",
         action="store_true",
         help="Схвалені, яких робот не опублікує, — назад «На перевірку» (QA-002); з --dry-run — "
@@ -571,6 +576,21 @@ def run_recheck_sizes(parser: argparse.ArgumentParser, args: argparse.Namespace)
     return 0
 
 
+def run_recheck_season(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    if not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    conn = db.connect(args.db)
+    try:
+        result = fill.recheck_season(conn, dry_run=args.dry_run)
+    finally:
+        conn.close()
+    for post, was, became in result.changed:
+        print(f"Пост {post}: {was} → {became}")
+    verb = "Змінилось би" if args.dry_run else "Змінилось"
+    print(f"{verb}: {len(result.changed)}; схвалених іде «На перевірку»: {len(result.returned)}")
+    return 0
+
+
 def run_precheck(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     root = _root(parser, args)
     if not args.db.is_file():
@@ -592,6 +612,8 @@ def run_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return run_precheck(parser, args)
     if args.recheck_sizes:
         return run_recheck_sizes(parser, args)
+    if args.recheck_season:
+        return run_recheck_season(parser, args)
     if args.refill:
         return run_refill(parser, args)
     if args.batch or args.collect or args.estimate:
