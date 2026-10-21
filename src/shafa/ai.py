@@ -696,12 +696,16 @@ def check_lining(value: Any, path: str | None, post_text: str) -> Field:
 
 
 def check_season(value: Any, path: str | None, post_text: str) -> Field:
-    """Сезон: ознаки в тексті вирішує код (зима, мембрана → демісезон); жовте — лише суперечність."""
-    code, doubt = rules.season(post_text)
+    """Сезон: ознаки в тексті вирішує код (зима, мембрана → демісезон, «термо» за типом взуття);
+    жовте — лише суперечність."""
+    code, doubt = rules.season(post_text, path)
     if code is None:
         return check_values("season", value, path)
     if path is not None and catalog.characteristic(path, "season") is None:
         return Field("season", [])
+    if rules.has_termo(post_text) and (spec := catalog.characteristic(path, "season")):
+        # CORE-016: «термо» дає два сезони, а в розділі може бути лише один — ставимо те, що є
+        code = [v for v in code if catalog.canonical(v, spec["choices"])] or code
     field = check_values("season", code, path)
     if doubt:
         return Field(field.name, field.value, True, _join(field.reason, doubt))
