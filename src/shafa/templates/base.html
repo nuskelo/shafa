@@ -6,9 +6,10 @@
 <title>{% block title %}Шафа-помічник{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" href="/static/icon.svg">
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js"></script>
 </head>
 <body>
+{% block header %}
 <header class="top">
   <div class="top-in">
     <a class="brand" href="/review">Шафа-помічник</a>
@@ -33,10 +34,13 @@
     {% endif %}
   </div>
 </header>
+{% endblock %}
 <div class="wrap">
+{% block status %}
   <div id="robot" data-panel="/robot/panel?back={{ back | urlencode }}">
 {% include "panel.html" %}
   </div>
+{% endblock %}
   {% if message %}
   <p class="message">{{ message }}</p>
   {% endif %}
@@ -44,5 +48,6 @@
 {% block main %}{% endblock %}
   </main>
 </div>
+{% block after %}{% endblock %}
 </body>
 </html>
