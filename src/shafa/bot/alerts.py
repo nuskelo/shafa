@@ -1,6 +1,10 @@
 """Тривоги Власнику в Telegram одразу (BOT-010): зупинка робота, нові Проблеми, збій самоперевірки,
 бюджет ШІ. Звіт о 21:00 (`report`) лишається як є.
 
+BOT-012: ще й журнал подій (`events.py`) — усе, що відбувається у фоні (ШІ, робот, довідники).
+Гучні події йдуть одразу, тихі — однією збіркою раз на 5 хв (без звуку). `/detali` перемикає
+«Детально» ↔ «Лише важливе» (без журналу, як до BOT-012).
+
 Бот сам читає базу й файли теки даних; робот, програма й `health` нічого нового не пишуть. Що вже
 надіслано — файл `alerts-last.json` у теці даних. Перший запуск лише запам'ятовує поточний стан і
 нічого не шле за минуле. `run` нічого не знає про Telegram: надсилання — функція `send`, яка
@@ -15,7 +19,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from shafa import batch, config
+from shafa import batch, config, events
 from shafa.bot import actions, report
 from shafa.db import Status
 from shafa.robot import control
@@ -26,7 +30,12 @@ LAST_NAME = "alerts-last.json"
 EVERY = timedelta(seconds=60)  # як часто бот дивиться в базу
 SAME = timedelta(hours=1)  # однакове повідомлення (той самий ключ) — не частіше
 HEALTH_REPEAT = timedelta(hours=6)  # той самий FAIL самоперевірки — не частіше
-PER_HOUR = 20  # повідомлень на годину, включно з «ще N подій»
+PER_HOUR = 20  # гучних повідомлень на годину, включно з «ще N подій»
+QUIET_EVERY = timedelta(minutes=5)  # тихі події збираються в одне повідомлення
+QUIET_LINES = 15  # …або коли набралось стільки рядків
+QUIET_PER_HOUR = 12  # збірок на годину; понад це — «ще N подій»
+QUIET_LINE = 300  # символів на один рядок збірки
+FRESH = timedelta(minutes=10)  # перший запуск: старіше за це в журналі не шлемо
 BUDGET_SHARE = 80  # % добового ліміту ШІ
 LIST_MAX = 10  # проблем в одному повідомленні
 LINE_MAX = actions.LINE_MAX  # символів на одну проблему
@@ -36,10 +45,11 @@ CALM = {"done", "limit", "stop"}  # звичайне завершення (чи 
 @dataclass
 class Event:
     key: str
-    text: str
+    text: str | None  # None — нічого не слати, лише запам'ятати (commit)
     commit: Callable[[dict], None]  # що запам'ятати, коли повідомлення дійшло
     markup: dict | None = None  # кнопки під повідомленням (BOT-011)
     album_of: int | None = None  # Картка, чиї фото (+ схожого оголошення) йдуть перед повідомленням
+    quiet: bool = False  # подія журналу без звуку: іде в збірку (BOT-012)
 
 
 def enabled() -> bool:
@@ -53,13 +63,31 @@ def enabled() -> bool:
 # --- Стан ---
 
 
+def _defaults() -> dict:
+    """Поля BOT-012; у файлі, записаному раніше, їх ще немає."""
+    return {
+        "events": None,  # позиція в журналі подій: {"inode", "offset"}
+        "detail": True,  # «Детально» (усе) чи «Лише важливе»
+        "ended": [],  # сесії, про кінець яких уже розповів журнал (замість «✅ Сесія N»)
+        "pending": [],  # тихі рядки, що чекають збірки
+        "pending_since": "",
+        "batches": [],  # коли надіслано збірки за останню годину
+        "dropped": 0,  # подій понад ліміт збірок, про які ще не казали
+        "notice_at": "",
+    }
+
+
 def load(data_dir: Path) -> dict | None:
     """None — файла немає чи він зіпсований: тоді це «перший запуск»."""
     try:
         state = json.loads((data_dir / LAST_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return state if isinstance(state, dict) and "session_id" in state else None
+    if not isinstance(state, dict) or "session_id" not in state:
+        return None
+    for name, value in _defaults().items():
+        state.setdefault(name, value)
+    return state
 
 
 def save(data_dir: Path, state: dict) -> None:
@@ -135,6 +163,7 @@ def snapshot(conn: sqlite3.Connection, data_dir: Path, moment: datetime) -> dict
         "budget_day": "",
         "sent": {},
         "hour": [],
+        **_defaults(),
     }
     if found := _health_file(data_dir):
         at, checks = found
@@ -153,7 +182,7 @@ def _sentence(text: object) -> str:
 
 
 def _session_events(conn: sqlite3.Connection, state: dict) -> list[Event]:
-    events = []
+    out: list[Event] = []
     rows = conn.execute(
         "SELECT * FROM sessions WHERE id > ? AND ended_at IS NOT NULL ORDER BY id",
         (state["session_id"],),
@@ -162,7 +191,11 @@ def _session_events(conn: sqlite3.Connection, state: dict) -> list[Event]:
         code = row["stop_code"] or ""
         reason = control.LAST.get(code, "") or row["stop_reason"] or ""
         counts = f"опубліковано {row['published']}, у Проблемах {row['problems']}"
-        if code in CALM or (not code and not reason):
+        calm = code in CALM or (not code and not reason)
+        if calm and row["id"] in state["ended"]:  # про цей кінець уже розповів журнал (⏹)
+            out.append(Event(f"session:{row['id']}", None, _set("session_id", row["id"])))
+            continue
+        if calm:
             tail = f" — {_sentence(reason).lower()}" if code in ("limit", "stop") else ""
             text = f"✅ Сесія {row['id']}: {counts}{tail}"
         else:
@@ -170,11 +203,9 @@ def _session_events(conn: sqlite3.Connection, state: dict) -> list[Event]:
                 f"⛔ Робот зупинився: {_sentence(reason) or 'причина невідома — подивись екран'}."
             )
             text += f" Опубліковано {row['published']}, у Проблемах {row['problems']}."
-        keyboard = (
-            None if code in CALM or (not code and not reason) else actions.session_markup(row["id"])
-        )
-        events.append(Event(f"session:{row['id']}", text, _set("session_id", row["id"]), keyboard))
-    return events
+        keyboard = None if calm else actions.session_markup(row["id"])
+        out.append(Event(f"session:{row['id']}", text, _set("session_id", row["id"]), keyboard))
+    return out
 
 
 def _set(name: str, value: object) -> Callable[[dict], None]:
@@ -260,10 +291,41 @@ def _budget_events(conn: sqlite3.Connection, state: dict, moment: datetime) -> l
     return [Event(f"budget:{day}", text, _set("budget_day", day.isoformat()))]
 
 
+def _position(record: events.Record) -> Callable[[dict], None]:
+    return _set("events", {"inode": record.inode, "offset": record.end})
+
+
+def _journal_events(data_dir: Path, state: dict, moment: datetime) -> list[Event]:
+    """BOT-012: нові рядки журналу подій. «Лише важливе» і види з `skip` — лише посуваємо позицію."""
+    records, fresh = events.read_new(data_dir, state["events"])
+    out = []
+    for record in records:
+        key = f"journal:{record.inode}:{record.end}"
+        commit = _position(record)
+        kind = events.info(record.kind)
+        if state["detail"] and record.kind == "robot.end" and record.data.get("session"):
+            state["ended"] = [*state["ended"], record.data["session"]][-20:]
+        old = fresh and (record.at is None or moment - record.at > FRESH)
+        if not record.kind or old or kind.skip or not state["detail"]:
+            out.append(Event(key, None, commit))
+            continue
+        line = f"{kind.emoji} {record.text}"
+        loud = record.loud or kind.loud
+        if not loud:
+            stamp = record.at.strftime("%H:%M") if record.at else ""
+            line = f"{stamp} {line}"
+        out.append(Event(key, line, commit, quiet=not loud))
+    return out
+
+
 def collect(conn: sqlite3.Connection, data_dir: Path, state: dict, moment: datetime) -> list[Event]:
     """Що нового від останнього разу. Може тихо оновити `state` (розв'язані Проблеми, самоперевірка
     без помилок); усе, про що треба сказати, — подіями."""
+    journal = _journal_events(
+        data_dir, state, moment
+    )  # першим: кінець сесії з нього гасить ✅ нижче
     return [
+        *journal,
         *_session_events(conn, state),
         *_problem_events(conn, state),
         *_health_events(data_dir, state, moment),
@@ -274,10 +336,53 @@ def collect(conn: sqlite3.Connection, data_dir: Path, state: dict, moment: datet
 # --- Надсилання ---
 
 
+def _hold(state: dict, line: str, moment: datetime) -> None:
+    if not state["pending"]:
+        state["pending_since"] = _stamp(moment)
+    state["pending"].append(report.clip(line, QUIET_LINE))
+
+
+def _flush(state: dict, moment: datetime, send: Callable[..., bool]) -> int:
+    """Тихі рядки — одним повідомленням без звуку: раз на 5 хв чи коли набралось 15 рядків. Збірок
+    не більше 12 на годину, понад це — один раз на годину «ще N подій». Повертає, скільки надіслано."""
+    pending: list = state["pending"]
+    since = _parse(state["pending_since"]) or moment
+    if not pending or (len(pending) < QUIET_LINES and moment - since < QUIET_EVERY):
+        return 0
+    if len(state["batches"]) >= QUIET_PER_HOUR:
+        state["dropped"] += len(pending)
+        pending.clear()
+        notice = _parse(state["notice_at"])
+        if notice and moment - notice < SAME:
+            return 0
+        if send(f"ℹ️ Ще {state['dropped']} подій — подивись /zvit.", silent=True):
+            state["dropped"], state["notice_at"] = 0, _stamp(moment)
+            return 1
+        return 0
+    chunk = pending[:QUIET_LINES]
+    if not send(report.clip(report.scrub("\n".join(chunk))), silent=True):
+        return 0
+    del pending[: len(chunk)]
+    state["pending_since"] = _stamp(moment) if pending else ""
+    state["batches"].append(_stamp(moment))
+    return 1
+
+
+def toggle(conn: sqlite3.Connection, data_dir: Path, moment: datetime) -> bool:
+    """`/detali`: «Детально» ↔ «Лише важливе». Повертає новий стан («Детально» — True)."""
+    state = load(data_dir) or snapshot(conn, data_dir, moment)
+    state["detail"] = not state["detail"]
+    if not state["detail"]:  # що чекало збірки — вже не потрібне
+        state["pending"], state["pending_since"] = [], ""
+    save(data_dir, state)
+    return state["detail"]
+
+
 def run(
     conn: sqlite3.Connection, data_dir: Path, moment: datetime, send: Callable[..., bool]
 ) -> int:
-    """Один цикл. `send(text[, кнопки, Картка для фото])` каже, чи дійшло. Повертає, скільки повідомлень надіслано."""
+    """Один цикл. `send(text[, кнопки, Картка для фото])` каже, чи дійшло; тиха збірка — `send(text,
+    silent=True)`. Повертає, скільки повідомлень надіслано."""
     state = load(data_dir)
     if state is None:
         save(data_dir, snapshot(conn, data_dir, moment))
@@ -285,10 +390,16 @@ def run(
     before = json.dumps(state, sort_keys=True)
     hour_ago = moment - SAME
     state["hour"] = [s for s in state["hour"] if (t := _parse(s)) and t > hour_ago]
+    state["batches"] = [s for s in state["batches"] if (t := _parse(s)) and t > hour_ago]
     state["sent"] = {k: s for k, s in state["sent"].items() if (t := _parse(s)) and t > hour_ago}
     sent_count = overflow = 0
     for event in collect(conn, data_dir, state, moment):
-        if event.key in state["sent"]:  # те саме щойно було: лише позначаємо опрацьованим
+        if event.text is None:  # нічого слати: лише запам'ятати
+            event.commit(state)
+        elif event.quiet:
+            _hold(state, event.text, moment)
+            event.commit(state)
+        elif event.key in state["sent"]:  # те саме щойно було: лише позначаємо опрацьованим
             event.commit(state)
         elif len(state["hour"]) >= PER_HOUR - 1:
             overflow += 1
@@ -305,6 +416,7 @@ def run(
     if overflow and send(f"ℹ️ Ще {overflow} подій — подивись /zvit."):
         state["hour"].append(_stamp(moment))
         sent_count += 1
+    sent_count += _flush(state, moment, send)
     if json.dumps(state, sort_keys=True) != before:
         save(data_dir, state)
     return sent_count

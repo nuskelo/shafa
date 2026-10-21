@@ -160,8 +160,13 @@ class Telegram:
     def get_file(self, file_id: str) -> dict:
         return self.call("getFile", {"file_id": file_id})
 
-    def send_message(self, chat_id: int, text: str, markup: dict | None = None) -> dict:
+    def send_message(
+        self, chat_id: int, text: str, markup: dict | None = None, silent: bool = False
+    ) -> dict:
+        """`silent` — без звуку й вібрації (збірка тихих подій, BOT-012)."""
         params: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if silent:
+            params["disable_notification"] = True
         if markup is not None:
             params["reply_markup"] = markup
         return self.call("sendMessage", params)
