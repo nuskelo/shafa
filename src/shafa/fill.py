@@ -11,7 +11,7 @@ from typing import Any
 
 from PIL import UnidentifiedImageError
 
-from shafa import ai, catalog, review, rules, scan
+from shafa import ai, catalog, review, rules, scan, variants
 from shafa.db import Status, now
 from shafa.folders import item_folder
 from shafa.photos import PreparedPhoto, prepare
@@ -64,9 +64,26 @@ def pick_items(conn: sqlite3.Connection, post_id: int | None, limit: int) -> lis
     if post_id is not None:
         query += " AND post_id = ?"
         params.append(post_id)
-    query += " ORDER BY id LIMIT ?"
-    params.append(min(limit, MAX_PER_RUN))
-    return conn.execute(query, params).fetchall()
+    query += " ORDER BY id"
+    rows = variants.one_per_post(conn, conn.execute(query, params).fetchall())  # CORE-014
+    return rows[: min(limit, MAX_PER_RUN)]
+
+
+def photo_names(conn: sqlite3.Connection, item_id: int) -> list[str]:
+    return [
+        r[0]
+        for r in conn.execute(
+            "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
+        )
+    ]
+
+
+def has_answer(conn: sqlite3.Connection, item_id: int) -> bool:
+    """Чи є з чого зібрати бланк без ШІ: збережена відповідь або бланк до CORE-009."""
+    return bool(
+        conn.execute("SELECT 1 FROM ai_answers WHERE item_id = ?", (item_id,)).fetchone()
+        or conn.execute("SELECT 1 FROM blanks WHERE item_id = ?", (item_id,)).fetchone()
+    )
 
 
 def edits_of(conn: sqlite3.Connection, item_id: int) -> dict[str, Any]:
@@ -103,20 +120,15 @@ def plan(
     text = conn.execute("SELECT text FROM posts WHERE post_id = ?", (row["post_id"],)).fetchone()
     if text is None:
         return Skipped(row["folder_name"], f"Поста {row['post_id']} немає в базі")
-    names = [
-        r[0]
-        for r in conn.execute(
-            "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (row["id"],)
-        )
-    ]
     photos = []
-    for name in names:
+    for name in photo_names(conn, row["id"]):
         try:
             photos.append(prepare(item_folder(root, row["folder_name"]) / name))
         except (OSError, UnidentifiedImageError):
             return Skipped(row["folder_name"], f"Фото не відкривається: {name}")
     edits = edits_of(conn, row["id"])
-    request = ai.build_request(text[0], photos, cache=batch, corrections=corrections(edits))
+    own = variants.text_for(row["folder_name"], text[0])  # варіант — лише його пункт (CORE-014)
+    request = ai.build_request(own, photos, cache=batch, corrections=corrections(edits))
     estimate = ai.estimate(request, photos, batch=batch)
     return Planned(
         row["id"], row["folder_name"], row["post_id"], text[0], photos, request, estimate,
@@ -387,15 +399,12 @@ class Recalc:
 
 
 def recalc(conn: sqlite3.Connection, item_id: int, text: str) -> Recalc:
-    names = [
-        r[0]
-        for r in conn.execute(
-            "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
-        )
-    ]
+    """`text` — текст поста; варіант (CORE-014) бере з нього свій пункт сам."""
+    folder = conn.execute("SELECT folder_name FROM items WHERE id = ?", (item_id,)).fetchone()[0]
     answer, version, rebuilt = _stored_answer(conn, item_id)
-    fields = ai.check_answer(answer, names, text, rules.edit_text(edits_of(conn, item_id)))
-    problem = scan.text_problem(text)
+    edited = rules.edit_text(edits_of(conn, item_id))
+    fields = variants.check_answer(answer, photo_names(conn, item_id), folder, text, edited)
+    problem = variants.gone(folder, text) or scan.text_problem(variants.text_for(folder, text))
     if problem is None and no_section(fields):
         problem = ("no_section", NO_SECTION_TEXT)
     return Recalc(answer, version, rebuilt, fields, problem)
@@ -404,12 +413,14 @@ def recalc(conn: sqlite3.Connection, item_id: int, text: str) -> Recalc:
 def recheck(conn: sqlite3.Connection, item_ids: list[int] | None = None) -> int:
     """Поточні правила коду — до збереженої відповіді ШІ, тексту поста і її правок (`edits` не
     чіпаються). ШІ не викликається. Заодно — чи потрібне Картці ШІ (нова інструкція). Повертає,
-    скільки Карток перераховано."""
+    скільки Карток перераховано.
+
+    Наприкінці Картки постів з кількома розмірами стають варіантами (CORE-014)."""
+    done = 0
     ids = [r["id"] for r in recheck_candidates(conn)]
     if item_ids is not None:
         ids = [i for i in ids if i in set(item_ids)]
     marks = ", ".join("?" * len(RECHECK_PROBLEMS))
-    done = 0
     with conn:
         for item_id in ids:
             text = conn.execute(
@@ -442,6 +453,8 @@ def recheck(conn: sqlite3.Connection, item_ids: list[int] | None = None) -> int:
             save_answer(conn, item_id, now_.answer, now_.version, now_.rebuilt, needs)
             save_blank(conn, item_id, now_.fields)
             done += 1
+    if item_ids is None:
+        done += variants.split_waiting(conn)
     return done
 
 
@@ -464,7 +477,7 @@ def sizes_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     marks = ", ".join("?" * len(_MAYBE_PUBLISHED))
     rows = conn.execute(
         f"""
-        SELECT items.id, items.post_id, section.value AS section FROM items
+        SELECT items.id, items.folder_name, items.post_id, section.value AS section FROM items
         JOIN blanks AS sizes ON sizes.item_id = items.id AND sizes.field = 'sizes'
         JOIN blanks AS section ON section.item_id = items.id AND section.field = 'section'
         WHERE items.post_id IS NOT NULL AND items.purged_at IS NULL
@@ -498,23 +511,20 @@ def recheck_sizes(conn: sqlite3.Connection, dry_run: bool = False) -> SizesResul
             ).fetchone()
             if text is None:
                 continue
-            names = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
-                )
-            ]
             answer, version, rebuilt = _stored_answer(conn, item_id)
-            fields = ai.check_answer(
-                answer, names, text[0], rules.edit_text(edits_of(conn, item_id))
-            )
+            fields = variants.check_answer(
+                answer, photo_names(conn, item_id), row["folder_name"], text[0],
+                rules.edit_text(edits_of(conn, item_id)),
+            )  # fmt: skip
             if not next(f.value for f in fields if f.name == "sizes"):
                 still_empty.append(row["post_id"])
                 continue
             fixed.append(row["post_id"])
             if dry_run:
                 continue
-            problem = scan.text_problem(text[0])
+            problem = variants.gone(row["folder_name"], text[0]) or scan.text_problem(
+                variants.text_for(row["folder_name"], text[0])
+            )
             if problem is None and no_section(fields):
                 problem = ("no_section", NO_SECTION_TEXT)
             status, code, why = (
@@ -585,13 +595,15 @@ def fill(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
             log_request(conn, planned.item_id, error.usage, str(error))
             set_status(conn, planned.item_id, str(error))
         return Filled(planned.folder_name, error.usage, error=str(error))
-    fields = ai.check_answer(
-        answer, [p.file_name for p in planned.photos], planned.post_text, planned.edited
-    )
+    fields = variants.check_answer(
+        answer, [p.file_name for p in planned.photos], planned.folder_name, planned.post_text,
+        planned.edited,
+    )  # fmt: skip
     with conn:
         log_request(conn, planned.item_id, usage, None)
         if set_status(conn, planned.item_id, None, fields):  # Картку вже взяли — бланк не чіпаємо
             save_blank(conn, planned.item_id, fields, answer)
+            variants.spread(conn, planned.item_id, answer)  # сестрам — та сама відповідь
     return Filled(planned.folder_name, usage, yellow=sum(f.yellow for f in fields))
 
 
@@ -616,9 +628,10 @@ def retry(conn: sqlite3.Connection, client: Any, planned: Planned) -> Filled:
         with conn:
             log_request(conn, planned.item_id, error.usage, str(error))
         return Filled(planned.folder_name, error.usage, error=str(error))
-    fields = ai.check_answer(
-        answer, [p.file_name for p in planned.photos], planned.post_text, planned.edited
-    )
+    fields = variants.check_answer(
+        answer, [p.file_name for p in planned.photos], planned.folder_name, planned.post_text,
+        planned.edited,
+    )  # fmt: skip
     with conn:
         log_request(conn, planned.item_id, usage, None)
         cursor = conn.execute(

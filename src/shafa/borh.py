@@ -15,6 +15,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from shafa import variants
 from shafa.db import Status, now
 from shafa.export import Post
 from shafa.folders import OLD_PREFIX, Folder, item_folder, old_folder_name
@@ -150,6 +151,7 @@ def import_old(
                 "INSERT INTO photos (item_id, position, file_name) VALUES (?, ?, ?)",
                 [(item_id, i, n) for i, n in enumerate(folder.photos, start=1)],
             )
+            variants.split_card(conn, item_id)  # кілька розмірів — Картка на розмір (CORE-014)
         result.created.append(post_id)
         if not has_photo:
             result.no_photo.append(post_id)
@@ -171,6 +173,8 @@ def recheck(conn: sqlite3.Connection, item_id: int) -> str | None:
         problem = ("no_photos", "У пості немає фото")
     if problem and problem[0] == "post_not_found":
         problem = ("post_not_found", f"Поста {post_id} немає в базі")
+    if problem is None and post_id in texts:
+        problem = variants.gone(name, texts[post_id])  # розмір варіанта прибрано (CORE-014)
     status = Status.PROBLEM if problem else Status.NEW
     code, text = problem or (None, None)
     conn.execute(
@@ -183,4 +187,5 @@ def recheck(conn: sqlite3.Connection, item_id: int) -> str | None:
         "INSERT INTO photos (item_id, position, file_name) VALUES (?, ?, ?)",
         [(item_id, i, n) for i, n in enumerate(folder.photos, start=1)],
     )
-    return status
+    variants.split_card(conn, item_id)
+    return conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()[0]

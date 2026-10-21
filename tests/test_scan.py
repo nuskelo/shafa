@@ -57,7 +57,7 @@ def test_both_folder_name_formats_become_new(conn, posts, root):
         ("20", ["1.jpg"], "no_text", "У поста 20 немає тексту"),
         ("21", ["1.jpg"], "no_price", "У поста 21 немає ціни"),
         ("21", [], "no_price", "У поста 21 немає ціни"),
-        ("22", ["1.jpg"], "many_items", "У пості кілька товарів з різними цінами"),
+        # пост 22 («* 36 розмір… / * 38 розмір…») — варіанти, CORE-014 (`test_core014.py`)
         ("13", ["знімок.png", "Thumbs.db"], "no_photos", "У папці немає фото .jpg"),
         ("13", [f"{i}.jpg" for i in range(11)], "too_many_photos", "Більше 10 фото"),
     ],

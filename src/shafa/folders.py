@@ -12,6 +12,9 @@ PUBLISHED_DIR = "Опубліковано"  # зарезервована наз�
 # `<дані>/borh/<номер>/`, а не папка в Головній. Назва Картки — `borh-<номер>`.
 OLD_PREFIX = "borh-"
 OLD_DIR = "borh"
+# Картка-варіант одного розміру з поста з кількома розмірами (CORE-014): `<папка>~<розмір>`
+# (`3654~43`, `borh-3655~36`). Фото — спільна папка поста, назва без суфікса.
+VARIANT_SEP = "~"
 _POST_NUMBER = re.compile(r"\d{1,7}")
 _DIGITS = re.compile(r"(\d+)")
 
@@ -39,6 +42,21 @@ def is_old(folder_name: str) -> bool:
     return folder_name.startswith(OLD_PREFIX)
 
 
+def base_name(folder_name: str) -> str:
+    """Папка з фото Картки: для варіанта — без `~<розмір>`."""
+    return folder_name.split(VARIANT_SEP, 1)[0]
+
+
+def variant_size(folder_name: str) -> str | None:
+    """Розмір Картки-варіанта («43», «37,5») або None — звичайна Картка."""
+    _, sep, size = folder_name.partition(VARIANT_SEP)
+    return size if sep else None
+
+
+def variant_name(folder_name: str, size: str) -> str:
+    return f"{base_name(folder_name)}{VARIANT_SEP}{size}"
+
+
 def old_folder_name(post_id: int) -> str:
     return f"{OLD_PREFIX}{post_id}"
 
@@ -48,7 +66,9 @@ def old_root() -> Path:
 
 
 def item_folder(root: Path, folder_name: str) -> Path:
-    """Де лежать фото Картки: папка в Головній або (старий пост) тека в даних програми."""
+    """Де лежать фото Картки: папка в Головній або (старий пост) тека в даних програми.
+    Варіанти одного поста (CORE-014) ділять одну папку."""
+    folder_name = base_name(folder_name)
     if is_old(folder_name):
         return old_root() / folder_name.removeprefix(OLD_PREFIX)
     return root / folder_name

@@ -1,6 +1,7 @@
 """Поля Картки, які заповнює код за `docs/rules.md`: ціна, стан, опис, устілка, мембрана."""
 
 import re
+from dataclasses import dataclass
 from itertools import pairwise
 
 # «1800грн», «600 грн», «1100грн.», «950гр», «9см.1300грн». Дробову частину («26,5 гр») не беремо.
@@ -400,3 +401,104 @@ def many_sizes(text: str) -> bool:
 
 def unpaired(text: str) -> bool:
     return bool(_UNPAIRED.search(text))
+
+
+# --- CORE-014: кілька розмірів однієї пари в одному пості → окрема Картка на кожен розмір ---
+
+
+@dataclass(frozen=True)
+class SizeVariant:
+    size: str  # як на Шафі: «43», «37,5»; «вказаний X, ідуть на Y» → Y
+    text: str  # текст поста для цієї Картки: спільний текст + лише її пункт
+
+
+_BULLET = re.compile(r"^\s*[*•\-–]\s*")
+# Пункт ділиться на речення крапкою не в числі («29,3см», «24.5» — не межа) і на частини комою.
+_BULLET_SENTENCE = re.compile(r"(?<!\d)\.|\.(?!\d)")
+_BULLET_PART = re.compile(r",(?!\d)")
+# Частина пункту без устілки: лише розмір, ярлик, «ідуть на», ціна — інакше пункт про щось інше.
+_BULLET_SIZE = re.compile(
+    rf"(?:(?:вказан\w*|на\s+ярлик\w*|на\s+бирц\w*)\s*)?(?:розмір\w*\s*[:-]?\s*)?{_LABEL_SIZE}"
+    r"\s*(?:-?(?:го|й|ий)\s*)?(?:розмір\w*)?|"
+    rf"[іий]?дуть\s*(?:на\s*)?{_SIZE}|"
+    r"(?:ціна\s*[:-]?\s*)?(?:\d+\s*гр(?:н)?\s*)+",
+    re.IGNORECASE,
+)
+_SEVERAL_SENTENCE = re.compile(rf"[^.!?\n]*(?:{_SEVERAL.pattern})[^.!?\n]*[.!?]?", re.IGNORECASE)
+_PRICE_WORD = re.compile(r"(?<!\w)ціна(?!\w)|[\W_]", re.IGNORECASE)
+
+
+def _bullet_size(line: str) -> str | None:
+    """Розмір пункту, якщо пункт — рівно один розмір, устілка й ціна. Інакше None."""
+    for sentence in _BULLET_SENTENCE.split(line):
+        if INSOLE.search(sentence):  # «Устілка …», «Ширина устілки …» — заміри
+            continue
+        for part in _BULLET_PART.split(sentence):
+            if part.strip() and not _BULLET_SIZE.fullmatch(part.strip()):
+                return None
+    if label := label_sizes(line):
+        return label[0]
+    goes = list(_GOES.finditer(line))
+    if len(goes) == 1 and not _LABEL.search(line):
+        return _shown(_value(goes[0][1]))
+    sizes = text_sizes(line)
+    if len(sizes) != 1 or _GOES_ANY.search(line) or len(_LABEL.findall(line)) > 1:
+        return None
+    return _shown(sizes[0])
+
+
+def _other_size_tag(tag: str, size: str) -> bool:
+    """Хештег з номером іншого розміру («#VS_45_розмір» у Картки 43)."""
+    numbers = re.findall(r"\d{2}", tag)
+    return bool(numbers) and size.split(",")[0] not in numbers
+
+
+def _variant_text(lines: list[str], own: int, size: str, own_price: bool) -> str:
+    kept = []
+    for i, line in enumerate(lines):
+        if i == own:
+            kept.append(_BULLET.sub("", line).rstrip())
+            continue
+        if _BULLET.match(line):
+            continue
+        new = _SEVERAL_SENTENCE.sub("", line)
+        new = HASHTAG.sub(lambda m: "" if _other_size_tag(m[0], size) else m[0], new)
+        if own_price:  # своя ціна в пункті — спільна в тексті зайва
+            new = PRICE.sub("", new)
+        if line.strip() and not _PRICE_WORD.sub("", new).strip():
+            continue  # рядок був лише про інший розмір чи спільну ціну
+        kept.append(re.sub(r"[ \t]{2,}", " ", new).rstrip())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+
+def size_variants(text: str) -> list[SizeVariant] | None:
+    """Пост з пунктами «* 43 розмір. Устілка 28см…» — по Картці на розмір (CORE-014).
+
+    Лише коли все однозначно: ≥ 2 пункти (`*`, `•`, `-`, `–`), у кожному рівно один розмір (з
+    урахуванням «вказаний X, ідуть на Y» → Y), лише заміри й ціна; розміри різні; у спільному тексті
+    розмірів немає й цін не більше однієї; пункт без ціни бере спільну. Інакше None — як раніше,
+    `many_items` (різні моделі, пункт без розміру, два розміри в пункті, «43 і 45» без пунктів).
+    """
+    lines = text.splitlines()
+    bullets = [i for i, line in enumerate(lines) if _BULLET.match(line)]
+    if len(bullets) < 2:
+        return None
+    sizes = [_bullet_size(_BULLET.sub("", lines[i])) for i in bullets]
+    if None in sizes or len(set(sizes)) != len(sizes):
+        return None
+    common = "\n".join(
+        HASHTAG.sub(" ", _SEVERAL_SENTENCE.sub(" ", line))
+        for i, line in enumerate(lines)
+        if i not in bullets
+    )
+    if text_sizes(common) or _LABEL.search(common) or _GOES_ANY.search(common):
+        return None
+    if sum(1 for line in common.splitlines() if PRICE.search(line)) > 1:
+        return None
+    priced = [bool(PRICE.search(lines[i])) for i in bullets]
+    if not all(priced) and not PRICE.search(common):
+        return None  # пункт без ціни, а спільної немає
+    return [
+        SizeVariant(size, _variant_text(lines, i, size, own_price))
+        for i, size, own_price in zip(bullets, sizes, priced, strict=True)
+    ]

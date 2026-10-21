@@ -26,7 +26,7 @@ from typing import Any
 
 import anthropic
 
-from shafa import ai, config, fill, rules
+from shafa import ai, config, fill, rules, variants
 from shafa.db import Status, now
 from shafa.folders import OLD_PREFIX, is_old
 from shafa.robot import publish
@@ -139,6 +139,7 @@ def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
         or r["folder_name"].startswith(OLD_PREFIX)
         or post_is_old(r["date"], today, wait_days)
     ]
+    ready = variants.one_per_post(conn, ready)  # сестри-розміри — один запит на пост (CORE-014)
     pending = conn.execute(
         "SELECT count(DISTINCT item_id) FROM ai_batch_items WHERE state = 'pending'"
     ).fetchone()[0]
@@ -171,6 +172,7 @@ def refill_estimate(
     Третє — скільки Карток не вийде підготувати (фото не відкривається). Нічого не надсилає.
     """
     rows = [r for r in fill.refill_candidates(conn) if item_ids is None or r["id"] in set(item_ids)]
+    rows = variants.one_per_post(conn, rows)
     count = cost = skipped = 0
     for row in rows:
         planned = fill.plan(conn, root, row, batch=True)
@@ -360,17 +362,18 @@ class Collected:
     note: str | None = None  # не вдалося спитати API
 
 
-def _card_inputs(conn: sqlite3.Connection, item_id: int) -> tuple[list[str], str, str]:
-    names = [
-        r[0]
-        for r in conn.execute(
-            "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
-        )
-    ]
+def _card_inputs(conn: sqlite3.Connection, item_id: int) -> tuple[list[str], str, str, str]:
     row = conn.execute(
-        "SELECT posts.text FROM items JOIN posts USING (post_id) WHERE items.id = ?", (item_id,)
+        "SELECT items.folder_name, posts.text FROM items LEFT JOIN posts USING (post_id) "
+        "WHERE items.id = ?",
+        (item_id,),
     ).fetchone()
-    return names, row[0] if row else "", rules.edit_text(fill.edits_of(conn, item_id))
+    return (
+        fill.photo_names(conn, item_id),
+        row["folder_name"] if row else "",
+        (row["text"] if row else None) or "",
+        rules.edit_text(fill.edits_of(conn, item_id)),
+    )
 
 
 def _errored_text(result: Any) -> str:
@@ -405,13 +408,14 @@ def apply_result(conn: sqlite3.Connection, batch_id: int, line: Any, report: Col
                 state = "error"
                 report.errors += 1
             else:
-                names, text, edited = _card_inputs(conn, item_id)
-                fields = ai.check_answer(answer, names, text, edited)
+                names, folder, text, edited = _card_inputs(conn, item_id)
+                fields = variants.check_answer(answer, names, folder, text, edited)
                 fill.log_request(conn, item_id, usage, None, batch_id)
                 if fill.set_status(
                     conn, item_id, None, fields
                 ):  # Картку тим часом змінили — не чіпаємо
                     fill.save_blank(conn, item_id, fields, answer)
+                    variants.spread(conn, item_id, answer)  # сестрам — та сама відповідь
                 state = "done"
                 report.filled += 1
         else:  # errored: не оплачується
