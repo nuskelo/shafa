@@ -369,7 +369,7 @@ def test_photos_unchanged_nothing_happens(conn, root):
     assert result == changes.PhotoSync() and tuple(row(conn, item_id)) == before
 
 
-def test_folder_deleted_is_robot_photos_problem(conn, root):
+def test_folder_deleted_is_photos_missing_problem(conn, root):
     item_id = card_in_folder(conn, root, status=Status.APPROVED)
     other = make_folder(root, "1500", ["1.jpg"])
     for file in (root / "1342").iterdir():
@@ -379,18 +379,18 @@ def test_folder_deleted_is_robot_photos_problem(conn, root):
     result = changes.sync_photos(conn, folders(root))
 
     assert other.exists() and result.lost == [(1342, changes.NO_FOLDER)]
-    assert tuple(row(conn, item_id)) == (Status.PROBLEM, "robot_photos", changes.NO_FOLDER)
+    assert tuple(row(conn, item_id)) == (Status.PROBLEM, "photos_missing", changes.NO_FOLDER)
     assert blank(conn, item_id)  # бланк цілий
 
 
-def test_no_photos_left_is_robot_photos_problem(conn, root):
+def test_no_photos_left_is_photos_missing_problem(conn, root):
     item_id = card_in_folder(conn, root)
     for file in (root / "1342").iterdir():
         file.unlink()
 
     changes.sync_photos(conn, folders(root))
 
-    assert tuple(row(conn, item_id)) == (Status.PROBLEM, "robot_photos", changes.NO_PHOTOS)
+    assert tuple(row(conn, item_id)) == (Status.PROBLEM, "photos_missing", changes.NO_PHOTOS)
     assert photo_names(conn, item_id) == ["IMG_1.JPG", "IMG_2.JPG"]
 
 
@@ -428,3 +428,17 @@ def test_scan_runs_the_photo_check(conn, root):
 
     assert photo_names(conn, item_id)[-1] == "IMG_3.JPG"
     assert row(conn, item_id)["status"] == Status.REVIEW
+
+
+@pytest.mark.parametrize("status", [Status.REVIEW, Status.APPROVED])
+def test_photos_missing_retry_goes_to_review_never_approved(conn, root, status):
+    item_id = card_in_folder(conn, root, status=status)
+    for file in (root / "1342").iterdir():
+        file.unlink()
+    changes.sync_photos(conn, folders(root))
+    assert row(conn, item_id)[:2] == (Status.PROBLEM, "photos_missing")
+
+    assert review.photos_retry(conn, item_id)
+
+    assert tuple(row(conn, item_id)) == (Status.REVIEW, None, None)
+    assert not review.photos_retry(conn, item_id)  # вдруге — «stale»

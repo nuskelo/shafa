@@ -186,7 +186,7 @@ def sync_photos(
 ) -> PhotoSync:
     """TD-004: Картки `review`/`approved` — список фото проти папки (лише назви файлів: розмір чи
     час файлу в базі не зберігаються). Змінилось — список оновлено, «На перевірку» з приміткою;
-    папки чи фото немає — «Проблеми» `robot_photos` (бланк і правки лишаються).
+    папки чи фото немає — «Проблеми» `photos_missing` (бланк і правки лишаються).
 
     `folders` порожній — Головна, схоже, недоступна: нічого не міняємо."""
     if not folders:
@@ -209,7 +209,7 @@ def sync_photos(
             if folder is None or not folder.photos:
                 why = NO_FOLDER if folder is None else NO_PHOTOS
                 conn.execute(
-                    "UPDATE items SET status = ?, problem_code = 'robot_photos', "
+                    "UPDATE items SET status = ?, problem_code = 'photos_missing', "
                     "problem_text = ?, updated_at = ? WHERE id = ? AND status = ?",
                     (Status.PROBLEM, why, now(), item_id, status),
                 )

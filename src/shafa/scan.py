@@ -20,6 +20,7 @@ SCANNABLE = (Status.NEW, Status.PROBLEM)
 # повертає лише людина, перевіривши Шафу. Інакше Картка пішла б у new → ШІ → друга публікація.
 STICKY = (
     "publish_uncertain", "possible_duplicate", "publish_error", "already_published",
+    "photos_missing",  # CORE-015: фото зникли з папки — повертає лише людина, у «На перевірку»
     "shafa_declined",  # ROBOT-011: Шафа відхилила вже опубліковане — друга публікація дала б дубль
 )  # fmt: skip
 

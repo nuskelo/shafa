@@ -58,6 +58,7 @@ PROBLEMS = {
     "robot_field_missing": "Робот не знайшов поле на формі",
     "robot_logged_out": "Робот не увійшов на Шафу",
     "robot_brand_missing": "Робот не знайшов бренд",
+    "photos_missing": "Фото поста не знайдено в папці",
     "robot_photos": "Не всі фото завантажились",
     "robot_not_ready": "Картку не можна передати роботу",
     "robot_not_sent": "Форма на Шафі не надіслалась",

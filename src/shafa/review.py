@@ -561,6 +561,19 @@ def robot_retry(conn: sqlite3.Connection, item_id: int) -> bool:
     return cursor.rowcount == 1
 
 
+def photos_retry(conn: sqlite3.Connection, item_id: int) -> bool:
+    """Фото зникли з папки (`photos_missing`) → «На перевірку» завжди, і для колишніх схвалених."""
+    with conn:
+        cursor = conn.execute(
+            """
+            UPDATE items SET status = ?, problem_code = NULL, problem_text = NULL, updated_at = ?
+            WHERE id = ? AND status = ? AND problem_code = 'photos_missing'
+            """,
+            (Status.REVIEW, now(), item_id, Status.PROBLEM),
+        )
+    return cursor.rowcount == 1
+
+
 def purge_archive(conn: sqlite3.Connection, today: datetime | None = None) -> list[int]:
     """Архів старший за 7 днів: прибрати фото-список, бланк і правки, лишити прихований запис.
 

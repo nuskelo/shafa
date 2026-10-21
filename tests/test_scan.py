@@ -162,7 +162,7 @@ def test_scan_leaves_cards_in_work_alone(conn, posts, root):
     run(conn, posts, root)
 
     # CORE-015 (TD-004): фото не лишилось — не `new` і не тиха: «Проблеми» робота, бланк цілий
-    assert items(conn)["10"][:2] == ("problem", "robot_photos")
+    assert items(conn)["10"][:2] == ("problem", "photos_missing")
     assert photos(conn, "10") == ["1.jpg"]
 
 
