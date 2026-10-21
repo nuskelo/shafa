@@ -15,15 +15,17 @@ import tempfile
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from shafa import batch, config, places, site
+from shafa import batch, config, events, places, site
 from shafa.robot import browser, lock, rehearse
 
 OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 LAST_NAME = "health-last.json"
+OK_NAME = "health-ok.json"  # коли в журнал подій востаннє написали «усе гаразд» (BOT-013)
+OK_EVERY = timedelta(hours=6)  # «усе гаразд» у журнал — не частіше
 NET_LIMIT = 10.0  # секунд на кожну мережеву перевірку
 GB = 1024**3
 DISK_WARN, DISK_FAIL = 2 * GB, GB // 2
@@ -390,7 +392,32 @@ def run_all(data_dir: Path, root: Path, *, deps: Deps | None = None) -> list[Che
             ctx.conn.close()
     with contextlib.suppress(Exception):  # дзеркало для людини; не вдалось — не біда
         save(checks, deps.now(), data_dir)
+    with contextlib.suppress(Exception):  # журнал подій не ламає самоперевірку
+        announce_ok(checks, deps.now(), data_dir)
     return checks
+
+
+def announce_ok(checks: list[Check], moment: datetime, data_dir: Path) -> bool:
+    """BOT-013: «🩺 Самоперевірка: усе гаразд (9/9)» — тихо, не частіше ніж раз на 6 год. Жовте чи
+    червоне тут мовчить: FAIL бот шле сам з `health-last.json` (BOT-010)."""
+    counted = [c for c in checks if c.status != SKIP]
+    if not counted or any(c.status != OK for c in counted):
+        return False
+    path = data_dir / OK_NAME
+    try:
+        last = datetime.fromisoformat(json.loads(path.read_text(encoding="utf-8"))["at"])
+        if moment - last < OK_EVERY:
+            return False
+    except (OSError, ValueError, KeyError, TypeError):
+        pass  # ще не казали (чи запис зіпсований)
+    skipped = len(checks) - len(counted)
+    text = f"Самоперевірка: усе гаразд ({len(counted)}/{len(counted)})"
+    events.emit(
+        "health.ok", text + (f", пропущено {skipped}" if skipped else ""), data_dir=data_dir
+    )
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"at": moment.isoformat(timespec="seconds")}), encoding="utf-8")
+    return True
 
 
 def save(checks: list[Check], at: datetime, folder: Path) -> Path:

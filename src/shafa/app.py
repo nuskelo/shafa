@@ -14,12 +14,13 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
-from shafa import config, db, fill, photos, places, review, web
+from shafa import config, db, events, fill, photos, places, review, web
 from shafa.robot import control, lock, publish, rehearse
 
 LOCK_NAME = "ui.lock"
 URL_NAME = "ui.url"
 DB_NAME = "shafa.sqlite"
+STOPPED = "Програму зупинено"
 HEALTH_DELAY = 5.0  # секунд: бот щойно запущений окремим процесом, дамо йому підійматись
 
 
@@ -51,6 +52,8 @@ def quit_app(kill: Callable[[int, int], None] = os.kill, wait: float = 10.0) -> 
     прибираємо тут, коли замок звільниться (інакше наступний ярлик відкрив би мертву адресу).
     """
     stopped = stop_process(LOCK_NAME, kill)
+    if stopped:  # екран гаситься без `finally` — журнал пишемо тут
+        events.emit("app.stop", STOPPED)
     quit_all(kill)
     lock_file = config.data_dir() / LOCK_NAME
     for _ in range(int(wait * 10)):
@@ -133,6 +136,7 @@ def start(
         url = f"http://{web.HOST}:{app.port}/"
         url_file.write_text(url, encoding="utf-8")
         print(f"Екран перевірки: {url}")
+        events.emit("app.start", f"Програму запущено (версія {events.version()})")
         night_stop = threading.Event()
         threading.Thread(
             target=nightly(path).run, args=(night_stop,), daemon=True, name="rehearse-nightly"
@@ -146,6 +150,9 @@ def start(
         finally:
             night_stop.set()
             server.server_close()
+            events.emit(
+                "app.stop", STOPPED
+            )  # бот уже міг зупинитись — прийде після наступного запуску
     finally:
         url_file.unlink(missing_ok=True)
         held.release()

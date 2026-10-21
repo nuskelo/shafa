@@ -19,7 +19,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from shafa import variants
+from shafa import events, variants
 from shafa.db import Status, now
 from shafa.export import Post
 from shafa.folders import (
@@ -230,6 +230,7 @@ def purge_photos(conn: sqlite3.Connection, cutoff: str) -> list[str]:
     """
     root = old_root().resolve()
     removed: list[str] = []
+    freed = 0
     seen: set[str] = set()
     due = conn.execute(
         "SELECT folder_name, post_id FROM items "
@@ -248,12 +249,35 @@ def purge_photos(conn: sqlite3.Connection, cutoff: str) -> list[str]:
         folder = root / base.removeprefix(OLD_PREFIX)
         if folder.is_symlink() or not folder.is_dir() or folder.resolve().parent != root:
             continue
+        size = _folder_bytes(folder)
         try:
             shutil.rmtree(folder)
         except OSError:  # Windows: файл відкритий — наступного разу
             continue
         removed.append(base)
+        freed += size
+    _announce_purged(len(removed), freed)
     return removed
+
+
+def _folder_bytes(folder: Path) -> int:
+    """Скільки місця займає тека (для журналу; не вийшло порахувати — 0)."""
+    total = 0
+    try:
+        for path in folder.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                total += path.stat().st_size
+    except OSError:
+        pass
+    return total
+
+
+def _announce_purged(count: int, freed: int) -> None:
+    """BOT-013: один рядок за прохід; нічого не прибрано — нічого не пишемо."""
+    if count:
+        megabytes = max(1, round(freed / (1024 * 1024)))
+        word = "поста" if count % 10 == 1 and count % 100 != 11 else "постів"
+        events.emit("photos.purged", f"Прибрано фото {count} {word} (≈ {megabytes} МБ)")
 
 
 def _not_done(conn: sqlite3.Connection, base: str, post_id: int | None, cutoff: str) -> bool:
