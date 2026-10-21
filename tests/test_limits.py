@@ -38,6 +38,12 @@ def app(conn, tmp_path, root):
     return web.App(tmp_path / "база.sqlite", root, tmp_path / "thumbs", PORT, token=TOKEN)
 
 
+def earlier_today(env):
+    """Трохи раніше за «зараз», але не вчора: у перші 5 хв після півночі `now - 5 хв` — уже вчорашня доба."""
+    midnight = env.today.replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(env.today - timedelta(minutes=5), midnight)
+
+
 def add_new(env, n, date="2025-03-01T10:00:00"):
     from test_robot_publish import add, other_item
 
@@ -153,8 +159,8 @@ def test_new_zero_by_default_old_still_go(env, monkeypatch):
 
 
 def test_earlier_attempts_today_count_per_group(env):
-    started(env, add_old(env, 700), env.today - timedelta(minutes=5))
-    started(env, add_new(env, 1300), env.today - timedelta(minutes=5))  # нових 1 з 1 — усе
+    started(env, add_old(env, 700), earlier_today(env))
+    started(env, add_new(env, 1300), earlier_today(env))  # нових 1 з 1 — усе
     started(env, add_old(env, 600), env.today - timedelta(days=1))  # учора — не рахується
     add_new(env, 1400)
     add_old(env, 800)
