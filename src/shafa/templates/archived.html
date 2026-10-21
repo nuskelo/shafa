@@ -1,0 +1,30 @@
+{% extends "list.html" %}
+{% block cards %}
+<ul class="grid">
+{% for card in cards %}
+  {% set open_url = "/item/" ~ card.id ~ "?from=" ~ (list_url | urlencode) %}
+  <li class="tilecard archived">
+    <a class="shot" href="{{ open_url }}" tabindex="-1" aria-hidden="true">
+      {% if card.photos %}
+      <img src="/thumb/{{ card.id }}/{{ card.photos[0].position }}" alt="" loading="lazy">
+      {% else %}
+      <span class="noshot">немає фото</span>
+      {% endif %}
+    </a>
+    <span class="body">
+      <a class="name" href="{{ open_url }}">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</a>
+      {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
+      {% if card.problem_code in ("post_deleted", "duplicate") and card.problem_text %}<span class="problem">{{ card.problem_text }}</span>{% endif %}
+      {% if card.fields["section"].value %}<span class="details">{{ card.fields["section"].value | replace(" / ", " · ") }}</span>{% endif %}
+      <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date, ("видалиться " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if card.archived_at] | select | join(" · ") }}</span>
+      {% if card.id not in on_shafa %}
+      <form method="post" action="/item/{{ card.id }}" class="restore">
+        <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}">
+        <button name="action" value="restore">Повернути</button>
+      </form>
+      {% endif %}
+    </span>
+  </li>
+{% endfor %}
+</ul>
+{% endblock %}

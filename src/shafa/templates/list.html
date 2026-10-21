@@ -4,7 +4,7 @@
 {% set intro = {
   "review": "Переглянь і схвали — робот опублікує після «Старт».",
   "approved": "Схвалені Картки — їх опублікує робот після «Старт».",
-  "problem": "Тут Картки, з якими треба розібратись самій.",
+  "problem": "Картки, які робот не публікує. Кожна — з причиною і що зробити.",
   "archived": "Архів: Картки видаляються через 7 днів.",
 } %}
 <div class="page-head">
@@ -33,6 +33,7 @@
 <p class="empty">{% if query %}Нічого не знайдено.{% elif chosen %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
 {% endif %}
 
+{% block cards %}
 <ul class="grid">
 {% for card in cards %}
   {% set mark = marks[card.id] %}
@@ -49,15 +50,13 @@
       <span class="body">
         <span class="name">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</span>
         {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
-        {% if current == "problem" or (current == "archived" and card.problem_code in ("post_deleted", "duplicate")) %}
-        {% if card.problem_text %}<span class="problem">{{ card.problem_text }}</span>{% endif %}
-        {% endif %}
         {% if card.fields["section"].value %}<span class="details">{{ card.fields["section"].value | replace(" / ", " · ") }}</span>{% endif %}
-        <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date, ("видалиться " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if current == "archived" and card.archived_at] | select | join(" · ") }}</span>
+        <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date] | select | join(" · ") }}</span>
         {% if card.old_rules %}<span class="tag old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто перезаповнити">заповнено старими правилами</span>{% endif %}
       </span>
     </a>
   </li>
 {% endfor %}
 </ul>
+{% endblock %}
 {% endblock %}

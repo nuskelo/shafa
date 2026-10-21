@@ -179,7 +179,8 @@
   {% else %}
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
-    <button name="action" value="to_archive" class="reject">В Архів</button>
+    {% if problem_archive %}<button name="action" value="to_archive" class="reject">В Архів</button>{% endif %}
+    {% if problem_recheck %}<button name="action" value="recheck">Перевірити ще раз</button>{% endif %}
   </form>
   {% endif %}
   <details><summary>Подробиці для Власника</summary><p>{{ card.problem_text }}</p></details>
@@ -235,7 +236,7 @@
     </p>
     {% endif %}
     {% endif %}
-    {% if card.post_text %}
+    {% if card.post_text and card.status != "problem" %}
     <div class="post-box">
       <h2>Текст поста</h2>
       <div class="post">{{ card.post_text }}</div>
@@ -243,7 +244,17 @@
     {% endif %}
   </section>
 
-  {% if card.status != "problem" %}
+  {% if card.status == "problem" %}
+  {# У Проблеми бланка для правок немає — праворуч текст поста, щоб колонка не порожніла (UI-006). #}
+  {% if card.post_text %}
+  <section class="right" aria-label="Текст поста">
+    <div class="post-box">
+      <h2>Текст поста</h2>
+      <div class="post">{{ card.post_text }}</div>
+    </div>
+  </section>
+  {% endif %}
+  {% else %}
   <section class="right" aria-label="Поля для Шафи">
     {% for f in layout.yellow %}{{ field(f) }}{% endfor %}
     {% for row in layout.rows %}

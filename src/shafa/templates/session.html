@@ -2,16 +2,36 @@
 {% block title %}Сесія · Шафа-помічник{% endblock %}
 {% block main %}
 <p class="back"><a href="/sessions">← Усі сесії</a></p>
-<h1>Сесія {{ local(session.started_at) }}</h1>
-<p>{{ "Закінчилась " ~ local(session.ended_at) if session.ended_at else "Працює" }} · опубліковано {{ session.published }} · у Проблемах {{ session.problems }}{% if session.stop_code or session.stop_reason %} · {{ reasons.get(session.stop_code or "", "") or session.stop_reason }}{% endif %}</p>
+<div class="session-head">
+  <div class="s-head">
+    <h1>Сесія {{ session.id }}</h1>
+    <span class="meta">{{ local(session.started_at) }}{% if session.ended_at %} — {{ local(session.ended_at) }}{% endif %}</span>
+  </div>
+  <div class="s-stats">
+    <span>Опубліковано <b>{{ session.published }}</b></span>
+    <span>У Проблемах <b>{{ session.problems }}</b></span>
+  </div>
+  <div class="s-why tone-{{ tone }}">{% if tone == "run" %}працює{% else %}{{ reasons.get(session.stop_code or "", "") or (session.stop_reason or "") or "закінчилась" }}{% endif %}</div>
+</div>
 {% if not cards %}<p class="empty">У цій сесії робот не брався за жодну Картку.</p>{% endif %}
-<ul class="rows">
+<ul class="grid">
 {% for card in cards %}
+  {% set row = rows.get(card.id) %}
   <li>
-    <a class="row" href="/item/{{ card.id }}">
-      <span class="info">
+    <a class="tilecard" href="/item/{{ card.id }}">
+      <span class="shot">
+        {% if card.photos %}
+        <img src="/thumb/{{ card.id }}/{{ card.photos[0].position }}" alt="" loading="lazy">
+        {% else %}
+        <span class="noshot">немає фото</span>
+        {% endif %}
+        <span class="mark mark-{{ 'bad' if row else 'ok' }}">{{ row.label if row else tabs.get(card.status, card.status) }}</span>
+      </span>
+      <span class="body">
         <span class="name">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</span>
-        <span class="{{ 'problem' if card.status == 'problem' else 'details' }}">{{ sticky_titles.get(card.problem_code or "", card.problem_text) if card.status == "problem" else tabs.get(card.status, card.status) }}</span>
+        {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
+        {% if row and row.why %}<span class="problem">{{ row.why }}</span>{% endif %}
+        <span class="meta">{{ ("Пост " ~ card.post_id) if card.post_id }}</span>
       </span>
     </a>
   </li>

@@ -1,21 +1,29 @@
 {% extends "base.html" %}
 {% block title %}Сесії · Шафа-помічник{% endblock %}
 {% block main %}
+<div class="page-head">
+  <div>
+    <h1>Сесії</h1>
+    <p class="intro">Кожен запуск робота: скільки опублікував і чому зупинився.</p>
+  </div>
+</div>
 {% if not sessions %}<p class="empty">Робот ще не запускався.</p>{% endif %}
-<table class="sessions">
-  {% if sessions %}
-  <thead><tr><th>Початок</th><th>Кінець</th><th>Опубліковано</th><th>У Проблемах</th><th>Чому зупинився</th></tr></thead>
-  {% endif %}
-  <tbody>
-  {% for s in sessions %}
-    <tr>
-      <td><a href="/session/{{ s.id }}">{{ local(s.started_at) }}</a></td>
-      <td>{{ local(s.ended_at) if s.ended_at else "працює" }}</td>
-      <td>{{ s.published }}</td>
-      <td>{{ s.problems }}</td>
-      <td>{{ reasons.get(s.stop_code or "", "") or (s.stop_reason or "") }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+<ul class="sessions">
+{% for s in sessions %}
+  {% set tone = s_tones[s.id] %}
+  <li>
+    <a class="session" href="/session/{{ s.id }}">
+      <span class="s-head">
+        <span class="s-title">Сесія {{ s.id }}</span>
+        <span class="meta">{{ local(s.started_at) }}{% if s.ended_at %} — {{ local(s.ended_at) }}{% endif %}</span>
+      </span>
+      <span class="s-stats">
+        <span>Опубліковано <b>{{ s.published }}</b></span>
+        <span>У Проблемах <b>{{ s.problems }}</b></span>
+      </span>
+      <span class="s-why tone-{{ tone }}">{% if tone == "run" %}працює{% else %}{{ reasons.get(s.stop_code or "", "") or (s.stop_reason or "") or "закінчилась" }}{% endif %}</span>
+    </a>
+  </li>
+{% endfor %}
+</ul>
 {% endblock %}

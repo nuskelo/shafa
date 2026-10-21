@@ -1,0 +1,43 @@
+{% extends "list.html" %}
+{% block cards %}
+<ul class="problems">
+{% for card in cards %}
+  {% set row = rows[card.id] %}
+  {% set open_url = "/item/" ~ card.id ~ "?from=" ~ (list_url | urlencode) %}
+  <li class="problem-row">
+    <a class="shot" href="{{ open_url }}" tabindex="-1" aria-hidden="true">
+      {% if card.photos %}
+      <img src="/thumb/{{ card.id }}/{{ card.photos[0].position }}" alt="" loading="lazy">
+      {% else %}
+      <span class="noshot">немає фото</span>
+      {% endif %}
+    </a>
+    <div class="why-box">
+      <div class="kind-line">
+        <span class="kind">{{ row.label }}</span>
+        <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, card.post_date | dmy if card.post_date] | select | join(" · ") }}</span>
+      </div>
+      <a class="name" href="{{ open_url }}">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</a>
+      {% if row.why %}<p class="reason-line">{{ row.why }}</p>{% endif %}
+      {% if row.details %}<details class="more-info"><summary>Подробиці</summary><p>{{ row.details }}</p></details>{% endif %}
+      <p class="todo">Що робити: {{ row.todo }}{% if row.my_items %} · <a href="{{ my_items }}" target="_blank" rel="noopener noreferrer">«Мої речі» на Шафі</a>{% endif %}</p>
+    </div>
+    <div class="row-actions">
+      <a class="button" href="{{ open_url }}">Відкрити Картку</a>
+      {% if row.archive %}
+      <form method="post" action="/item/{{ card.id }}">
+        <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}"><input type="hidden" name="stay" value="list">
+        <button name="action" value="to_archive">В архів</button>
+      </form>
+      {% endif %}
+      {% if row.recheck %}
+      <form method="post" action="/item/{{ card.id }}">
+        <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}"><input type="hidden" name="stay" value="list">
+        <button name="action" value="recheck" class="primary">Перевірити ще раз</button>
+      </form>
+      {% endif %}
+    </div>
+  </li>
+{% endfor %}
+</ul>
+{% endblock %}
