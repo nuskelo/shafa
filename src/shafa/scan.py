@@ -9,7 +9,7 @@ from shafa.bot.hashtag import accessory_group, item_kind
 from shafa.db import Status, now
 from shafa.export import Post
 from shafa.folders import Folder, base_name, is_old, natural_key, variant_name, variant_size
-from shafa.rules import many_items, many_sizes, price_from_text, size_variants
+from shafa.rules import many_items, many_sizes, price_from_text
 
 MAX_PHOTOS = 10
 
@@ -108,7 +108,7 @@ def find_problem(
         return "no_text", f"У поста {post_id} немає тексту"
     if price_from_text(texts[post_id]) is None:
         return "no_price", f"У поста {post_id} немає ціни"
-    if not size_variants(texts[post_id]) and (problem := text_problem(texts[post_id])):
+    if not variants.size_variants(texts[post_id]) and (problem := text_problem(texts[post_id])):
         return problem  # пост з кількома розмірами однозначно — Картка на розмір (CORE-014)
     if not folder.photos:
         return "no_photos", "У папці немає фото .jpg"
@@ -213,7 +213,7 @@ def _save_folder(
     роботу (на перевірці, схвалена, опублікована) — варіантів не робимо: спершу її перерахують
     правила (`many_items`), тоді розділять.
     """
-    found = size_variants(text) if text else None
+    found = variants.size_variants(text) if text else None
     if found:
         base = conn.execute("SELECT id FROM items WHERE folder_name = ?", (folder.name,)).fetchone()
         if base is not None and not variants.split_card(conn, base["id"]):

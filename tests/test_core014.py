@@ -53,6 +53,12 @@ REAL_CALL = ai.call  # з підставним клієнтом — без ме�
 
 
 @pytest.fixture(autouse=True)
+def split_on(monkeypatch):
+    """Код CORE-014 вимкнено (FIX-CORE-014-off); тут його перевіряємо ввімкненим."""
+    monkeypatch.setattr(variants, "SPLIT_SIZES", True)
+
+
+@pytest.fixture(autouse=True)
 def no_ai(monkeypatch):
     """Жодного справжнього запиту до ШІ; там, де ШІ потрібне, тест дає підставний клієнт."""
 
