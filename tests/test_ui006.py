@@ -95,8 +95,8 @@ def buttons(page: str) -> set[str]:
 @pytest.mark.parametrize(
     ("code", "expected"),
     [
-        ("many_items", {"recheck"}),
-        ("no_section", {"recheck"}),
+        ("many_items", {"recheck", "to_archive"}),
+        ("no_section", {"recheck", "to_archive"}),
         ("robot_field_missing", {"recheck"}),
         ("photos_missing", {"recheck"}),
         ("щось_нове", {"recheck"}),
@@ -125,7 +125,10 @@ def test_list_buttons_match_card_buttons(conn, root, app, code):
     assert in_list == on_card
 
 
-@pytest.mark.parametrize("code", ["possible_duplicate", "already_published", "shafa_declined"])
+@pytest.mark.parametrize(
+    "code",
+    ["possible_duplicate", "already_published", "shafa_declined", "many_items", "no_section"],
+)
 def test_archive_button_really_archives(conn, root, app, code):
     """`ARCHIVE_CODES` — рівно ті коди, які `publish.to_archive` справді приймає."""
     item = problem(conn, root, code)
@@ -136,7 +139,7 @@ def test_archive_button_really_archives(conn, root, app, code):
     assert status_of(conn, item)[0] == Status.ARCHIVED
 
 
-@pytest.mark.parametrize("code", ["many_items", "no_section", "photos_missing", "robot_photos"])
+@pytest.mark.parametrize("code", ["photos_missing", "robot_photos", "robot_field_missing"])
 def test_no_archive_button_where_server_refuses(conn, root, app, code):
     """Для цих кодів `to_archive` нічого не робить — кнопки «В архів» немає (див. handoff)."""
     item = problem(conn, root, code)
@@ -147,14 +150,14 @@ def test_no_archive_button_where_server_refuses(conn, root, app, code):
 
 def test_archive_from_list_returns_to_problems(conn, root, app):
     item = problem(conn, root, "possible_duplicate")
-    other = problem(conn, root, "many_items", folder="1343", post_id=1343)
+    other = problem(conn, root, "photos_missing", folder="1343", post_id=1343)
     page = row(html(get(app, "/problem")), item)
     assert 'name="from" value="/problem"' in page and 'name="stay" value="list"' in page
     where = location(post(app, f"/item/{item}", action="to_archive", **{"from": "/problem"}))
     assert where.startswith("/problem?")
     assert "Картку перенесено в Архів" in html(get(app, where))
     assert status_of(conn, item)[0] == Status.ARCHIVED
-    assert status_of(conn, other) == (Status.PROBLEM, "many_items")
+    assert status_of(conn, other) == (Status.PROBLEM, "photos_missing")
 
 
 def test_recheck_from_list_same_result_as_from_card(conn, root, app):
@@ -406,3 +409,59 @@ def test_pages_render_without_javascript_and_scripts_are_local(conn, root, app):
     for path in ("/problem", "/archived", "/sessions", "/settings"):
         page = html(get(app, path))
         assert "<script>" not in page and "http://" not in page.replace("http://127.0.0.1", "")
+
+
+# --- CORE-017: «В архів» для «Кілька товарів» і «Нема розділу» ---
+
+FINAL = ["many_items", "no_section"]
+
+
+@pytest.mark.parametrize("code", FINAL)
+def test_core017_archive_from_card_and_list(conn, root, app, code):
+    item = problem(conn, root, code)
+    assert 'value="to_archive"' in row(html(get(app, "/problem")), item)
+    assert 'value="to_archive"' in html(get(app, f"/item/{item}?from=/problem"))
+    where = location(post(app, f"/item/{item}", action="to_archive", **{"from": "/problem"}))
+    assert where.startswith("/problem?msg=duplicate_archived")
+    assert "Картку перенесено в Архів" in html(get(app, where))
+    assert status_of(conn, item) == (Status.ARCHIVED, code)
+    assert conn.execute("SELECT archived_at FROM items WHERE id = ?", (item,)).fetchone()[0]
+
+
+@pytest.mark.parametrize("code", FINAL)
+def test_core017_hint_mentions_archive(conn, root, app, code):
+    item = problem(conn, root, code)
+    assert "в архів" in row(html(get(app, "/problem")), item)
+
+
+@pytest.mark.parametrize("code", FINAL)
+def test_core017_archived_stays_after_scan_and_purge(conn, root, app, code):
+    from datetime import datetime, timedelta
+
+    from shafa import review, scan
+
+    item = problem(conn, root, code)
+    post(app, f"/item/{item}", action="to_archive")
+    review.purge_archive(conn, datetime.fromisoformat(review.now()) + timedelta(days=8))
+    assert status_of(conn, item) == (Status.ARCHIVED, code)
+    assert scan.touchable(Status.ARCHIVED, code) is False
+
+
+@pytest.mark.parametrize("code", FINAL)
+def test_core017_restore_refused_and_hidden(conn, root, app, code):
+    item = problem(conn, root, code)
+    post(app, f"/item/{item}", action="to_archive")
+    assert 'value="restore"' not in html(get(app, "/archived"))
+    assert 'value="restore"' not in html(get(app, f"/item/{item}"))
+    where = location(post(app, f"/item/{item}", action="restore"))
+    assert "msg=no_restore" in where
+    assert status_of(conn, item) == (Status.ARCHIVED, code)
+    assert "не можна" in html(get(app, where))
+
+
+@pytest.mark.parametrize("code", FINAL)
+def test_core017_archive_shows_reason(conn, root, app, code):
+    problem(conn, root, code, "Причина X")
+    item = conn.execute("SELECT id FROM items").fetchone()[0]
+    post(app, f"/item/{item}", action="to_archive")
+    assert "Причина X" in html(get(app, "/archived"))
