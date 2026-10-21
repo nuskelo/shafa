@@ -4,14 +4,15 @@ import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
 
-from shafa import catalog, variants
-from shafa.bot.hashtag import accessory_group, item_kind
+from shafa import catalog, events, variants
+from shafa.bot.hashtag import accessory_group, item_kind, size_of
 from shafa.db import Status, now
 from shafa.export import Post
 from shafa.folders import Folder, base_name, is_old, natural_key, variant_name, variant_size
 from shafa.rules import many_items, many_sizes, price_from_text
 
 MAX_PHOTOS = 10
+NEW_LINES = 5  # нових постів у журнал окремими рядками; більше — одним підсумком
 
 # Статуси, які сканування може міняти. Картки в роботі (review і далі) не чіпає.
 SCANNABLE = (Status.NEW, Status.PROBLEM)
@@ -262,8 +263,41 @@ def _texts(conn: sqlite3.Connection) -> dict[int, str]:
     return {r[0]: r[1] for r in conn.execute("SELECT post_id, text FROM posts")}
 
 
+def _announce_new(conn: sqlite3.Connection, known: set[str]) -> None:
+    """BOT-013: нові Картки `new` (папки, яких не було) — події «📥 Новий пост». «Проблеми» тут не
+    рахуємо: про них уже скаже BOT-010. Багато постів одразу (перший імпорт) — одним рядком."""
+    try:
+        posts: dict[int | str, list[tuple[int, str | None]]] = {}
+        for row in conn.execute(
+            "SELECT i.id, i.folder_name, i.post_id, "
+            "(SELECT COUNT(*) FROM photos WHERE item_id = i.id) AS photos, p.text "
+            "FROM items i LEFT JOIN posts p ON p.post_id = i.post_id "
+            "WHERE i.status = ? AND i.purged_at IS NULL ORDER BY i.id",
+            (Status.NEW,),
+        ):
+            if row["folder_name"] not in known:
+                key = row["post_id"] if row["post_id"] is not None else row["folder_name"]
+                posts.setdefault(key, []).append((row["photos"], row["text"]))
+        if not posts:
+            return
+        if len(posts) > NEW_LINES:
+            numbers = ", ".join(str(k) for k in list(posts)[:NEW_LINES])
+            events.emit("post.new", f"Нових постів: {len(posts)} ({numbers} …) → чекають ШІ")
+            return
+        for key, cards in posts.items():
+            photos, text = cards[0]
+            parts = [events.cards(len(cards))] if len(cards) > 1 else []
+            parts.append(f"{photos} фото")
+            if len(cards) == 1 and text and (size := size_of(text)) is not None:
+                parts.append(f"розмір {size}")
+            events.emit("post.new", f"Новий пост {key}: {', '.join(parts)} → чекає ШІ")
+    except Exception:  # noqa: BLE001 — журнал не ламає зіставлення
+        events.log.warning("Журнал подій: нові пости не записано")
+
+
 def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]) -> ScanResult:
     """Створити або оновити Картки для папок. Повторний запуск нічого не дублює."""
+    known = {r[0] for r in conn.execute("SELECT folder_name FROM items")}
     with conn:
         save_posts(conn, posts)
         texts = _texts(conn)
@@ -277,6 +311,7 @@ def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]
     from shafa import changes  # changes бере правила звідси
 
     changes.sync_photos(conn, folders)  # TD-004: фото Карток review/approved
+    _announce_new(conn, known)
 
     new = conn.execute("SELECT count(*) FROM items WHERE status = ?", (Status.NEW,)).fetchone()[0]
     problems = [

@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from shafa import ai, fill, review, rules, scan, variants
+from shafa import ai, events, fill, review, rules, scan, variants
 from shafa.db import Status, now
 from shafa.folders import Folder, base_name, is_old
 
@@ -164,7 +164,42 @@ def text_changed(
                 conn, item_id, status, review.POST_CHANGED, f"Пост змінено {when}: {what}", problem
             )
             cards.append(item_id)
+    _announce_text(conn, post_id, cards, published)
     return TextChange(cards, published)
+
+
+def _announce_text(
+    conn: sqlite3.Connection, post_id: int, cards: list[int], published: list[tuple[int, str]]
+) -> None:
+    """BOT-013: «✏️ 7015: текст змінено → знову «На перевірку»» (Картки в роботі) і зміни поста,
+    що вже на Шафі (там правлять руками)."""
+    if cards:
+        marks = ",".join("?" * len(cards))
+        statuses = [
+            r[0] for r in conn.execute(f"SELECT status FROM items WHERE id IN ({marks})", cards)
+        ]
+        stuck = statuses.count(Status.PROBLEM)
+        where = "у «Проблемах»" if stuck == len(statuses) else "знову «На перевірку»"
+        if 0 < stuck < len(statuses):
+            where += f", у «Проблемах» {stuck} з {len(statuses)}"
+        events.emit("post.changed", f"{post_id}: текст змінено → {where}")
+    for number, what in published:
+        events.emit(
+            "post.changed", f"{number}: текст змінено після публікації на Шафі ({what}) — там "
+            "виправ руками"
+        )  # fmt: skip
+
+
+def _announce_photos(changed: list[tuple[int | None, str, bool]]) -> None:
+    """BOT-013: «✏️ 7015: фото змінено (було 5, стало 6) → знову «На перевірку»»."""
+    changed = list(dict.fromkeys(changed))  # сестри-варіанти ділять папку — один рядок
+    if len(changed) > scan.NEW_LINES:
+        numbers = ", ".join(str(c[0]) for c in changed[: scan.NEW_LINES])
+        events.emit("post.changed", f"фото змінено в {len(changed)} постах ({numbers} …)")
+        return
+    for post_id, what, problem in changed:
+        where = "у «Проблемах»" if problem else "знову «На перевірку»"
+        events.emit("post.changed", f"{post_id}: фото змінено ({what}) → {where}")
 
 
 def _names(names: list[str]) -> str:
@@ -202,6 +237,7 @@ def sync_photos(
         FIXED,
     ).fetchall()
     changed: list[tuple[int | None, str]] = []
+    shown: list[tuple[int | None, str, bool]] = []  # те саме + «пішло в Проблеми» (журнал)
     lost: list[tuple[int | None, str]] = []
     when = _date(moment)
     with conn:
@@ -244,6 +280,8 @@ def sync_photos(
                 problem,
             )  # fmt: skip
             changed.append((row["post_id"], what))
+            shown.append((row["post_id"], what, problem is not None))
+    _announce_photos(shown)
     return PhotoSync(changed, lost)
 
 
