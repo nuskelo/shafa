@@ -52,7 +52,7 @@ from urllib.parse import quote
 import pillow_heif
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from shafa import changes, config, rules, site
+from shafa import changes, config, events, rules, site
 from shafa.bot import actions, alerts, report
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
@@ -963,6 +963,7 @@ class Bot:
         except OSError as error:
             # без папки альбому для коментарів немає — Власник розбереться руками
             self._set(draft_id, note=f"папка не створена: {error}", comments=comments and "failed")
+            events.emit("post.failed", f"{post_id}: папку з фото не створено (пост у каналі є)")
             self.say(chat_id, TEXTS["done"].format(link=link, n=0))
             self.tell_owner(f"пост {post_id} опубліковано, але папку не створено: {error}")
             return

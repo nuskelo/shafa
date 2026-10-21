@@ -762,6 +762,10 @@ class Run:
         if cursor.rowcount == 1:
             report.notes.append(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві")
             self.log(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві, не публікую")
+            events.emit(
+                "post.gone",
+                f"{card.post_id} видалено з каналу — Картка в Архіві, на Шафі не публікую",
+            )
         return True
 
     def _problem(self, report: Report, card: review.Card, source: str, code: str, text: str):

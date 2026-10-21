@@ -9,11 +9,13 @@
 import json
 import logging
 import os
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import shafa
 from shafa import config
 
 NAME = "events.jsonl"
@@ -53,6 +55,23 @@ KINDS = {
     "catalog.start": Kind("📚"),
     "catalog.done": Kind("📚"),
     "catalog.error": Kind("⚠️", loud=True),
+    # пости каналу (`scan.py`, `changes.py`, `robot/publish.py`, `site.py`)
+    "post.new": Kind("📥"),
+    "post.changed": Kind("✏️"),
+    "post.gone": Kind("🗑"),
+    "post.failed": Kind("⚠️", skip=True),  # про це вже кажуть бот Власнику й «Проблеми» (BOT-010)
+    # сайт (`site.py`)
+    "site.sent": Kind("🌐"),
+    "site.failed": Kind("⚠️", loud=True, skip=True),  # Власнику вже пише `Notify.owner`
+    "site.fuse": Kind("⛔", loud=True, skip=True),  # так само: `Notify.owner`
+    "site.night": Kind("🌙"),
+    "site.sold": Kind("💰"),
+    "site.morning": Kind("☀️"),
+    # фото, програма, самоперевірка (`borh.py`, `app.py`, `health.py`)
+    "photos.purged": Kind("🧹"),
+    "app.start": Kind("🟢"),
+    "app.stop": Kind("🔴"),
+    "health.ok": Kind("🩺"),  # FAIL — окремо, `alerts._health_events` (гучно, BOT-010)
 }
 OTHER = Kind("ℹ️")  # вид, якого немає в таблиці: тихо
 
@@ -86,8 +105,36 @@ def _rotate(path: Path) -> None:
         pass  # немає файла чи його тримає читач (Windows): ротація наступного разу
 
 
-def emit(kind: str, text: str, *, loud: bool = False, data: dict[str, Any] | None = None) -> None:
-    """Дописати подію в журнал. `loud` — гучно, навіть якщо вид тихий. Не кидає винятків."""
+def version() -> str:
+    """Версія програми для «🟢 Програму запущено»: `VERSION` пакета Windows (поруч із `lib`), у
+    розробці — версія пакета з git-позначкою, інакше лише версія пакета."""
+    root = Path(shafa.__file__).resolve().parents[2]
+    try:
+        stamp = (root / "VERSION").read_text(encoding="utf-8").splitlines()[0].strip()
+        if stamp:
+            return stamp[:60]
+    except (OSError, IndexError):
+        pass
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True,
+            timeout=3, check=True,
+        ).stdout.strip()  # fmt: skip
+    except (OSError, subprocess.SubprocessError):
+        commit = ""
+    return f"{shafa.__version__}+{commit}" if commit else shafa.__version__
+
+
+def emit(
+    kind: str,
+    text: str,
+    *,
+    loud: bool = False,
+    data: dict[str, Any] | None = None,
+    data_dir: Path | None = None,
+) -> None:
+    """Дописати подію в журнал. `loud` — гучно, навіть якщо вид тихий. Не кидає винятків.
+    `data_dir` — коли журнал не в теці даних за замовчуванням (самоперевірка пише в свою)."""
     try:
         from shafa.bot import report  # лише тут: журнал пишуть і процеси без бота
 
@@ -99,7 +146,7 @@ def emit(kind: str, text: str, *, loud: bool = False, data: dict[str, Any] | Non
             "data": data or {},
         }
         line = json.dumps(record, ensure_ascii=False) + "\n"
-        path = config.data_dir() / NAME
+        path = (data_dir or config.data_dir()) / NAME
         path.parent.mkdir(parents=True, exist_ok=True)
         _rotate(path)
         with open(path, "ab") as stream:  # один `write` у режимі додавання: рядки не змішуються
