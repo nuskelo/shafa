@@ -36,7 +36,7 @@ import re
 import sqlite3
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -45,7 +45,7 @@ import anthropic
 import httpx2
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from shafa import ai, config, fill, folders, photos, rules
+from shafa import ai, config, events, fill, folders, photos, rules
 from shafa import sizes as sizes_mod
 from shafa.bot.presence import GONE, PRESENT, UNKNOWN, Presence
 from shafa.catalog import Kind
@@ -489,6 +489,7 @@ class Night:
     checked: int = 0
     gone: int = 0
     unknown: int = 0
+    gone_ids: list[int] = field(default_factory=list)  # зникли з каналу цієї ночі (для журналу)
 
 
 class Worker:
@@ -511,6 +512,7 @@ class Worker:
         self._sold_after: datetime | None = None  # «Продано» не дійшло — не раніше
         self._no_sold_route = False  # сайт ще не вміє «Продано» — до кінця наступної ночі
         self._night: Night | None = None
+        self._morning_day = ""  # доба, про яку вже сказано «вийде сьогодні»
         self._site_for = site_for
         self._ai_client = ai_client or (lambda: ai.make_client(config.api_key()))
         self._site: Site | None = None
@@ -551,6 +553,7 @@ class Worker:
         self._said.discard("nokey")
         if self._halted_key == site_key:
             return IDLE
+        self._morning()
         if self._pause_until is not None and self.clock() < self._pause_until:
             return (self._pause_until - self.clock()).total_seconds()
         stamp = self._stamp()
@@ -649,6 +652,9 @@ class Worker:
         elif result == GONE:
             self._set(post_id, state="cancelled", next_at=None, error=None)
             self.log(f"Сайт: пост {post_id} видалено з каналу до виходу — на сайт не йде")
+            events.emit(
+                "post.gone", f"{post_id} видалено з каналу до виходу на сайт — на сайт не піде"
+            )
         else:
             self._later(job, "не вдалося перевірити, чи пост є в каналі")
             self._tell_unknown()
@@ -734,11 +740,58 @@ class Worker:
                 "канал. Якщо все правильно — «Налаштування» → «Надіслати відкладені Продано»."
             )
         self._no_sold_route = False  # сайт міг навчитися — пробуємо знову
+        self._night_event(night, gone, limit)
         self.log(
             f"Сайт: нічна перевірка — перевірено {night.checked}, зникло {night.gone}, "
             f"невідомо {night.unknown}"
         )
         self._tell_unknown()
+
+    def _night_event(self, night: Night, held: int, limit: int) -> None:
+        """BOT-013: підсумок ночі одним рядком; запобіжник — окремо (Власнику вже пише `notify`)."""
+        if night.checked == 0 and held == 0:
+            return
+        text = f"Ніч: перевірено {night.checked}"
+        if held > limit:
+            text += f", зникло з каналу {held} — запобіжник, «Продано» не надсилаю"
+        elif night.gone_ids:
+            shown = ", ".join(map(str, night.gone_ids[:10])) + (
+                " …" if len(night.gone_ids) > 10 else ""
+            )
+            text += f", зникло з каналу {len(night.gone_ids)} ({shown}) → «Продано» піде на сайт"
+        else:
+            text += ", зниклих постів немає"
+        if night.unknown:
+            text += f"; не вдалося перевірити {night.unknown}"
+        events.emit("site.night", text)
+        if held > limit:
+            events.emit(
+                "site.fuse", f"Запобіжник: за ніч зникло {held} постів (ліміт {limit}) — «Продано» "
+                "відкладено, Власник вирішує", loud=True
+            )  # fmt: skip
+
+    def _morning(self) -> None:
+        """BOT-013: раз на добу після ранку — скільки пар сьогодні виходить на сайт (є що — кажемо)."""
+        local = self.clock().astimezone()
+        day = local.date().isoformat()
+        if local.hour < MORNING_HOUR or self._morning_day == day:
+            return
+        self._morning_day = day
+        row = self.conn.execute("SELECT value FROM site_cache WHERE name = 'morning'").fetchone()
+        if row is not None and row["value"] == day:
+            return
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO site_cache (name, value, fetched_at) VALUES ('morning', ?, ?) "
+                "ON CONFLICT (name) DO UPDATE SET value = excluded.value, "
+                "fetched_at = excluded.fetched_at",
+                (day, self._stamp()),
+            )
+        waiting, today, _, _ = summary(self.conn, self.clock())
+        if today:
+            events.emit(
+                "site.morning", f"Сьогодні вийде на сайт пар: {today} (усього чекає {waiting})"
+            )
 
     def _night_step(self, site: Site) -> float:
         """Нічна перевірка проданого: одна перевірка за крок, найдавніше перевірені — першими.
@@ -767,6 +820,7 @@ class Worker:
         result = self._check(post_id)
         if result == GONE and row["gone_at"] is None:
             night.gone += 1
+            night.gone_ids.append(post_id)
             self.log(f"Сайт: пост {post_id} зник з каналу — продано")
         elif result == UNKNOWN:
             night.unknown += 1
@@ -800,6 +854,10 @@ class Worker:
             )
         already = answer.get("changed") is False
         self.log(f"Сайт: пост {post_id} — «Продано»" + (" (уже було)" if already else ""))
+        events.emit(
+            "site.sold",
+            f"{post_id} позначено «Продано» на сайті" + (" (уже було)" if already else ""),
+        )
         return GAP
 
     def _sold_failed(self, post_id: int, error: SiteError) -> float:
@@ -953,7 +1011,9 @@ class Worker:
             return
         if index >= len(files) or index > PHOTO_MAX_INDEX:
             self._set(post_id, state="done", next_at=None, error=None, attempts=0)
-            self.log(f"Сайт: пост {post_id} — готово, фото: {min(len(files), PHOTO_MAX_INDEX + 1)}")
+            count = min(len(files), PHOTO_MAX_INDEX + 1)
+            self.log(f"Сайт: пост {post_id} — готово, фото: {count}")
+            self._sent(post_id, count)
             return
         try:
             data = for_site(files[index].read_bytes())
@@ -977,6 +1037,10 @@ class Worker:
         )  # fmt: skip
         if done:
             self.log(f"Сайт: пост {post_id} — готово, фото: {index + 1}")
+            self._sent(post_id, index + 1)
+
+    def _sent(self, post_id: int, photos: int) -> None:
+        events.emit("site.sent", f"{post_id} відправлено на сайт (поля + {photos} фото)")
 
     # --- Невдачі ---
 
@@ -991,6 +1055,7 @@ class Worker:
         post_id = job["post_id"]
         self._set(post_id, state="failed", next_at=None, error=why[:200])
         self.log(f"Сайт: пост {post_id} — не повторюю: {why}")
+        events.emit("site.failed", f"{post_id}: сайт не прийняв пару — {why}. Повторно не шлю.")
         self.notify.owner(f"Сайт не прийняв пару з поста {post_id}: {why}. Повторно не шлю.")
         if seller:
             self.notify.seller(
