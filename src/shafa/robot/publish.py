@@ -397,7 +397,7 @@ def move_when_done(conn: sqlite3.Connection, root: Path, item_id: int) -> str | 
 def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> list[str]:
     """Видалити з «Опубліковано» папки Карток, опублікованих понад 3 дні тому.
 
-    Лише коли увімкнено налаштування (до пілоту — вимкнено) і лише папки опублікованих Карток.
+    Не чіпає пост, що ще в черзі сайту (`borh.site_busy`, TD-058). Лише коли увімкнено налаштування (до пілоту — вимкнено) і лише папки опублікованих Карток.
     """
     if not delete_enabled():
         return []
@@ -407,6 +407,8 @@ def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> li
         "SELECT folder_name, post_id FROM items WHERE status = ? AND published_at < ?",
         (Status.PUBLISHED, cutoff),
     ).fetchall():
+        if borh.site_busy(conn, post_id):  # TD-058: пост ще йде на сайт — фото з папки потрібні
+            continue
         if variant_size(name) is not None:  # спільна папка сестер (CORE-014): коли пізніша — теж
             later = conn.execute(
                 "SELECT 1 FROM items WHERE post_id = ? AND folder_name LIKE ? || '%' "

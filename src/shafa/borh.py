@@ -210,6 +210,15 @@ PURGE_KEEP = 60
 _OLD_NAME = re.compile(re.escape(OLD_PREFIX) + r"\d{1,7}")
 
 
+def site_busy(conn: sqlite3.Connection, post_id: int | None) -> bool:
+    """TD-058: пост ще в черзі сайту (`waiting`/`fields`/`photos`) або застряг (`failed`) —
+    фото з його папки ще можуть знадобитись. Вільно лише без рядка `site_jobs`, `done`, `cancelled`."""
+    if post_id is None:
+        return False
+    row = conn.execute("SELECT state FROM site_jobs WHERE post_id = ?", (post_id,)).fetchone()
+    return row is not None and row[0] not in ("done", "cancelled")
+
+
 def purge_photos(conn: sqlite3.Connection, cutoff: str) -> list[str]:
     """Видалити `<дані>/borh/<номер>/` Карток, опублікованих раніше за `cutoff` (UTC, ISO).
 
@@ -217,7 +226,7 @@ def purge_photos(conn: sqlite3.Connection, cutoff: str) -> list[str]:
     опубліковано всіх сестер і найпізніша теж старша за `cutoff`. Видаляє лише всередині
     `<дані>/borh/`. `purged_at` не ставить: він ховає Картку з усіх списків (це «очищений архів»),
     а опублікована лишається у вкладці «Опубліковані»; фото опублікованої ніхто не шукає.
-    Повертає назви (`borh-<номер>`), теки яких видалено.
+    Пост у черзі сайту (`site_busy`) не чіпає. Повертає назви (`borh-<номер>`), теки яких видалено.
     """
     root = old_root().resolve()
     removed: list[str] = []
@@ -232,6 +241,8 @@ def purge_photos(conn: sqlite3.Connection, cutoff: str) -> list[str]:
         if base in seen or not _OLD_NAME.fullmatch(base):
             continue
         seen.add(base)
+        if site_busy(conn, post_id):
+            continue
         if variant_size(name) is not None and _not_done(conn, base, post_id, cutoff):
             continue
         folder = root / base.removeprefix(OLD_PREFIX)

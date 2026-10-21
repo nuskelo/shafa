@@ -229,3 +229,64 @@ def test_purge_log_survives_broken_file(data):
     assert borh.purged_on(data, NOW.date()) == 3
     assert borh.purged_on(data, date(2020, 1, 1)) == 0
     assert config.data_dir() == data
+
+
+# --- TD-058: пост ще в черзі сайту — папку не чіпаємо ---
+
+
+def site_job(conn, post_id, state):
+    with conn:
+        conn.execute(
+            "INSERT INTO site_jobs (post_id, folder_name, posted_at, text, state, created_at, "
+            "updated_at) VALUES (?, ?, 'x', 'x', ?, 'x', 'x')",
+            (post_id, str(post_id), state),
+        )
+
+
+SITE_STATES = [
+    ("waiting", True),
+    ("fields", True),
+    ("photos", True),
+    ("failed", True),
+    ("done", False),
+    ("cancelled", False),
+    (None, False),  # рядка site_jobs немає
+]
+
+
+@pytest.mark.parametrize(("state", "kept"), SITE_STATES)
+def test_published_folder_waits_for_site(conn, data, root, state, kept):
+    """Пост бота, опублікований 4 дні тому: папка в «Опубліковано» лишається, поки сайт не дійшов."""
+    folder = root / "Опубліковано" / "5000"
+    folder.mkdir(parents=True)
+    (folder / "1.jpg").write_bytes(b"jpg")
+    old_card(conn, data, 5000, name="5000", photo=False)
+    if state:
+        site_job(conn, 5000, state)
+
+    assert publish.purge_published(conn, root, NOW) == ([] if kept else ["5000"])
+    assert folder.is_dir() == kept
+
+
+@pytest.mark.parametrize(("state", "kept"), SITE_STATES)
+def test_old_photos_wait_for_site(conn, data, state, kept):
+    old_card(conn, data, 100)
+    if state:
+        site_job(conn, 100, state)
+
+    assert purge(conn) == ([] if kept else ["borh-100"])
+    assert exists(data, 100) == kept
+
+
+def test_variants_wait_for_site(conn, data, root):
+    """Варіанти ділять папку й один рядок `site_jobs`: поки сайт не дійшов — не видаляємо."""
+    folder = root / "Опубліковано" / "5000"
+    folder.mkdir(parents=True)
+    old_card(conn, data, 5000, name="5000~36", photo=False)
+    old_card(conn, data, 5000, name="5000~37", photo=False)
+    site_job(conn, 5000, "waiting")
+
+    assert publish.purge_published(conn, root, NOW) == [] and folder.is_dir()
+    with conn:
+        conn.execute("UPDATE site_jobs SET state = 'done'")
+    assert publish.purge_published(conn, root, NOW) == ["5000"] and not folder.is_dir()
