@@ -9,6 +9,7 @@ import json
 import re
 import sqlite3
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -217,8 +218,11 @@ ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
 
 
 def brand_key(text: str) -> str:
-    """Бренд для порівняння: усі пробіли (і `\\xa0`) — один звичайний, без невидимих, без регістру."""
-    return " ".join(text.translate(ZERO_WIDTH).split()).casefold()
+    """Бренд для порівняння: усі пробіли (і `\\xa0`) — один звичайний, без невидимих, без регістру
+    і без діакритики («Waldläufer» = «Waldlaufer», ROBOT-012). Точний збіг після цього, не схожість."""
+    plain = unicodedata.normalize("NFKD", text.translate(ZERO_WIDTH))
+    plain = "".join(c for c in plain if not unicodedata.combining(c))
+    return " ".join(plain.split()).casefold()
 
 
 # Підказка форми, а не значення поля: «Додайте заголовок(до +11%)», «Виберіть…» (ROBOT-006)
@@ -309,6 +313,10 @@ LABELS = {
     "Розмір": "Розмір",
 }
 
+# Кнопка «×» чипа (вибране значення списку): react-select — клас «…Remove», aria-label «Remove …».
+REMOVE = "[class*=emove], [aria-label^='Remove'], [aria-label^='Видалити'], [aria-label^='Удалить']"
+
+# Блок, де вибрано максимум, не має поля введення — лише чипи (ROBOT-012): шукаємо й за кнопкою «×».
 FIND_BLOCK = """([labels, mark]) => {
   const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
   const own = el => norm([...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' '));
@@ -318,7 +326,7 @@ FIND_BLOCK = """([labels, mark]) => {
     if (!starts(own(el)) || el.closest('header, nav, footer')) continue;
     let box = el;
     for (let i = 0; i < 6 && box; i++, box = box.parentElement) {
-      if (box.querySelector('button, input[role=combobox], input[type=checkbox]')) {
+      if (box.querySelector("button, input[role=combobox], input[type=checkbox], __REMOVE__")) {
         box.setAttribute('data-robot-block', mark);
         el.setAttribute('data-robot-label', mark);
         return true;
@@ -326,11 +334,9 @@ FIND_BLOCK = """([labels, mark]) => {
     }
   }
   return false;
-}"""
+}""".replace("__REMOVE__", REMOVE)
 
 
-# Кнопка «×» чипа (вибране значення списку): react-select — клас «…Remove», aria-label «Remove …».
-REMOVE = "[class*=emove], [aria-label^='Remove'], [aria-label^='Видалити'], [aria-label^='Удалить']"
 OPTION = "[role=option], [class*=option], [class*=Option]"
 
 # Що є на формі, коли потрібного поля немає: кнопки й вкладки блоку (якщо блок знайдено) та
@@ -432,6 +438,9 @@ MARKUP = f"""(mark) => {{
 MARKUP_LIMIT = 50 * 1024  # байтів у файлі розмітки
 
 LIST_WAIT = 5  # с чекаємо, поки список покаже варіанти
+FIELD_WAIT = (
+    2000  # мс на поле введення списку: після вибору максимуму Шафа його прибирає (ROBOT-012)
+)
 BRAND_WAIT = 6  # с чекаємо точний збіг бренду (список домальовується)
 BRAND_STILL = 3  # с без змін у непорожньому списку — далі чекати нічого
 
@@ -496,7 +505,8 @@ class PageWidget:
         self.page, self.session = driver.page, driver.session
         self.block = self.page.locator(f"[data-robot-block='{mark}']")
         self.input = self.block.locator("input[role=combobox]")
-        self.listed = bool(self.input.count())
+        # Поле-список і без поля введення: вибрано максимум — Шафа його прибирає (ROBOT-012)
+        self.listed = bool(self.input.count()) or bool(self.chips())
 
     def chips(self) -> list[str]:
         return list(self.page.evaluate(CHIPS, self.mark))
@@ -520,7 +530,19 @@ class PageWidget:
     def options(self) -> list[str]:
         return [o for o in self.page.evaluate(OPTIONS) if not among(o, list(NO_OPTIONS))]
 
+    def has_input(self) -> bool:
+        """Поле введення є (чекаємо `FIELD_WAIT`, не 30 с): після вибору максимуму його немає."""
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+        try:
+            self.input.first.wait_for(state="attached", timeout=FIELD_WAIT)
+        except PlaywrightTimeout:
+            return False
+        return True
+
     def search(self, text: str) -> list[str]:
+        if not self.has_input():
+            return []  # місця для нового значення немає — далі `FieldMissing` з чипами
         self.input.first.click()
         self.input.first.fill(text)
         browser.pause()
@@ -545,8 +567,15 @@ class PageWidget:
         self.session.press("Escape")
 
     def close(self) -> None:
-        if self.input.first.input_value():
-            self.input.first.fill("")
+        """Закрити список. Немає поля введення — закрито й порожньо, не помилка (ROBOT-012)."""
+        from playwright.sync_api import TimeoutError as PlaywrightTimeout
+
+        if self.input.count():
+            try:
+                if self.input.first.input_value(timeout=FIELD_WAIT):
+                    self.input.first.fill("", timeout=FIELD_WAIT)
+            except PlaywrightTimeout:
+                pass  # поле зникло між перевіркою й читанням
         self.session.press("Escape")
         browser.pause(0.5, 1.0)
 

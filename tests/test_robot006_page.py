@@ -28,8 +28,10 @@ for (const box of document.querySelectorAll('.select')) {{
     + '<input role="combobox"></div><div class="select__menu" hidden></div>';
   const input = box.querySelector('input'), menu = box.querySelector('.select__menu');
   const show = () => {{
-    const text = input.value.toLowerCase().replace(/\\s+/g, ' ');
-    const shown = all.filter(o => o.toLowerCase().replace(/\\s+/g, ' ').includes(text));
+    const flat = t => t.toLowerCase().replace(/\\s+/g, ' ')
+      .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');  // пошук Шафи — без діакритики
+    const text = flat(input.value);
+    const shown = all.filter(o => flat(o).includes(text));
     menu.innerHTML = '';
     if (!shown.length) {{
       const add = document.createElement('div');  // «Додати бренд» — клікати не можна ніколи
