@@ -86,6 +86,7 @@ MESSAGES = {
     "babies_size": "Схвалити не можна: «Для малюків» — лише до 22 розміру, оберіть «Для дівчаток» чи «Для хлопчиків»",
     "bad": "Не збережено поля, позначені червоним",
     "stale": "Картку вже змінено — сторінку оновлено",
+    "photos_retry": "Картку повернуто на перевірку — перегляньте й схваліть знову",
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
     "recheck_new": "Папку перевірено: усе добре, Картка чекає на ШІ",
     "recheck_problem": "Папку перевірено: проблема лишилась",
@@ -151,6 +152,7 @@ PROBLEM_HINTS = {
     "robot_logged_out": "Робот не увійшов на Шафу. Власник: python -m shafa robot --login. «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_brand_missing": "Бренд є у довіднику Шафи, але робот його не знайшов. Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_photos": "Не всі фото завантажились на Шафу. «Перевірити ще раз» поверне Картку в Схвалені.",
+    "photos_missing": "Фото поста не знайдено в папці. Додайте фото і натисніть «Перевірити ще раз».",
     "stale_rules": "Картку схвалено за старими правилами. «Перевірити ще раз» перерахує її правилами (без ШІ) і поверне на перевірку: перегляньте й схваліть знову.",
     "robot_not_ready": "Картку не можна передати роботу (текст вище). «Перевірити ще раз» поверне Картку в Схвалені.",
     "robot_not_sent": "Форма на Шафі не надіслалась (товар не створено). Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
@@ -975,6 +977,10 @@ class App:
             if action == "ai_retry":
                 message = self.ai_retry(conn, item_id)
                 return redirect(f"{back}?msg={message}")
+            if action == "recheck" and card.problem_code == "photos_missing":
+                if review.photos_retry(conn, item_id):
+                    return redirect(f"/{Status.REVIEW}?msg=photos_retry")
+                return redirect(f"{back}?msg=stale")
             if action == "recheck" and (card.problem_code or "").startswith("robot_"):
                 if review.robot_retry(conn, item_id):
                     return redirect(f"/{Status.PROBLEM}?msg=robot_retry")

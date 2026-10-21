@@ -50,7 +50,7 @@ from urllib.parse import quote
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from shafa import config, rules, site
+from shafa import changes, config, rules, site
 from shafa.bot import report
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
@@ -147,6 +147,7 @@ class Settings:
     owner_chat: int | None
     root: Path  # Головна папка
     discussion_id: int | None = None  # група обговорення каналу (коментарі)
+    export_channel_id: int | None = None  # канал Експорту (`TELEGRAM_CHANNEL_ID`), CORE-015
 
     @property
     def chats(self) -> set[int]:
@@ -390,12 +391,26 @@ class Bot:
         ):
             return
         post_id, text = post.get("message_id"), post.get("caption", post.get("text"))
-        if (
-            isinstance(post_id, int)
-            and isinstance(text, str)
-            and site.edited(self.conn, post_id, text)
-        ):
+        if not isinstance(post_id, int) or not isinstance(text, str):
+            return
+        if site.edited(self.conn, post_id, text):
             self.log(f"Пост {post_id} змінено в каналі — на сайт піде новий текст")
+        self._card_edit(post_id, text)
+
+    def _card_edit(self, post_id: int, text: str) -> None:
+        """CORE-015: Картки цього поста бачать новий текст. Пости з Експорту — лише коли канал бота
+        і є канал Експорту; інакше номер у тестовому каналі міг збігтися з чужим старим постом."""
+        same = self.settings.export_channel_id == self.settings.channel_id
+        try:
+            change = changes.text_changed(self.conn, post_id, text, allow_old=same)
+            for number, what in change.published:
+                self.log(f"Пост {number} змінено після публікації на Шафі: {what}")
+                changes.record_published(config.data_dir(), number, what)
+        except Exception as error:  # noqa: BLE001 — зміна поста бота не зупиняє
+            self.log(f"Пост {post_id}: зміну тексту не застосовано ({type(error).__name__})")
+            return
+        if change.cards:
+            self.log(f"Пост {post_id} змінено в каналі — Картки оновлено, ШІ не потрібне")
 
     def _mark(self, update_id: int) -> None:
         with self.conn:

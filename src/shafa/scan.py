@@ -20,6 +20,7 @@ SCANNABLE = (Status.NEW, Status.PROBLEM)
 # повертає лише людина, перевіривши Шафу. Інакше Картка пішла б у new → ШІ → друга публікація.
 STICKY = (
     "publish_uncertain", "possible_duplicate", "publish_error", "already_published",
+    "photos_missing",  # CORE-015: фото зникли з папки — повертає лише людина, у «На перевірку»
     "shafa_declined",  # ROBOT-011: Шафа відхилила вже опубліковане — друга публікація дала б дубль
 )  # fmt: skip
 
@@ -227,6 +228,10 @@ def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]
         for folder in folders:
             _save_item(conn, folder, folder_problem(folder, texts, twins, old))
         _mark_missing(conn, {f.name for f in folders})
+
+    from shafa import changes  # changes бере правила звідси
+
+    changes.sync_photos(conn, folders)  # TD-004: фото Карток review/approved
 
     new = conn.execute("SELECT count(*) FROM items WHERE status = ?", (Status.NEW,)).fetchone()[0]
     problems = [

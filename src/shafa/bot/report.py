@@ -13,7 +13,7 @@ from collections import Counter
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
-from shafa import batch, config
+from shafa import batch, changes, config
 from shafa.db import Status
 from shafa.robot import control, rehearse
 
@@ -58,6 +58,7 @@ PROBLEMS = {
     "robot_field_missing": "Робот не знайшов поле на формі",
     "robot_logged_out": "Робот не увійшов на Шафу",
     "robot_brand_missing": "Робот не знайшов бренд",
+    "photos_missing": "Фото поста не знайдено в папці",
     "robot_photos": "Не всі фото завантажились",
     "robot_not_ready": "Картку не можна передати роботу",
     "robot_not_sent": "Форма на Шафі не надіслалась",
@@ -149,6 +150,19 @@ def _waiting(conn: sqlite3.Connection) -> str:
     if approved := count(Status.APPROVED):
         parts.append(f"Схвалені {approved} (у черзі на завтра)")
     return "Чекають тебе: " + " · ".join(parts) if parts else ""
+
+
+def _changed(data_dir: Path, day: date) -> str:
+    """CORE-015: пост змінили вже після публікації на Шафі — там правимо вручну."""
+    found = changes.published_on(data_dir, day)
+    if not found:
+        return ""
+    lines = [
+        f"Пост {number} змінено після публікації на Шафі: {what}" for number, what in found[:5]
+    ]
+    if len(found) > 5:
+        lines.append(f"…і ще {len(found) - 5}")
+    return "\n".join(lines)
 
 
 def _rehearsal(data_dir: Path, day: date) -> str:
@@ -253,6 +267,7 @@ def build(conn: sqlite3.Connection, data_dir: Path, day: date, *, late: bool = F
         _shafa(conn, day),
         _problems(conn, day),
         _waiting(conn),
+        _changed(data_dir, day),
         _rehearsal(data_dir, day),
         _bot_site(conn, day),
         _ai(conn, day),
