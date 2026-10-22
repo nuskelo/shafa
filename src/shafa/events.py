@@ -47,6 +47,7 @@ KINDS = {
     "robot.problem": Kind("⚠️", skip=True),  # її вже шле `alerts._problem_events` з кнопками
     "robot.end": Kind("⏹"),
     "robot.stop": Kind("⛔", loud=True, skip=True),  # її вже шле `alerts._session_events`
+    "shafa.balance": Kind("💳", loud=True),  # ROBOT-014: вікно від'ємного балансу, раз на добу
     # пробний прогін (`robot/rehearse.py`)
     "rehearse.start": Kind("🧪"),
     "rehearse.done": Kind("🧪"),

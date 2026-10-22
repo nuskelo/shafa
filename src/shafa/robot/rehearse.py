@@ -23,7 +23,7 @@ from typing import Any
 
 from shafa import config, events, review, rules
 from shafa.db import Status
-from shafa.robot import browser, publish
+from shafa.robot import balance, browser, publish
 from shafa.robot.form import (
     BrandMissing,
     Driver,
@@ -240,7 +240,7 @@ def _fill(
     post_id: int | None,
 ) -> tuple[list[str] | None, str | None]:
     """Форма з нуля й заповнення; тимчасовий збій — до `ATTEMPTS` спроб, як у публікації.
-    Повертає (нотатки, None) або (None, причина зупинки: login / no_form)."""
+    Повертає (нотатки, None) або (None, причина зупинки: login / no_form / shafa_balance:<сума>)."""
     for attempt in range(1, publish.ATTEMPTS + 1):
         opened = session.open_form()
         if not opened.ok:
@@ -253,7 +253,14 @@ def _fill(
             return None, "no_form"
         driver.reset()
         try:
-            return execute(steps, driver, strict=True), None
+            notes, amount = balance.guarded(session, driver, steps, execute)
+            if amount is not None:  # вікно закрито хрестиком (ROBOT-014)
+                log(balance.NOTE)
+                balance.announce(amount)
+            return notes, None
+        except balance.BalanceStop as error:
+            log(f"Шафа показала вікно від'ємного балансу{error.amount}: закрити не вдалося")
+            return None, f"shafa_balance:{error.amount}"
         except Exception as error:
             if not publish.is_transient(error):
                 raise
@@ -340,9 +347,11 @@ def _loop(report, conn, root, cards, session, make_driver, screens, log, sleep, 
         previous = True
         stop = _one(outcome, conn, root, card, session, driver, screens, log, sleep, rand)
         if stop:  # форми не було — Картку не перевірено
-            report.code = stop
+            code, _, amount = stop.partition(":")
+            report.code = code
             report.reason = {"login": "немає входу на Шафу",
-                             "no_form": "Шафа не показала форму"}[stop]  # fmt: skip
+                             "no_form": "Шафа не показала форму",
+                             "shafa_balance": balance.STOP_TEXT.format(amount=amount)}[code]  # fmt: skip
             return
         report.outcomes.append(outcome)
         if outcome.result == "ok":
