@@ -30,8 +30,8 @@ from shafa.bot.presence import GONE
 from shafa.db import Status, now
 from shafa.fill import STALE_RULES
 from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, variant_size
+from shafa.robot import balance, lock
 from shafa.robot import listings as listings_mod
-from shafa.robot import lock
 from shafa.robot.browser import NO_LOGIN
 from shafa.robot.form import (
     MARKUP_LIMIT,
@@ -820,6 +820,19 @@ class Run:
         self.log(f"Шафа не показала форму «Додати товар»: {opened.detail()}. Екран: {shot}")
         return Stop("no_form", f"Шафа не показала форму ({opened.detail()})")
 
+    def _guarded(self, steps: list, driver: Driver) -> list[str] | Stop:
+        """`execute` з вікном від'ємного балансу (ROBOT-014): закрили хрестиком — нотатка й тривога
+        Власнику (раз на добу); не вдалося чи повернулось — зупинка сесії, Картка лишається Схваленою."""
+        try:
+            notes, amount = balance.guarded(self.session, driver, steps, execute)
+        except balance.BalanceStop as error:
+            self.log(f"Шафа показала вікно від'ємного балансу{error.amount}: закрити не вдалося")
+            return Stop("shafa_balance", error.text)
+        if amount is not None:
+            self.log(balance.NOTE)
+            balance.announce(amount)
+        return notes
+
     def _fill(
         self, report: Report, card: review.Card, driver: Driver, steps: list
     ) -> list[str] | Stop | Failed:
@@ -840,7 +853,7 @@ class Run:
                 return stop  # «немає форми» — Картка не винна, лишається у Схвалених
             driver.reset()  # texts/lists/typed/brand_miss — лише цієї Картки (ROBOT-008)
             try:
-                return execute(steps, driver, strict=True)
+                return self._guarded(steps, driver)
             except Exception as error:
                 if not is_transient(error):
                     raise
