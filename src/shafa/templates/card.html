@@ -156,7 +156,7 @@
     <button name="action" value="not_on_shafa">На Шафі немає → у Схвалені</button>
   </form>
   {% elif card.problem_code == "shafa_declined" %}
-  <p>{{ card.problem_text }}</p>
+  <p>{{ card.problem_text or "" }}</p>
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
     {% if shafa_url %}<a href="{{ shafa_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a>{% endif %}
@@ -183,11 +183,11 @@
     {% if problem_recheck %}<button name="action" value="recheck">Перевірити ще раз</button>{% endif %}
   </form>
   {% endif %}
-  <details><summary>Подробиці для Власника</summary><p>{{ card.problem_text }}</p></details>
+  <details><summary>Подробиці для Власника</summary><p>{{ card.problem_text or "" }}</p></details>
 </div>
 {% elif card.status == "problem" %}
 <div class="problem-box">
-  <p class="problem">{{ card.problem_text }}</p>
+  <p class="problem">{{ card.problem_text or "" }}</p>
   {% if hint %}<p>{{ hint }}</p>{% endif %}
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
@@ -200,7 +200,7 @@
 <div class="duplicate">
   {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
   <div>
-    <p class="note">{{ card.problem_text }}</p>
+    <p class="note">{{ card.problem_text or "" }}</p>
     {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
     {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
   </div>
