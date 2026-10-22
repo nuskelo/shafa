@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from shafa import ai, catalog, rules
+from shafa.catalog import Kind
 from shafa.db import Status
 from shafa.folders import item_folder
 from shafa.review import Card
@@ -46,15 +47,21 @@ def insole_choices(lengths: list[float], choices: list[str], limit: int) -> list
     return [by_number[x] for x in lengths if x in by_number][:limit]
 
 
+LIVE_SIZE_LABEL = "Виберіть розмір"  # блок розміру аксесуара, якого немає у знімку (ROBOT-013)
+
+
 def block_sizes(card: Card, path: str, block: dict, notes: list[str]) -> list[str]:
     """Кнопки блоку розміру аксесуара (CORE-012): літерний з тексту (поправлений Продавчинею — як є),
     розміру немає чи не вгадується — «Інший». Причини — у нотатки."""
     field = card.fields["sizes"]
     if field.edited:
-        picked = [c for s in field.value or [] if (c := catalog.canonical(s, block["choices"]))]
+        picked = [c for s in field.value or [] if (c := ai.block_choice(s, block["choices"]))]
     else:
         found = ai.accessory_sizes(
-            card.post_text or "", card.fields["condition"].value == rules.NEW, path
+            card.post_text or "",
+            card.fields["condition"].value == rules.NEW,
+            path,
+            block["choices"],
         )
         picked = found.value
         if found.reason:
@@ -161,6 +168,13 @@ def _build(card: Card, root: Path | None) -> tuple[list[Step], list[str]]:
         steps.append(Step("sizes", "Розмір", [catalog.shafa_size(s) for s in f["sizes"]]))
     elif block := catalog.size_block(path):
         steps.append(Step("size_block", block["title"], block_sizes(card, path, block, notes)))
+    elif catalog.section_kind(path) is Kind.ACCESSORY:
+        # у знімку блоку немає, а на формі він може бути: читається наживо тим самим правилом
+        def live(block: dict, notes: list[str], card=card, path=path) -> list[str]:
+            notes.append("Розмір: блоку не було в знімку — прочитано з форми")
+            return block_sizes(card, path, block, notes)
+
+        steps.append(Step("size_live", LIVE_SIZE_LABEL, live, required=False))
     steps.append(Step("colors", "Колір", list(f["colors"])))
 
     for name in ORDER:
