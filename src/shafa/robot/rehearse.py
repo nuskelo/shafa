@@ -25,11 +25,13 @@ from shafa import config, events, review, rules
 from shafa.db import Status
 from shafa.robot import balance, browser, publish
 from shafa.robot.form import (
+    PHOTO_RETRY_LOG,
     BrandMissing,
     Driver,
     FieldMissing,
     PhotosShort,
     execute,
+    photo_retries,
     save_markup,
     to_problem,
 )
@@ -268,6 +270,9 @@ def _fill(
                 f"Пост {post_id}: тимчасовий збій, спроба {attempt} з {publish.ATTEMPTS}: "
                 f"{type(error).__name__}: {str(error)[:300]}"
             )
+        finally:
+            for _ in range(photo_retries(driver)):  # ROBOT-015
+                log(PHOTO_RETRY_LOG.format(post_id))
         if attempt < publish.ATTEMPTS:
             sleep(rand(*publish.RETRY_PAUSE))
     raise TimeoutError(publish.SLOW_TEXT)
@@ -404,6 +409,8 @@ def _one(outcome, conn, root, card, session, driver, screens, log, sleep, rand) 
         _error(conn, outcome, card, "robot_brand_missing", publish.BRAND_BROKEN.format(error))
         return None
     except PhotosShort as error:
+        shot = _shot(session, screens, card.post_id, "фото")
+        log(f"Пост {card.post_id}: фото — {error}. Екран: {shot.name}")
         _error(conn, outcome, card, "robot_photos", str(error))
         return None
     except TimeoutError:  # усі спроби невдалі (`_fill`); інші збої йдуть вгору

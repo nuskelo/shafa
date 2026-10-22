@@ -21,13 +21,31 @@ from shafa.robot import browser, guard
 from shafa.robot.form import FieldMissing, PhotosShort, Submitted, outcome
 
 CREATE_PATH = "/api/create"
+UPLOAD_PATH = (
+    "/api/upload"  # ROBOT-015: вибір фото на формі — запит, який рахує `FakeSession.uploads`
+)
 PAGE = """<!doctype html><html lang="uk"><head><meta charset="utf-8"><title>Підставна Шафа</title>
 </head><body><h1>Підставна Шафа — не справжній сайт</h1>
 <img src="https://shafa.ua/static/logo.png" alt="">
 %(modal)s
 <form id="f"><input name="titleUk"><button type="submit">Додати річ</button></form>
+<input type="file" id="ph" multiple><p id="cnt-box"></p>
 <p id="r"></p>
 <script>
+const PHOTOS = "%(photos)s", LATE_MS = %(late)d;
+let picks = 0;
+document.getElementById("ph").addEventListener("change", async (e) => {
+  const n = e.target.files.length;
+  if (!n) return;  // очищення поля — не вибір фото
+  picks += 1;
+  for (let i = 0; i < n; i++) await fetch("/api/upload", {method: "POST", body: "photo"});
+  const draw = (shown) => {
+    document.getElementById("cnt-box").textContent = "(" + shown + " з " + n + " завантажено)";
+  };
+  if (PHOTOS === "photos_late") { draw(0); setTimeout(() => draw(n), LATE_MS); }
+  else if (PHOTOS === "photos_zero" || (PHOTOS === "photos_retry" && picks < 2)) draw(0);
+  else draw(PHOTOS === "photos_part" ? n - 1 : n);
+});
 document.getElementById("f").addEventListener("submit", async (e) => {
   e.preventDefault();
   const body = JSON.stringify({operationName: "WEB_CreateProduct",
@@ -56,13 +74,23 @@ CLOSE_SCRIPT = (
 )
 
 
+LATE_MS = 30000  # `photos_late`: лічильник фото з'являється із запізненням (тести міняють)
+
+
 def page(scenario: str = "ok") -> str:
-    """Сторінка форми для сценарію: з вікном балансу (закривається / не закривається) чи без."""
+    """Сторінка форми для сценарію: з вікном балансу (закривається / не закривається) чи без;
+    лічильник фото — за сценарієм `photos_*` (ROBOT-015)."""
+    fields = {
+        "modal": "",
+        "script": "",
+        "photos": scenario if scenario.startswith("photos_") else "",
+        "late": LATE_MS,
+    }
     if scenario == "balance":
-        return PAGE % {"modal": MODAL, "script": MODAL_SCRIPT % CLOSE_SCRIPT}
+        fields |= {"modal": MODAL, "script": MODAL_SCRIPT % CLOSE_SCRIPT}
     if scenario == "balance_stuck":
-        return PAGE % {"modal": MODAL, "script": MODAL_SCRIPT % ""}
-    return PAGE % {"modal": "", "script": ""}
+        fields |= {"modal": MODAL, "script": MODAL_SCRIPT % ""}
+    return PAGE % fields
 
 
 # Сценарії підставної Шафи (QA-004). Обирається при кожному відкритті форми; `slow` тримається
@@ -75,6 +103,11 @@ SCENARIOS = {
     "slow": "тайм-аут при заповненні (усі спроби)",
     "nofield": "поле форми не знайдено",
     "photos": "форма показує не всі фото",
+    # Лише для справжнього `PageDriver.set_photos` (ROBOT-015): `FakeDriver` їх не відрізняє від `ok`.
+    "photos_late": "лічильник фото з'являється із запізненням",
+    "photos_retry": "перший вибір фото — «0 з N», після повтору — усі",
+    "photos_zero": "лічильник фото завжди «0 з N»",
+    "photos_part": "завантажено не всі фото («N-1 з N»)",
     "uncertain": "клік пройшов, відповіді з id немає",
 }
 SCENARIOS_ENV = "SHAFA_FAKE_SCENARIOS"  # «ok:60,balance:5,…» — вага кожного; порожньо — лише ok
@@ -169,6 +202,9 @@ class _Handler(BaseHTTPRequestHandler):
             write_log(event="paid")
             self._send(200, b"{}", "application/json")
             return
+        if self.path == UPLOAD_PATH:
+            self._send(200, b"{}", "application/json")
+            return
         if self.path != CREATE_PATH:
             self._send(404, b"{}", "application/json")
             return
@@ -230,6 +266,8 @@ class FakeSession(browser.Session):
             self.blocked.append((url.split("?")[0], "не підставна Шафа — заблоковано"))
             route.abort()
             return
+        if request.method == "POST" and url.split("?")[0] == self.base + UPLOAD_PATH:
+            self.uploads += 1
         if request.method == "POST" and url.split("?")[0] == self.base + CREATE_PATH:
             if self._create_ticket is None:  # квиток — як для справжньої Шафи
                 self.blocked.append((url, "мутація WEB_CreateProduct без квитка"))
