@@ -35,12 +35,14 @@ from shafa.robot import listings as listings_mod
 from shafa.robot.browser import NO_LOGIN
 from shafa.robot.form import (
     MARKUP_LIMIT,
+    PHOTO_RETRY_LOG,
     BrandMissing,
     Driver,
     FieldMissing,
     PhotosShort,
     Submitted,
     execute,
+    photo_retries,
     save_markup,
 )
 from shafa.robot.form import (
@@ -897,6 +899,9 @@ class Run:
                     f"Пост {card.post_id}: тимчасовий збій, спроба {attempt} з {ATTEMPTS}: "
                     f"{type(error).__name__}: {str(error)[:300]}. Адреса: {self._url()}"
                 )
+            finally:
+                for _ in range(photo_retries(driver)):  # ROBOT-015
+                    self.log(PHOTO_RETRY_LOG.format(card.post_id))
             if attempt == ATTEMPTS:
                 break
             if (stop := self._pause(report.session_id, RETRY_PAUSE)) is not None:
@@ -970,6 +975,8 @@ class Run:
             self._problem(report, card, ok, "robot_brand_missing", BRAND_BROKEN.format(error))
             return None
         except PhotosShort as error:
+            shot = self._shot(card, "фото")
+            self.log(f"Пост {card.post_id}: фото — {error}. Екран: {shot.name}")
             self._problem(report, card, ok, "robot_photos", str(error))
             return Failed("robot_photos")
         if isinstance(filled, Stop | Failed):
