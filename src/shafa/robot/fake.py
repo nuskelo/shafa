@@ -9,6 +9,7 @@
 import contextlib
 import itertools
 import json
+import os
 import random
 import tempfile
 import threading
@@ -17,12 +18,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from shafa.robot import browser, guard
-from shafa.robot.form import FieldMissing, Submitted, outcome
+from shafa.robot.form import FieldMissing, PhotosShort, Submitted, outcome
 
 CREATE_PATH = "/api/create"
 PAGE = """<!doctype html><html lang="uk"><head><meta charset="utf-8"><title>Підставна Шафа</title>
 </head><body><h1>Підставна Шафа — не справжній сайт</h1>
 <img src="https://shafa.ua/static/logo.png" alt="">
+%(modal)s
 <form id="f"><input name="titleUk"><button type="submit">Додати річ</button></form>
 <p id="r"></p>
 <script>
@@ -34,7 +36,117 @@ document.getElementById("f").addEventListener("submit", async (e) => {
     headers: {"Content-Type": "application/json"}});
   document.getElementById("r").textContent = await r.text();
 });
+%(script)s
 </script></body></html>"""
+
+# QA-004: вікно від'ємного балансу (ROBOT-014). «Підтвердити» — пастка: клік по ній пише `paid`.
+MODAL = """<div role="dialog" id="bal" style="position:fixed;top:40px;left:20%%;width:60%%;
+background:#fff;border:1px solid #888;padding:24px;z-index:9">
+<button id="x" style="position:absolute;top:8px;right:8px">×</button>
+<h2>У вас від'ємний баланс</h2>
+<p>Очікується списання 193.15 грн, інакше деактивація акаунта.</p>
+<button id="pay">Підтвердити</button></div>
+<p>Ваш від'ємний баланс −193.15 грн</p>"""
+MODAL_SCRIPT = """
+document.getElementById("pay").addEventListener("click", () => fetch("/api/pay", {method: "POST"}));
+%s"""
+CLOSE_SCRIPT = (
+    'document.getElementById("x").addEventListener("click", () => '
+    'document.getElementById("bal").remove());'
+)
+
+
+def page(scenario: str = "ok") -> str:
+    """Сторінка форми для сценарію: з вікном балансу (закривається / не закривається) чи без."""
+    if scenario == "balance":
+        return PAGE % {"modal": MODAL, "script": MODAL_SCRIPT % CLOSE_SCRIPT}
+    if scenario == "balance_stuck":
+        return PAGE % {"modal": MODAL, "script": MODAL_SCRIPT % ""}
+    return PAGE % {"modal": "", "script": ""}
+
+
+# Сценарії підставної Шафи (QA-004). Обирається при кожному відкритті форми; `slow` тримається
+# на всі спроби Картки (ROBOT-009), решта — разова.
+SCENARIOS = {
+    "ok": "усе гаразд",
+    "balance": "вікно від'ємного балансу, закривається хрестиком",
+    "balance_stuck": "вікно від'ємного балансу, не закривається",
+    "login": "Шафа веде на вхід",
+    "slow": "тайм-аут при заповненні (усі спроби)",
+    "nofield": "поле форми не знайдено",
+    "photos": "форма показує не всі фото",
+    "uncertain": "клік пройшов, відповіді з id немає",
+}
+SCENARIOS_ENV = "SHAFA_FAKE_SCENARIOS"  # «ok:60,balance:5,…» — вага кожного; порожньо — лише ok
+SEED_ENV = "SHAFA_FAKE_SEED"
+SEQUENCE_ENV = (
+    "SHAFA_FAKE_SEQUENCE"  # «ok,nofield,ok» — перші відкриття форми по черзі, далі за вагами
+)
+LOG_ENV = "SHAFA_FAKE_LOG"  # файл (JSON-рядки): сценарії, створення, спроби «заплатити»
+SLOW_OPENS = 3  # скільки відкриттів форми підряд `slow` (= ATTEMPTS у publish.py)
+
+
+class Scenarios:
+    """Черга сценаріїв: випадковий вибір із вагами й фіксованим сідом (відтворюється)."""
+
+    def __init__(
+        self,
+        weights: dict[str, int] | None = None,
+        seed: int = 0,
+        sequence: list[str] | None = None,
+    ) -> None:
+        weights = weights or {"ok": 1}
+        self.sequence = list(sequence or [])
+        if bad := sorted((set(weights) | set(self.sequence)) - set(SCENARIOS)):
+            raise ValueError(f"невідомий сценарій підставної Шафи: {', '.join(bad)}")
+        self.names, self.weights = list(weights), list(weights.values())
+        self.random = random.Random(seed)
+        self.slow_left = 0
+
+    @classmethod
+    def from_env(cls) -> "Scenarios":
+        weights: dict[str, int] = {}
+        for part in (os.environ.get(SCENARIOS_ENV) or "").split(","):
+            if part.strip():
+                name, _, weight = part.partition(":")
+                weights[name.strip()] = int(weight or 1)
+        sequence = [x.strip() for x in (os.environ.get(SEQUENCE_ENV) or "").split(",") if x.strip()]
+        scenarios = cls(weights, int(os.environ.get(SEED_ENV) or 0) + launches(), sequence)
+        write_log(event="launch")
+        return scenarios
+
+    def next(self) -> str:
+        if self.slow_left:
+            self.slow_left -= 1
+            return "slow"
+        if self.sequence:
+            name = self.sequence.pop(0)
+        else:
+            name = self.random.choices(self.names, self.weights)[0]
+        if name == "slow":
+            self.slow_left = SLOW_OPENS - 1
+        return name
+
+
+def launches() -> int:
+    """Скільки разів підставну Шафу вже запускали (за журналом): кожен запуск робота — свій
+    порядок сценаріїв, але той самий сід дає ту саму послідовність запусків."""
+    path = os.environ.get(LOG_ENV)
+    if not path:
+        return 0
+    try:
+        with open(path, encoding="utf-8") as log:
+            return sum('"event": "launch"' in line for line in log)
+    except OSError:
+        return 0
+
+
+def write_log(**event: Any) -> None:
+    """Рядок у `SHAFA_FAKE_LOG` (якщо задано): «мавпа» за ним рахує створення й сценарії."""
+    path = os.environ.get(LOG_ENV)
+    if path:
+        with contextlib.suppress(OSError), open(path, "a", encoding="utf-8") as out:
+            out.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
 def allowed(url: str, base: str) -> bool:
@@ -47,11 +159,16 @@ class _Handler(BaseHTTPRequestHandler):
     counter = itertools.count(900_000_000 + int(time.time() * 10) % 99_000_000)
 
     def do_GET(self) -> None:
-        self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        scenario = self.path.partition("?s=")[2] or "ok"
+        self._send(200, page(scenario).encode("utf-8"), "text/html; charset=utf-8")
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)
         self.rfile.read(length)
+        if self.path == "/api/pay":  # робот ніколи не платить: це пастка для «мавпи»
+            write_log(event="paid")
+            self._send(200, b"{}", "application/json")
+            return
         if self.path != CREATE_PATH:
             self._send(404, b"{}", "application/json")
             return
@@ -86,9 +203,19 @@ class Server:
 class FakeSession(browser.Session):
     """Сесія робота проти підставної Шафи: ті самі квитки на «Додати річ», інша мережа."""
 
-    def __init__(self, playwright: Any, base: str, headless: bool = True) -> None:
+    scenario = "ok"  # сценарій відкритої форми (QA-004)
+    scenarios: Scenarios | None = None
+
+    def __init__(
+        self,
+        playwright: Any,
+        base: str,
+        headless: bool = True,
+        scenarios: Scenarios | None = None,
+    ) -> None:
         self._setup(allow_upload=True, publish=True)
         self.base = base
+        self.scenarios = scenarios or Scenarios.from_env()
         self.profile = tempfile.TemporaryDirectory(prefix="fake-shafa-")
         self.context = playwright.chromium.launch_persistent_context(
             self.profile.name, channel="chrome", headless=headless
@@ -108,12 +235,17 @@ class FakeSession(browser.Session):
                 self.blocked.append((url, "мутація WEB_CreateProduct без квитка"))
                 route.abort()
                 return
+            write_log(event="create", item=self._create_ticket)
             self._create_ticket = None
             self.creates += 1
         route.continue_()
 
     def open_form(self) -> browser.Opened:
-        self.page.goto(self.base + "/new", wait_until="load")
+        self.scenario = self.scenarios.next() if self.scenarios else "ok"
+        write_log(event="open", scenario=self.scenario)
+        if self.scenario == "login":
+            return browser.Opened(browser.NO_LOGIN, self.base + "/login")
+        self.page.goto(f"{self.base}/new?s={self.scenario}", wait_until="load")
         return browser.Opened(browser.FORM, self.page.url)
 
     def leave_result_page(self) -> None:
@@ -147,6 +279,8 @@ class FakeDriver:
 
     def set_photos(self, paths: list[str]) -> int:
         self._step()
+        if self.session.scenario == "photos":
+            raise PhotosShort(f"Шафа показує 1 фото з {len(paths)}")
         return len(paths)
 
     def check_own_photos(self) -> bool:
@@ -154,6 +288,10 @@ class FakeDriver:
 
     def fill(self, name: str, value: str, label: str) -> None:
         self._step()
+        if self.session.scenario == "nofield":
+            raise FieldMissing(label or name)
+        if self.session.scenario == "slow":
+            raise TimeoutError("Timeout 30000ms exceeded (підставна Шафа: повільна сторінка)")
 
     def choose_category(self, parts: list[str], slug: str) -> None:
         self._step()
@@ -189,6 +327,8 @@ class FakeDriver:
             body = info.value.json()
         except Exception as error:  # noqa: BLE001 — як у справжнього драйвера
             failure = f"{type(error).__name__}: {str(error)[:200]}"
+        if self.session.scenario == "uncertain":  # Шафа створила, але відповідь не дійшла
+            body, failure = None, "TimeoutError: відповідь createProduct не дійшла"
         return outcome(self.session.creates > creates, False, body, failure)
 
 
