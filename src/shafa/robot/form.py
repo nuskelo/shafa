@@ -23,6 +23,9 @@ from shafa.robot.plan import PlanError, Step, plan
 
 MAX_CARDS = 3  # більше за один прогін не можна (тікет)
 UPLOAD_TIMEOUT = 120  # с на всі фото
+PHOTO_WAIT = 20  # с: скільки чекаємо, поки лічильник «N з M завантажено» дійде до M
+PHOTO_EXTRA = 20  # с: ще стільки, якщо лічильник усе ще менший (ROBOT-015)
+PHOTO_RETRY_LOG = "Пост {}: фото — повторна спроба"  # рядок журналу робота на кожен повтор
 
 
 SUBMIT_TIMEOUT = 60  # с на відповідь Шафи після «Додати річ»; без певної відповіді — «Перевірте»
@@ -63,6 +66,12 @@ class BrandMiss:
             f" … ще {len(self.options) - SHOWN_OPTIONS}" if len(self.options) > len(shown) else ""
         )
         return f"бренд {self.name!r}; варіанти ({len(self.options)}): {shown!r}{more}"
+
+
+def photo_retries(driver: object) -> int:
+    """Скільки разів драйвер повторював вибір фото на цій Картці (лише `PageDriver`; ROBOT-015)."""
+    count = getattr(driver, "photo_retries", 0)
+    return count if isinstance(count, int) else 0
 
 
 class PhotosShort(Exception):
@@ -614,6 +623,7 @@ class PageDriver:
         self.texts: dict[str, tuple[str, str]] = {}  # name → (підпис, значення): звірка в кінці
         self.lists: dict[str, list[str]] = {}  # підпис списку → наші значення: звірка в кінці
         self.brand_miss: BrandMiss | None = None
+        self.photo_retries = 0  # повторів вибору фото на цій Картці (ROBOT-015)
 
     def reset(self) -> None:
         """Початок нової Картки: звірка в кінці — лише з її власним (ROBOT-008).
@@ -625,6 +635,7 @@ class PageDriver:
         self.texts.clear()
         self.lists.clear()
         self.brand_miss = None
+        self.photo_retries = 0
 
     def _find(self, label: str) -> str | None:
         self._marks += 1
@@ -642,7 +653,12 @@ class PageDriver:
         return self.page.locator(f"[data-robot-block='{mark}']")
 
     def set_photos(self, paths: list[str]) -> int:
-        """Завантажити фото у форму; повертає, скільки форма показує завантаженими."""
+        """Завантажити фото у форму; повертає, скільки форма показує завантаженими.
+
+        Лічильник менший за кількість — чекаємо ще `PHOTO_EXTRA` с. Усе ще «0 з M» (форма без жодного
+        фото, задвоїти нічого) — один повтор вибору файлів у тому ж полі (ROBOT-015). Частково
+        завантажене (2 з 3) не повторюємо: результат той самий, що й раніше.
+        """
         inputs = self.page.locator("input[type=file]")
         if not inputs.count():
             raise FieldMissing("Фото")
@@ -653,15 +669,30 @@ class PageDriver:
             if time.monotonic() > deadline:
                 raise FieldMissing("Фото (не завантажились)")
             self.page.wait_for_timeout(500)
+        shown = self._photo_counter(len(paths))
+        if shown == 0 and paths:
+            self.photo_retries += 1
+            inputs.first.set_input_files([])  # ті самі файли вдруге Chrome за вибір не вважає
+            inputs.first.set_input_files(paths)
+            shown = self._photo_counter(len(paths))
+        browser.pause(2.0, 3.0)
+        return shown
+
+    def _photo_counter(self, total: int) -> int:
+        """Скільки фото показує лічильник «(N з M завантажено)»: до `PHOTO_WAIT` с, а якщо ще менше
+        за `total` — до `PHOTO_EXTRA` с додатково. Лічильника на сторінці немає — вважаємо всі."""
         counter = self.page.get_by_text(re.compile(r"\(\d+ з \d+ завантажено\)")).first
         shown = 0
-        for _ in range(40):  # останнє фото форма показує не одразу — до 20 с
-            match = re.search(r"\((\d+) з", counter.inner_text()) if counter.count() else None
-            shown = int(match.group(1)) if match else len(paths)
-            if shown >= len(paths):
-                break
-            self.page.wait_for_timeout(500)
-        browser.pause(2.0, 3.0)
+        for seconds in (PHOTO_WAIT, PHOTO_EXTRA):
+            deadline = time.monotonic() + seconds
+            while True:
+                match = re.search(r"\((\d+) з", counter.inner_text()) if counter.count() else None
+                shown = int(match.group(1)) if match else total
+                if shown >= total:
+                    return shown
+                if time.monotonic() >= deadline:
+                    break
+                self.page.wait_for_timeout(500)
         return shown
 
     def check_own_photos(self) -> bool:
