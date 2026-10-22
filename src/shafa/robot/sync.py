@@ -5,6 +5,7 @@
 """
 
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -109,7 +110,7 @@ def size_block_entry(heading: str, buttons: list[str]) -> dict | None:
     choices = [lang.ukrainian(b.strip()) for b in buttons if 0 < len(b.strip()) <= MAX_BUTTON]
     if not choices:
         return None
-    title = lang.ukrainian(heading.replace("*", "").strip())
+    title = lang.ukrainian(" ".join(re.sub(r"\([^)]*\)", "", heading.replace("*", "")).split()))
     return {"title": title, "required": "*" in heading, "choices": list(dict.fromkeys(choices))}
 
 
@@ -172,8 +173,24 @@ def _from_batch(response: Any, op: str) -> dict:
     return next(b for i, b in zip(items, bodies, strict=False) if i.get("operationName") == op)
 
 
-def read_size_block(page: Any) -> dict | None:  # pragma: no cover — живе читання форми
-    """Блок «Виберіть размер *» відкритої форми: підпис і кнопки (лише читання, нічого не тиснемо)."""
+SIZE_WAIT = 6  # с чекаємо кнопки блоку розміру: форма домальовується після розділу (ROBOT-013)
+SIZE_STEP = 500  # мс між спробами
+
+
+def read_size_block(page: Any, wait: float = SIZE_WAIT) -> dict | None:
+    """Блок «Виберіть размер *» відкритої форми: підпис і кнопки (лише читання, нічого не тиснемо).
+
+    Кнопки з'являються не одразу — чекаємо до `wait` с, а не фіксовану паузу; той самий код для
+    sync і для публікації (ROBOT-013). Немає блоку чи кнопок — None.
+    """
+    for _ in range(max(1, int(wait * 1000 / SIZE_STEP) + 1)):
+        if block := _read_size_block_once(page):
+            return block
+        page.wait_for_timeout(SIZE_STEP)
+    return None
+
+
+def _read_size_block_once(page: Any) -> dict | None:
     from shafa.robot import form
 
     labels = lang.variants(SIZE_BLOCK_LABEL)

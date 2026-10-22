@@ -115,6 +115,7 @@ class Driver(Protocol):
     def reset(self) -> None: ...  # новий товар — стан попереднього не переходить (ROBOT-008)
     def brand(self, name: str) -> bool: ...
     def untouched(self, labels: list[str]) -> list[str]: ...
+    def size_block(self) -> dict | None: ...  # блок розміру аксесуара на формі (ROBOT-013)
     def verify(self) -> None: ...
     def submit(self) -> Submitted: ...
 
@@ -163,10 +164,26 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
             notes += driver.pick(step.label, step.value) or []
         elif step.kind == "untouched":
             notes += driver.untouched(step.value)
+        elif step.kind == "size_live":
+            notes += live_size(driver, step)
         else:
             raise ValueError(f"Невідомий крок {step.kind}")
     driver.verify()  # Шафа могла переписати вже заповнене — перед публікацією ще раз звіряємо
     return notes
+
+
+def live_size(driver: Driver, step: Step) -> list[str]:
+    """Блок розміру аксесуара, якого немає у знімку (ROBOT-013): є на формі — заповнюємо тим самим
+    правилом, що й блок зі знімка; немає — нічого. Не вдалося вибрати — `FieldMissing` (до кліку)."""
+    block = driver.size_block()
+    if block is None:
+        return []
+    notes: list[str] = []
+    try:
+        values = step.value(block, notes)
+    except PlanError as error:
+        raise FieldMissing(block["title"], str(error)) from None
+    return notes + (driver.pick(block["title"], values) or [])
 
 
 def optional(driver: Driver, step: Step) -> list[str]:
@@ -713,6 +730,11 @@ class PageDriver:
         if widget.listed:
             self.lists[label] = widget.chips()  # pick_values уже звірив: чипи — рівно наші
         return notes
+
+    def size_block(self) -> dict | None:
+        from shafa.robot import sync  # sync вантажить form лише всередині функцій
+
+        return sync.read_size_block(self.page)
 
     def untouched(self, labels: list[str]) -> list[str]:
         """Поля, яких робот не заповнює: не чіпаємо, лише пишемо, що Шафа поставила сама."""

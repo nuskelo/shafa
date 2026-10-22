@@ -54,6 +54,9 @@ class FakeDriver:
         self._call("untouched", *labels)
         return []
 
+    def size_block(self):
+        return None  # ROBOT-013: на фіктивній формі блоку розміру немає
+
     def verify(self):
         pass
 

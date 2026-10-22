@@ -358,16 +358,27 @@ def _check_letter_sizes(sizes: list[str], allowed: list[str]) -> Field:
     return Field("sizes", [by_upper[p] for p in shown])
 
 
-def accessory_sizes(text: str, new: bool, path: str) -> Field:
+def size_key(button: str) -> str:
+    """Літерна частина кнопки блоку розміру: «M/57» (шапки) → «M», «S» → «S» (ROBOT-013)."""
+    return button.strip().upper().split("/")[0].strip()
+
+
+def block_choice(value: str, choices: list[str]) -> str | None:
+    """Кнопка блоку розміру, що відповідає розміру («M» → «M/57»); немає — None."""
+    return next((c for c in choices if size_key(c) == size_key(value)), None)
+
+
+def accessory_sizes(text: str, new: bool, path: str, choices: list[str] | None = None) -> Field:
     """Розмір аксесуара з окремим блоком «Виберіть размер» (CORE-012): літерний з тексту → кнопки.
 
     Вживане — до двох («S/M» → S, M); нове — один (перший, жовте); понад два чи розмір поза
     кнопками — не вгадуємо: порожньо (робот поставить «Інший»), жовте. Розміру в тексті немає —
-    порожньо без жовтого.
+    порожньо без жовтого. `choices` — кнопки, прочитані з живої форми (ROBOT-013), коли у знімку
+    блоку немає.
     """
     wanted = rules.letter_sizes(text)
-    by_upper = {c.upper(): c for c in catalog.size_block(path)["choices"]}
-    known = [by_upper[w] for w in wanted if w in by_upper]
+    block = choices or catalog.size_block(path)["choices"]
+    known = [c for w in wanted if (c := block_choice(w, block))]
     if len(wanted) > 2:
         return Field("sizes", [], True, "більше двох розмірів")
     if wanted and len(known) < len(wanted):
