@@ -86,7 +86,7 @@ def _colors(node: dict) -> tuple[str, ...]:
     return tuple(n for n in names if isinstance(n, str) and n)
 
 
-def _photo(node: dict) -> str | None:
+def photo_of(node: dict) -> str | None:
     """Перше фото товару, якщо кабінет його віддав (лише http(s))."""
     for key in ("thumbnail", "photo", "image", "mainPhoto", "mainImage", "photos", "images"):
         value = node.get(key)
@@ -115,7 +115,7 @@ def parse_feed(response: dict) -> tuple[list[Listing], bool, int]:
                 url=SITE + (node.get("url") or f"/uk/item/{node['id']}-shafa"),
                 colors=_colors(node),
                 price=_price(node.get("price")),
-                photo=_photo(node),
+                photo=photo_of(node),
             )
         )
     info = products["pageInfo"]
@@ -371,6 +371,15 @@ def add(conn: sqlite3.Connection, listing: Listing, now: datetime | None = None)
         conn.execute(_INSERT, _row(listing, (now or _now()).isoformat(timespec="seconds")))
 
 
+def set_photo(conn: sqlite3.Connection, listing_id: int, url: str) -> None:
+    """DUP-002: адреса головного фото для рядка знімка, який її не мав (наступного разу не шукаємо)."""
+    with conn:
+        conn.execute(
+            "UPDATE my_listings SET photo = ? WHERE id = ? AND (photo IS NULL OR photo = '')",
+            (url, listing_id),
+        )
+
+
 def reset(conn: sqlite3.Connection) -> None:
     """«Перечитати зараз»: знімок застарів — робот прочитає кабінет на наступному старті."""
     with conn:
@@ -391,6 +400,24 @@ def fetch_photo(session: browser.Session, url: str) -> bytes | None:
         return None
     finally:
         page.close()
+
+
+def page_photo(session: browser.Session, url: str) -> str | None:
+    """DUP-002: адреса головного фото зі сторінки оголошення (`og:image`). Окрема вкладка крізь
+    той самий захист, лише читання. Не вийшло — None (Judge скаже «немає фото», як і раніше)."""
+    page = session.context.new_page()
+    try:
+        response = page.goto(url, wait_until="domcontentloaded")
+        if response is None or not response.ok:
+            return None
+        content = page.get_attribute('meta[property="og:image"]', "content", timeout=5000)
+    except Exception:  # noqa: BLE001 — фото лише допомагає ШІ; без нього Проблема та сама
+        return None
+    finally:
+        page.close()
+    if isinstance(content, str) and content.startswith(("https://", "http://")):
+        return content
+    return None
 
 
 # --- Живе читання (у тестах не викликається) ---
