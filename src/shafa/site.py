@@ -741,11 +741,22 @@ class Worker:
             )
         self._no_sold_route = False  # сайт міг навчитися — пробуємо знову
         self._night_event(night, gone, limit)
+        self._settle_copies()
         self.log(
             f"Сайт: нічна перевірка — перевірено {night.checked}, зникло {night.gone}, "
             f"невідомо {night.unknown}"
         )
         self._tell_unknown()
+
+    def _settle_copies(self) -> None:
+        """BOT-014: добрати копії перевірки, яких не вдалося видалити (429 наприкінці ночі)."""
+        settle = getattr(self.presence, "settle", None)
+        if settle is None:
+            return
+        try:
+            settle()
+        except Exception as error:  # noqa: BLE001 — добирання не зупиняє сайт
+            self.log(f"Сайт: добирання копій перевірки не вдалось ({type(error).__name__})")
 
     def _night_event(self, night: Night, held: int, limit: int) -> None:
         """BOT-013: підсумок ночі одним рядком; запобіжник — окремо (Власнику вже пише `notify`)."""
@@ -1123,6 +1134,11 @@ def start(
     stop = threading.Event()
 
     def body() -> None:
+        if presence is not None:  # BOT-014: залишки з минулого запуску
+            try:
+                presence.settle(30.0)
+            except Exception as error:  # noqa: BLE001
+                log(f"Сайт: добирання копій перевірки не вдалось ({type(error).__name__})")
         conn = db.connect(db_path)
         worker = Worker(conn, root, notify, log=log, presence=presence)
         try:

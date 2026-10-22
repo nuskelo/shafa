@@ -180,7 +180,11 @@ def start_site(db_path: Path, root: Path, token: str, settings: Settings) -> thr
     if site.key() is None:
         print(f"Сайт: немає {site.KEY} — інтеграція вимкнена")
     chat = presence.service_chat(settings.owner_chat, settings.seller_chat)
-    checker = None if chat is None else presence.Presence(tg, settings.channel_id, chat)
+    checker = (
+        None
+        if chat is None
+        else presence.Presence(tg, settings.channel_id, chat, data_dir=config.data_dir())
+    )
     return site.start(
         db_path, root, site.Notify(say(settings.owner_chat), say(settings.seller_chat)),
         presence=checker,
