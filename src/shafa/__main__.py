@@ -322,6 +322,7 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
                     lambda s: listings.load(s, log=log), form.screens_dir(), held, log=log,
                     load_declined=lambda s: listings.load_declined(s, log=log),
                     fetch_photo=lambda url: listings.fetch_photo(session, url),
+                    page_photo=lambda url: listings.page_photo(session, url),
                     photos_dir=duplicates_dir(args.db), presence=channel_presence(root, log),
                     judge=duplicate_judge(conn),
                 ).start(limit, day_limit)  # fmt: skip

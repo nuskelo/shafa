@@ -18,7 +18,7 @@ from typing import Any, Protocol
 
 from shafa import config, review
 from shafa.db import Status, now
-from shafa.robot import browser, guard, lang
+from shafa.robot import browser, guard, lang, listings
 from shafa.robot.plan import PlanError, Step, plan
 
 MAX_CARDS = 3  # більше за один прогін не можна (тікет)
@@ -82,11 +82,13 @@ class Submitted:
     product_id: int | None = None
     errors: list[str] = field(default_factory=list)
     failure: str | None = None
+    photo: str | None = None  # DUP-002: адреса фото з відповіді `createProduct`, якщо вона є
 
 
 def outcome(sent: bool, blocked: bool, body: object, failure: str | None = None) -> Submitted:
     """Відповідь `WEB_CreateProduct` → результат. Усе незрозуміле — без `product_id`."""
     created = None
+    photo = None
     errors: list[str] = []
     if isinstance(body, dict):
         result = (body.get("data") or {}).get("createProduct") or {}
@@ -94,12 +96,13 @@ def outcome(sent: bool, blocked: bool, body: object, failure: str | None = None)
             product = result.get("createdProduct") or {}
             raw_id = product.get("id") if isinstance(product, dict) else None
             created = int(raw_id) if str(raw_id or "").isdigit() else None
+            photo = listings.photo_of(product) if isinstance(product, dict) else None
             for error in result.get("errors") or []:
                 messages = [m.get("message", "") for m in error.get("messages") or []]
                 errors.append(f"{error.get('field') or 'форма'}: {'; '.join(messages)}")
         if not created and body.get("errors"):
             failure = failure or "; ".join(str(e.get("message", e)) for e in body["errors"])
-    return Submitted(sent, blocked, created, errors, failure)
+    return Submitted(sent, blocked, created, errors, failure, photo)
 
 
 class Driver(Protocol):

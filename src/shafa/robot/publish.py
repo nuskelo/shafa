@@ -305,7 +305,9 @@ def card_duplicate(
     )  # fmt: skip
 
 
-def card_listing(card: review.Card, product_id: int, url: str) -> listings_mod.Listing:
+def card_listing(
+    card: review.Card, product_id: int, url: str, photo: str | None = None
+) -> listings_mod.Listing:
     """Щойно опублікована Картка — так, як її покаже кабінет «Мої речі» (для знімка)."""
     f = {name: view.value for name, view in card.fields.items()}
     brand = catalog.canonical(f["brand"], catalog.brands()) if f["brand"] else None
@@ -318,6 +320,7 @@ def card_listing(card: review.Card, product_id: int, url: str) -> listings_mod.L
         url=url,
         colors=tuple(f["colors"] or []),
         price=f["price"],
+        photo=photo,
     )
 
 
@@ -457,6 +460,7 @@ class Run:
         held: lock.Held,
         log: Callable[[str], None] = print,
         fetch_photo: Callable[[str], bytes | None] = lambda url: None,
+        page_photo: Callable[[str], str | None] = lambda url: None,
         photos_dir: Path | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
@@ -473,6 +477,7 @@ class Run:
         self.make_driver, self.load_listings = make_driver, load_listings
         self.screens, self.held, self.log = screens, held, log
         self.fetch_photo, self.photos_dir = fetch_photo, photos_dir
+        self.page_photo = page_photo  # DUP-002: головне фото зі сторінки оголошення (адреса)
         self.sleep, self.clock, self.rand, self.today = sleep, clock, rand, today
 
     def start(self, limit: int, day_limit: int) -> Report:
@@ -646,6 +651,8 @@ class Run:
         if self.photos_dir is None and self.judge is None:
             return None
         body = self.fetch_photo(found.photo) if found.photo else None
+        if body is None:
+            body = self._own_photo(found)
         if self.photos_dir is not None:
             target = self.photos_dir / f"{card.id}.jpg"
             target.unlink(missing_ok=True)  # старе фото іншого схожого — геть
@@ -653,6 +660,35 @@ class Run:
                 self.photos_dir.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(body)
         return body
+
+    def _own_photo(self, found: listings_mod.Listing) -> bytes | None:
+        """DUP-002: у знімку немає фото оголошення (опубліковане роботом — кабінет його ще не
+        віддав). Спершу фото нашої Картки з її папки (є, поки PHOTO-001 не прибрав), інакше
+        головне фото зі сторінки оголошення; його адресу запам'ятовуємо в `my_listings`."""
+        row = self.conn.execute(
+            "SELECT i.id, i.folder_name FROM items i WHERE i.shafa_id = ?", (found.id,)
+        ).fetchone()
+        if row is not None:
+            first = self.conn.execute(
+                "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            if first is not None:
+                for folder in (
+                    item_folder(self.root, row["folder_name"]),
+                    self.root / PUBLISHED_DIR / base_name(row["folder_name"]),
+                ):
+                    path = folder / first["file_name"]
+                    if path.is_file():
+                        try:
+                            return path.read_bytes()
+                        except OSError:
+                            break
+        url = self.page_photo(found.url)
+        if not url:
+            return None
+        listings_mod.set_photo(self.conn, found.id, url)
+        return self.fetch_photo(url)
 
     def _first_photo(self, card: review.Card) -> Path | None:
         """Перше фото Картки — те, що піде на Шафу головним."""
@@ -1009,7 +1045,9 @@ class Run:
                 + f" · {events.clean_url(url)}",
                 data={"post": card.post_id},
             )
-            listing = card_listing(card, result.product_id, url)  # дубль не пройде до перечитування
+            listing = card_listing(
+                card, result.product_id, url, result.photo
+            )  # дубль не пройде до перечитування
             listings.append(listing)
             listings_mod.add(self.conn, listing)
             self._shot(card, "опубліковано")
