@@ -111,6 +111,24 @@ def their_facts(found: Listing) -> str:
     return "Уже опубліковане оголошення на Шафі:\n" + "\n".join(lines)
 
 
+def other_post(conn: sqlite3.Connection, card: review.Card, found: Listing) -> int | None:
+    """DUP-002: номер поста, з якого опубліковано знайдене оголошення, якщо це наша Картка з
+    ІНШОГО поста. Чуже оголошення, невідомий пост і той самий пост — None."""
+    row = conn.execute(
+        "SELECT post_id FROM items WHERE shafa_id = ? AND id != ?", (found.id, card.id)
+    ).fetchone()
+    post = row[0] if row is not None else None
+    return post if post is not None and post != card.post_id else None
+
+
+def post_fact(card: review.Card, post: int) -> str:
+    ours = f" (новий товар — з поста {card.post_id})" if card.post_id is not None else ""
+    return (
+        f"Факт: знайдене оголошення опубліковане нашою програмою з іншого поста {post}{ours}. "
+        "Продавчиня зазвичай робить один пост на одну пару."
+    )
+
+
 def _image(photo: PreparedPhoto) -> dict[str, Any]:
     return {
         "type": "image",
@@ -123,15 +141,23 @@ def _image(photo: PreparedPhoto) -> dict[str, Any]:
 
 
 def build_request(
-    card: review.Card, found: Listing, ours: PreparedPhoto, theirs: PreparedPhoto
+    card: review.Card,
+    found: Listing,
+    ours: PreparedPhoto,
+    theirs: PreparedPhoto,
+    post: int | None = None,
 ) -> dict[str, Any]:
-    """Параметри `client.messages.create`: Фото 1 — наше, Фото 2 — знайдене, далі тексти."""
+    """Параметри `client.messages.create`: Фото 1 — наше, Фото 2 — знайдене, далі тексти
+    (і факт про інший пост, якщо `post` задано)."""
+    facts = f"{our_facts(card)}\n\n{their_facts(found)}"
+    if post is not None:
+        facts += f"\n\n{post_fact(card, post)}"
     content = [
         {"type": "text", "text": "Фото 1 — новий товар:"},
         _image(ours),
         {"type": "text", "text": "Фото 2 — уже опубліковане оголошення:"},
         _image(theirs),
-        {"type": "text", "text": f"{our_facts(card)}\n\n{their_facts(found)}"},
+        {"type": "text", "text": facts},
     ]
     return {
         "model": ai.MODEL,
@@ -211,7 +237,7 @@ class Judge:
             theirs = photos.prepare_bytes(their_photo, "shafa.jpg")
         except (OSError, UnidentifiedImageError):
             return unasked("фото не читається")
-        request = build_request(card, found, ours, theirs)
+        request = build_request(card, found, ours, theirs, other_post(self.conn, card, found))
         try:
             left, cost = self.budget_left(), estimate(request, ours, theirs).cost_micro_usd
         except Exception as error:  # noqa: BLE001 — не вміємо порахувати гроші: не питаємо
