@@ -424,7 +424,9 @@ def channel_presence(root: Path, log):
     chat = presence.service_chat(settings.owner_chat, settings.seller_chat)
     if chat is None:
         return None
-    return presence.Presence(Telegram(token), settings.channel_id, chat, log=log).check
+    return presence.Presence(
+        Telegram(token), settings.channel_id, chat, log=log, data_dir=config.data_dir()
+    ).check
 
 
 def duplicates_dir(db_path: Path) -> Path:

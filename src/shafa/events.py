@@ -65,6 +65,7 @@ KINDS = {
     "site.failed": Kind("⚠️", loud=True, skip=True),  # Власнику вже пише `Notify.owner`
     "site.fuse": Kind("⛔", loud=True, skip=True),  # так само: `Notify.owner`
     "site.night": Kind("🌙"),
+    "presence.leftover": Kind("🧹"),
     "site.sold": Kind("💰"),
     "site.morning": Kind("☀️"),
     # фото, програма, самоперевірка (`borh.py`, `app.py`, `health.py`)
