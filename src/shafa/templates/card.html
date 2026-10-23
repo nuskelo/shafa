@@ -98,7 +98,11 @@
 <header class="top top-card">
   <div class="top-in">
     <a class="back-link" href="{{ nav.back }}"><span aria-hidden="true">←</span> {{ nav.title }}</a>
-    {% if nav.index %}<span class="place">{{ nav.index }} з {{ nav.total }}</span>{% endif %}
+    {% if nav.index %}<span class="place">{{ nav.index }} з {{ nav.total }}</span>
+    <span class="step">
+      {% if nav.prev_url %}<a class="step-link" rel="prev" href="{{ nav.prev_url }}"><span aria-hidden="true">←</span> Назад</a>{% else %}<span class="step-link off" aria-disabled="true"><span aria-hidden="true">←</span> Назад</span>{% endif %}
+      {% if nav.next_url %}<a class="step-link" rel="next" href="{{ nav.next_url }}">Далі <span aria-hidden="true">→</span></a>{% else %}<span class="step-link off" aria-disabled="true">Далі <span aria-hidden="true">→</span></span>{% endif %}
+    </span>{% endif %}
     <div class="spacer"></div>
     <div id="robot" class="mini-wrap" data-panel="/robot/panel?mini=1&amp;back={{ back | urlencode }}">
 {% include "panel_mini.html" %}

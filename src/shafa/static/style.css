@@ -240,6 +240,9 @@ a.tilecard:hover { border-color: var(--accent); color: var(--text); }
 .top-card .top-in { min-height: 56px; gap: 4px 16px; }
 .back-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; font-weight: 600; text-decoration: none; }
 .place { color: var(--muted); }
+.step { display: inline-flex; gap: 4px; }
+.step-link { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; padding: 0 8px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.step-link.off { color: var(--muted); opacity: .5; }
 .spacer { flex: 1; }
 .mini-wrap { min-width: 0; }
 .status.mini { padding: 0; border: 0; background: none; gap: 4px 14px; font-size: 0.82rem; color: #3d3d39; }
