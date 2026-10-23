@@ -1061,6 +1061,8 @@ class App:
             at = ids.index(card.id)
             nav.index, nav.total = at + 1, len(ids)
             following = ids[at + 1 : at + 2]
+            if at:
+                nav.prev_url = item_url(ids[at - 1], from_)
         else:  # Картка вже не підпадає під фільтр (напр., підтвердила останнє жовте) — далі перша
             following = ids[:1]
         if following:
@@ -1391,6 +1393,7 @@ class Nav:
     index: int | None = None
     total: int | None = None
     next_url: str | None = None
+    prev_url: str | None = None
 
 
 MAIN_ROWS = (  # поля, які правлять найчастіше: у рядку їх стільки, скільки в кортежі
