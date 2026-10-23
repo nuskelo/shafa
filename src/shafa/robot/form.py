@@ -205,12 +205,17 @@ def optional(driver: Driver, step: Step) -> list[str]:
     try:
         return driver.pick(step.label, step.value) or []
     except FieldMissing as error:
+        dump = None
+        if diagnose := getattr(driver, "diagnose", None):
+            dump = diagnose(step.label, error)  # поки список ще відкритий
         if cleanup := getattr(driver, "abandon", None):
             cleanup(step.label)
         why = f" ({error.details})" if error.details else ""
         wanted = ", ".join(step.value)
+        where = f". Розмітка поля: {dump}" if dump else ""
         return [
             f"Необов'язкове поле «{step.label}» не заповнено: на формі не знайдено {wanted}{why}"
+            + where
         ]
 
 
@@ -306,6 +311,10 @@ def pick_values(widget: Widget, label: str, values: list[str]) -> list[str]:
         if not found:
             options = widget.search("")
             found = exact(options, value)
+        if not found and not options:
+            widget.close()  # список не показав жодного варіанта (не встиг вантажитись) — ще раз
+            options = widget.search("")
+            found = exact(options, value)
         if not found:
             raise FieldMissing(f"{label}: {value}", list_details(label, widget.chips(), options))
         widget.choose(found)
@@ -349,16 +358,22 @@ REMOVE = "[class*=emove], [aria-label^='Remove'], [aria-label^='Видалити
 FIND_BLOCK = """([labels, mark]) => {
   const norm = s => (s || '').replace(/\\s+/g, ' ').trim();
   const own = el => norm([...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(' '));
+  // Спершу підпис рівно такий (ROBOT-016: «Тип» ≠ «Тип застібки»), потім — як було: за початком
+  const exact = t => labels.some(label => t === label || t.startsWith(label + '*')
+    || t.startsWith(label + ' *') || t.startsWith(label + ' ('));
   const starts = t => labels.some(label => t === label || t.startsWith(label + ' ')
     || t.startsWith(label + '*') || t.startsWith(label + ' ('));
-  for (const el of document.querySelectorAll('body *')) {
-    if (!starts(own(el)) || el.closest('header, nav, footer')) continue;
-    let box = el;
-    for (let i = 0; i < 6 && box; i++, box = box.parentElement) {
-      if (box.querySelector("button, input[role=combobox], input[type=checkbox], __REMOVE__")) {
-        box.setAttribute('data-robot-block', mark);
-        el.setAttribute('data-robot-label', mark);
-        return true;
+  const all = [...document.querySelectorAll('body *')].filter(el => !el.closest('header, nav, footer'));
+  for (const match of [exact, starts]) {
+    for (const el of all) {
+      if (!match(own(el))) continue;
+      let box = el;
+      for (let i = 0; i < 6 && box; i++, box = box.parentElement) {
+        if (box.querySelector("button, input[role=combobox], input[type=checkbox], __REMOVE__")) {
+          box.setAttribute('data-robot-block', mark);
+          el.setAttribute('data-robot-label', mark);
+          return true;
+        }
       }
     }
   }
@@ -538,10 +553,12 @@ class PageWidget:
         self.listed = bool(self.input.count()) or bool(self.chips())
 
     def chips(self) -> list[str]:
-        return list(self.page.evaluate(CHIPS, self.mark))
+        """Вибрані значення поля. Підказки форми («Додайте заголовок(до +11%)») — не значення."""
+        return [c for c in self.page.evaluate(CHIPS, self.mark) if not is_hint(c)]
 
     def remove(self, chip: str) -> None:
-        chips = self.chips()  # заново: номери чипів після кожної зміни інші
+        # Номери `data-robot-chip` — у повному списку (з підказками), заново після кожної зміни
+        chips = list(self.page.evaluate(CHIPS, self.mark))
         index = next(i for i, c in enumerate(chips) if same(c, chip))
         button = self.block.locator(f"[data-robot-chip='{index}']")
         self.session.click(button.first, f"{self.label}: прибрати «{chip}»")
@@ -624,6 +641,8 @@ class PageDriver:
         self.lists: dict[str, list[str]] = {}  # підпис списку → наші значення: звірка в кінці
         self.brand_miss: BrandMiss | None = None
         self.photo_retries = 0  # повторів вибору фото на цій Картці (ROBOT-015)
+        self.screens: Path | None = None  # куди класти діагностику; типово `screens_dir()`
+        self.dumped: set[str] = set()  # поля, для яких діагностику вже зберігали (на сесію)
 
     def reset(self) -> None:
         """Початок нової Картки: звірка в кінці — лише з її власним (ROBOT-008).
@@ -743,6 +762,35 @@ class PageDriver:
         except PlaywrightTimeout:
             pass
 
+    def diagnose(self, label: str, error: FieldMissing) -> str | None:
+        """Необов'язкове поле не заповнилось (ROBOT-016): скриншот і розмітка блоку в `robot-screens/`,
+        раз на поле за сесію. Повертає ім'я файлу розмітки. Нічого не клікає; збій діагностики
+        справжню причину не ховає."""
+        if label in self.dumped:
+            return None
+        self.dumped.add(label)
+        folder = self.screens or screens_dir()
+        field = re.sub(r'[\\/:*?"<>|\s]+', "-", label).strip("-.") or "поле"
+        stem = f"{datetime.now().astimezone():%Y%m%d-%H%M%S}-поле-{field}"
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            self.page.screenshot(path=str(folder / f"{stem}.png"), full_page=True, timeout=10_000)
+        except Exception:  # noqa: BLE001, S110 — екран лише для діагностики
+            pass
+        body = error.markup
+        if not body:
+            mark = self._find(label)
+            body = markup(self.page, mark) if mark else ""
+        if not body:
+            return None
+        text = f"<!-- {error.args[0]}; {error.details} -->\n{body}"
+        path = folder / f"{stem}.html"
+        try:
+            path.write_text(text.encode("utf-8")[:MARKUP_LIMIT].decode("utf-8", "ignore"), "utf-8")
+        except OSError:
+            return None
+        return path.name
+
     def abandon(self, label: str) -> None:
         """Поле пропущено (необов'язкове, ROBOT-009): закрити відкритий список і прибрати набране."""
         mark = self._find(label)
@@ -791,6 +839,7 @@ class PageDriver:
         for label, values in self.lists.items():
             mark = self._find(label)
             chips = self.page.evaluate(CHIPS, mark) if mark else []
+            chips = [c for c in chips if not is_hint(c)]
             if lang.keys(chips) != lang.keys(values):
                 raise FieldMissing(
                     f"{label}: на формі {', '.join(chips) or 'порожньо'}, треба {', '.join(values)}",
