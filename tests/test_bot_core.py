@@ -339,7 +339,7 @@ def test_album_preview_then_publish(conn, bot, tg, upd, clock, root):
     assert preview["caption"] == core.caption_of([TEXT], 3)
     assert preview["caption"].endswith(f"{TAIL_ALBUM}")  # фото ≥ 2 — рядок про коментарі
     buttons = [b["callback_data"] for row in preview["markup"]["inline_keyboard"] for b in row]
-    assert buttons == ["pub:1", "edit:1", "cancel:1"]
+    assert buttons == ["pub:1", "edit:1", "cancel:1", "queue:1"]
     assert tg.channel_posts == []  # без натискання нічого не публікується
 
     press(upd, bot, tg)
