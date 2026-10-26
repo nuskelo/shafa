@@ -52,8 +52,8 @@ from urllib.parse import quote
 import pillow_heif
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from shafa import changes, config, events, rules, site
-from shafa.bot import actions, alerts, report
+from shafa import batch, changes, config, events, rules, site
+from shafa.bot import actions, alerts, channel, presence, report
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
@@ -90,6 +90,7 @@ CHANNEL_SIDE = 2560  # якщо оригінал не влазить у лімі
 REPORT_COMMAND = "/zvit"  # звіт за сьогодні зараз; лише від Власника (BOT-009)
 DETAIL_COMMAND = "/detali"  # «Детально» ↔ «Лише важливе»; лише від Власника (BOT-012)
 PUBLISH = "pub"
+QUEUE = "queue"  # BOT-015: пост уже в каналі — лише в чергу Шафи
 CANCEL = "cancel"
 EDIT = "edit"
 NO_EDIT = "noedit"
@@ -146,6 +147,12 @@ TEXTS = {
     "all_canceled": "Скасовано чернеток: {n}. Нічого не опубліковано.",
     "comments_late": "Пост {link} є, але фото в коментарі ще не додались — додам, щойно зможу.",
     "comments_done": "Фото додано в коментарі до поста {link}.",
+    "queue_search": "Шукаю пост у каналі — це може тривати кілька хвилин…",
+    "queue_none": "Не знайшов у каналі пост з таким описом. Перешли мені цей пост з каналу — і "
+    "натисни кнопку ще раз.",
+    "queue_known": "Пост {n} уже в черзі або опубліковано — нічого не змінюю.",
+    "queue_done": "Пост {n} від {date} — у черзі Шафи, фото: {k}. На Шафу — не раніше {until}.",
+    "queued": "Цей пост уже в черзі Шафи.",
 }
 
 
@@ -421,8 +428,22 @@ class Bot:
             self._message(update_id, update["message"])
         elif "edited_channel_post" in update:
             self._channel_edit(update_id, update["edited_channel_post"])
+        elif "channel_post" in update:
+            self._channel_post(update_id, update["channel_post"])
         else:
             self._mark(update_id)
+
+    def _channel_post(self, update_id: int, post: Any) -> None:
+        """Новий пост нашого каналу (BOT-015): лише запам'ятовуємо номер, дату й текст. На Шафу чи
+        сайт він потрапляє тільки кнопкою «Лише в чергу Шафи». Чужі канали — мовчки."""
+        self._mark(update_id)
+        if not isinstance(post, dict) or (post.get("chat") or {}).get("id") != (
+            self.settings.channel_id
+        ):
+            return
+        post_id, date, text = post.get("message_id"), post.get("date"), channel.text_of(post)
+        if isinstance(post_id, int) and isinstance(date, int) and text:
+            channel.remember(self.conn, post_id, date, text, post.get("media_group_id"))
 
     def _channel_edit(self, update_id: int, post: Any) -> None:
         """Пост нашого каналу змінено: пара ще чекає сайту — піде новий текст (SITE-002)."""
@@ -435,6 +456,7 @@ class Bot:
         post_id, text = post.get("message_id"), post.get("caption", post.get("text"))
         if not isinstance(post_id, int) or not isinstance(text, str):
             return
+        channel.edited(self.conn, post_id, text)
         if site.edited(self.conn, post_id, text):
             self.log(f"Пост {post_id} змінено в каналі — на сайт піде новий текст")
         self._card_edit(post_id, text)
@@ -511,10 +533,30 @@ class Bot:
                     (stamp, stamp, draft_id),
                 )
             file_id, kind = part or (None, None)
+            origin_post, origin_date = self._origin(message, text)
             self.conn.execute(
-                "INSERT OR IGNORE INTO bot_draft_parts VALUES (?, ?, ?, ?, ?, ?)",
-                (draft_id, message.get("message_id"), text, file_id, kind, group),
-            )
+                "INSERT OR IGNORE INTO bot_draft_parts (draft_id, message_id, text, file_id, kind, "
+                "media_group, origin_post, origin_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (draft_id, message.get("message_id"), text, file_id, kind, group, origin_post,
+                 origin_date),
+            )  # fmt: skip
+
+    def _origin(self, message: dict, text: str | None) -> tuple[int | None, int | None]:
+        """Пересланий пост нашого каналу → (номер, дата) поста (BOT-015); текст поста з каналу
+        одразу в пам'ять — кнопка «Лише в чергу Шафи» звірить його з тим, що в чернетці."""
+        origin = message.get("forward_origin")
+        if not isinstance(origin, dict) or origin.get("type") != "channel":
+            return None, None
+        number, date = origin.get("message_id"), origin.get("date")
+        if (
+            (origin.get("chat") or {}).get("id") != self.settings.channel_id
+            or not isinstance(number, int)
+            or not isinstance(date, int)
+        ):
+            return None, None
+        if text:
+            channel.remember(self.conn, number, date, text, message.get("media_group_id"))
+        return number, date
 
     def _part(self, message: dict) -> tuple[tuple[str, str] | None, str | None]:
         """Фото повідомлення: ((file_id, вид), None) або (None, код відмови); без фото — (None, None)."""
@@ -745,6 +787,7 @@ class Bot:
                     {"text": "Редагувати", "callback_data": f"{EDIT}:{draft_id}"},
                     {"text": "Скасувати", "callback_data": f"{CANCEL}:{draft_id}"},
                 ],
+                [{"text": "📦 Лише в чергу Шафи", "callback_data": f"{QUEUE}:{draft_id}"}],
             ]
         }
         comments = ", у коментарі — усі" if len(photos) >= 2 else ""
@@ -800,13 +843,13 @@ class Bot:
             draft = self.conn.execute(
                 "SELECT * FROM bot_drafts WHERE id = ? AND chat_id = ?", (int(raw_id), chat["id"])
             ).fetchone()
-        if draft is None or action not in (PUBLISH, CANCEL, EDIT, NO_EDIT):
+        if draft is None or action not in (PUBLISH, CANCEL, EDIT, NO_EDIT, QUEUE):
             self._mark(update_id)
             self._answer(query.get("id", ""), TEXTS["gone"])
             return
         handler = {
             CANCEL: self._cancel, PUBLISH: self._publish, EDIT: self._edit,
-            NO_EDIT: self._no_edit,
+            NO_EDIT: self._no_edit, QUEUE: self._queue,
         }[action]  # fmt: skip
         handler(update_id, query, draft)
 
@@ -831,6 +874,8 @@ class Bot:
         ).fetchone()
         if row["state"] == "published":
             return TEXTS["already"].format(link=post_link(self.settings.channel_id, row["post_id"]))
+        if row["state"] == "queued":
+            return TEXTS["queued"]
         if row["state"] in ("publishing", "uncertain"):
             return TEXTS["busy"]
         if row["state"] == "expired":
@@ -1058,6 +1103,126 @@ class Bot:
             (folder / f"{i}.jpg").write_bytes(data)
         return folder
 
+    # --- «Лише в чергу Шафи» (BOT-015): пост уже в каналі, у канал нічого не шлемо ---
+
+    def _queue(self, update_id: int, query: dict, draft: sqlite3.Row) -> None:
+        callback_id, draft_id, chat_id = query.get("id", ""), draft["id"], draft["chat_id"]
+        pressed = (query.get("message") or {}).get("message_id")
+        fresh = (self.clock() - PREVIEW_VALID).isoformat(timespec="seconds")
+        refusal = None
+        if draft["state"] == "collecting":
+            refusal = "updating"
+        elif draft["state"] != "preview":
+            refusal = None if draft["state"] in ("queued", "published") else "gone"
+        elif draft["preview_message_id"] != pressed:
+            refusal = "old_preview"
+        elif (draft["preview_at"] or "") < fresh:
+            refusal = "expired"
+            self._set(draft_id, state="expired")
+        if refusal or draft["state"] != "preview":
+            self._mark(update_id)
+            self._answer(callback_id, TEXTS[refusal] if refusal else self._state_text(draft_id))
+            if refusal == "expired":
+                self._drop_buttons(chat_id, pressed)
+                self.say(chat_id, TEXTS["expired"])
+            return
+        self._mark(update_id)
+        self._answer(callback_id, TEXTS["queue_search"])
+        parts = self._parts(draft_id)
+        found = self._find_post(parts)
+        if found is None:
+            self.say(chat_id, TEXTS["queue_none"])  # чернетка лишається з кнопками
+            return
+        post_id, unix, text = found
+        if self.conn.execute("SELECT 1 FROM posts WHERE post_id = ?", (post_id,)).fetchone():
+            self.say(chat_id, TEXTS["queue_known"].format(n=post_id))
+            return
+        try:
+            photos = [self._download(p) for p in parts if p["file_id"]]
+        except (TelegramError, PhotoError, OSError) as error:
+            self.log(f"Чернетка {draft_id}: {error}")
+            self._photo_failed(draft_id, chat_id, error, "фото не завантажились")
+            return
+        with self.conn:
+            cursor = self.conn.execute(
+                "UPDATE bot_drafts SET state = 'queued', post_id = ?, updated_at = ? "
+                "WHERE id = ? AND state = 'preview'",
+                (post_id, self._stamp(), draft_id),
+            )
+            if cursor.rowcount == 0:
+                return
+            self.conn.execute(
+                "INSERT INTO posts (post_id, date, text, source, added_at) "
+                "VALUES (?, ?, ?, 'bot', ?) ON CONFLICT (post_id) DO NOTHING",
+                (post_id, local_date(unix), text, now()),
+            )
+        self._drop_buttons(chat_id, draft["preview_message_id"])
+        try:
+            folder = self._save_folder(post_id, photos)
+        except OSError as error:
+            self._set(draft_id, note=f"папка не створена: {error}")
+            events.emit("post.failed", f"{post_id}: папку з фото не створено (у чергу не стала)")
+            self.say(chat_id, TEXTS["failed"].format(why="папку з фото не створено"))
+            self.tell_owner(f"пост {post_id} записано, але папку не створено: {error}")
+            return
+        self._set(draft_id, folder_name=folder.name)
+        self._to_site(post_id, folder.name, {"date": unix}, text)
+        posted = datetime.fromisoformat(local_date(unix))
+        self.say(chat_id, TEXTS["queue_done"].format(
+            n=post_id, date=posted.strftime("%d.%m.%Y"), k=len(photos),
+            until=(posted + timedelta(days=self._wait_days())).strftime("%d.%m.%Y"),
+        ))  # fmt: skip
+        if folder.name != str(post_id):
+            self.tell_owner(
+                f"папка {post_id} уже була — фото поста {post_id} збережено в «{folder.name}». "
+                "Розберись, яка правильна."
+            )
+
+    @staticmethod
+    def _wait_days() -> int:
+        try:
+            return batch.limits().wait_days
+        except batch.SetupError:
+            return batch.WAIT_DAYS
+
+    def _find_post(self, parts: list[sqlite3.Row]) -> tuple[int, int, str] | None:
+        """(номер, дата Unix, текст поста з каналу) або None — не знайшов. Пересланий з каналу
+        пост — без пошуку, але текст чернетки має збігтися з текстом поста."""
+        own = own_text([p["text"] for p in parts if p["text"]])
+        target = channel.normalize(own)
+        # пересланий пост: номер із пересланого повідомлення, текст — як у каналі (запам'ятали при
+        # отриманні); після «Редагувати» текст чернетки вже інший — звірка це покаже
+        origin = [
+            p["origin_post"] for p in parts if p["origin_post"] and self.conn.execute(
+                "SELECT 1 FROM channel_posts WHERE post_id = ?", (p["origin_post"],)
+            ).fetchone()
+        ]  # fmt: skip
+        if origin:
+            ids = origin[:1]
+        else:
+            try:
+                ids = self._finder().find(own)
+            except Exception as error:  # noqa: BLE001 — збій пошуку = «не знайшов», не падіння
+                self.log(f"Пошук у каналі: {type(error).__name__}")
+                return None
+            if ids is None or len(ids) != 1:
+                return None
+        row = self.conn.execute(
+            "SELECT date, text FROM channel_posts WHERE post_id = ?", (ids[0],)
+        ).fetchone()
+        if row is None or not channel.same_post(target, channel.normalize(row["text"])):
+            return None
+        return ids[0], row["date"], row["text"]
+
+    def _finder(self) -> channel.Finder:
+        chat = presence.service_chat(self.settings.owner_chat, self.settings.seller_chat)
+        looker = (
+            None if chat is None else presence.Presence(
+                self.tg, self.settings.channel_id, chat, log=self.log, data_dir=config.data_dir()
+            )
+        )  # fmt: skip
+        return channel.Finder(self.conn, looker, self.sleep, self.log)
+
     # --- Старт ---
 
     def recover(self) -> None:
@@ -1234,7 +1399,8 @@ class Bot:
                 "UPDATE bot_draft_parts SET text = NULL WHERE draft_id = ?", (draft["id"],)
             )
             self.conn.execute(
-                "INSERT OR IGNORE INTO bot_draft_parts VALUES (?, ?, ?, NULL, NULL, NULL)",
+                "INSERT OR IGNORE INTO bot_draft_parts (draft_id, message_id, text) "
+                "VALUES (?, ?, ?)",
                 (draft["id"], message.get("message_id"), text),
             )
             self.conn.execute(

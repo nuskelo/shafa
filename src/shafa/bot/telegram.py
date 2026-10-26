@@ -132,8 +132,9 @@ class Telegram:
     def get_updates(self, offset: int | None, timeout: int) -> list[dict]:
         params: dict[str, Any] = {
             "timeout": timeout,
-            # правка поста каналу — новий текст для сайту (SITE-002)
-            "allowed_updates": ["message", "callback_query", "edited_channel_post"],
+            # правка поста каналу — новий текст для сайту (SITE-002); `channel_post` — пости, які
+            # вона виклала в канал сама (BOT-015)
+            "allowed_updates": ["message", "callback_query", "edited_channel_post", "channel_post"],
         }
         if offset is not None:
             params["offset"] = offset
