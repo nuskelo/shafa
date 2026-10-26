@@ -969,19 +969,9 @@ class App:
             cards = review.list_tab(conn, status, query)
             checks = {c.id: self._precheck(c) for c in cards}
             marks = {c.id: card_mark(c, checks[c.id]) for c in cards}
-            filters = []
             chosen = self._chosen(status, request.arg("f"))
-            if status == Status.REVIEW:  # UI-004: «Усі / Треба глянути / Готові»
-                warn = sum(1 for m in marks.values() if m.tone != "ok")
-                for key, label, count in (
-                    ("", "Усі", len(cards)),
-                    ("warn", "Треба глянути", warn),
-                    ("ok", "Готові", len(cards) - warn),
-                ):
-                    args = {k: v for k, v in (("f", key), ("q", query)) if v}
-                    href = f"/{status}" + (f"?{urlencode(args)}" if args else "")
-                    filters.append((key, label, count, href))
-                cards = self._filtered(cards, marks, chosen)
+            kind = self._kind(status, request.arg("k"))
+            filters, kinds, cards = self._groups(status, cards, marks, chosen, kind, query)
             on_shafa = {  # Картка з `shafa_id` з Архіву не повертається (як на самій Картці)
                 r[0]
                 for r in conn.execute(
@@ -1004,6 +994,15 @@ class App:
                 my_items=MY_ITEMS,
                 list_url=f"/{status}" + (f"?{urlencode({'q': query})}" if query else ""),
                 filters=filters,
+                kinds=kinds,
+                kind=kind,
+                is_old=is_old,
+                reset_url=f"/{status}"
+                + (
+                    f"?{urlencode({n: v for n, v in (('f', chosen), ('k', kind)) if v})}"
+                    if chosen or kind
+                    else ""
+                ),
                 chosen=chosen,
                 query=query,
                 message=MESSAGES.get(request.arg("msg")),
@@ -1024,10 +1023,49 @@ class App:
         return value if status == Status.REVIEW and value in ("warn", "ok") else ""
 
     @staticmethod
-    def _filtered(cards: list[review.Card], marks: dict, chosen: str) -> list[review.Card]:
-        if not chosen:
-            return cards
-        return [c for c in cards if (marks[c.id].tone != "ok") == (chosen == "warn")]
+    def _kind(status: str, value: str) -> str:
+        """UI-008: «Нові (бот) / Старі» — `new`/`old`, у «На перевірку» і «Схвалених»."""
+        return value if status in KIND_TABS and value in ("new", "old") else ""
+
+    @staticmethod
+    def _filtered(
+        cards: list[review.Card], marks: dict, chosen: str, kind: str = ""
+    ) -> list[review.Card]:
+        if chosen:
+            cards = [c for c in cards if (marks[c.id].tone != "ok") == (chosen == "warn")]
+        if kind:
+            cards = [c for c in cards if is_old(c.folder_name) == (kind == "old")]
+        return cards
+
+    def _groups(self, status, cards, marks, chosen, kind, query):
+        """Пілюлі обох груп (UI-004 `f`, UI-008 `k`) і відфільтрований список.
+
+        Лічильник кожної групи рахується з урахуванням вибору в іншій і пошуку `q`."""
+        filters, kinds = [], []
+
+        def href(f: str, k: str) -> str:
+            args = {n: v for n, v in (("f", f), ("k", k), ("q", query)) if v}
+            return f"/{status}" + (f"?{urlencode(args)}" if args else "")
+
+        if status == Status.REVIEW:
+            base = self._filtered(cards, marks, "", kind)
+            warn = sum(1 for c in base if marks[c.id].tone != "ok")
+            for key, label, count in (
+                ("", "Усі", len(base)),
+                ("warn", "Треба глянути", warn),
+                ("ok", "Готові", len(base) - warn),
+            ):
+                filters.append((key, label, count, href(key, kind)))
+        if status in KIND_TABS:
+            base = self._filtered(cards, marks, chosen)
+            old = sum(1 for c in base if is_old(c.folder_name))
+            for key, label, count in (
+                ("", "Усі", len(base)),
+                ("new", "Нові (бот)", len(base) - old),
+                ("old", "Старі", old),
+            ):
+                kinds.append((key, label, count, href(chosen, key)))
+        return filters, kinds, self._filtered(cards, marks, chosen, kind)
 
     def _from(self, request: Request, card: review.Card) -> str:
         """Список, з якого відкрили Картку (UI-005): `from` у адресі, інакше сторінка, з якої прийшли
@@ -1048,14 +1086,15 @@ class App:
         if status not in CARD_TABS:  # «Опубліковані» без порядку й фільтрів
             return nav
         query = parse_qs(url.query)
-        text_, chosen = (
+        text_, chosen, kind = (
             (query.get("q") or [""])[0],
             self._chosen(status, (query.get("f") or [""])[0]),
+            self._kind(status, (query.get("k") or [""])[0]),
         )
         cards = review.list_tab(conn, status, text_)
-        if chosen:
-            marks = {c.id: card_mark(c, self._precheck(c)) for c in cards}
-            cards = self._filtered(cards, marks, chosen)
+        if chosen or kind:
+            marks = {c.id: card_mark(c, self._precheck(c)) for c in cards} if chosen else {}
+            cards = self._filtered(cards, marks, chosen, kind)
         ids = [c.id for c in cards]
         if card.id in ids:
             at = ids.index(card.id)
@@ -1333,6 +1372,7 @@ def shafa_link(url: str | None) -> str | None:
 
 
 LIST_TABS = (*CARD_TABS, Status.PUBLISHED)
+KIND_TABS = (Status.REVIEW, Status.APPROVED)  # UI-008: тут працює фільтр «Нові / Старі»
 
 
 def item_url(item_id: int, from_: str | None = None) -> str:
@@ -1368,6 +1408,8 @@ def safe_list(value: str, hosts: set[str] | None = None) -> str | None:
     args = {}
     if name == Status.REVIEW and (query.get("f") or [""])[0] in ("warn", "ok"):
         args["f"] = query["f"][0]
+    if name in KIND_TABS and (query.get("k") or [""])[0] in ("new", "old"):
+        args["k"] = query["k"][0]
     if (query.get("q") or [""])[0]:
         args["q"] = query["q"][0]
     return f"/{name}" + (f"?{urlencode(args)}" if args else "")

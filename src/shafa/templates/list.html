@@ -20,17 +20,25 @@
       {% endfor %}
     </div>
     {% endif %}
+    {% if kinds %}
+    <div class="filters" role="group" aria-label="Нові чи старі">
+      {% for key, label, n, href in kinds %}
+      <a class="pill{% if kind == key %} on{% endif %}" href="{{ href }}"{% if kind == key %} aria-current="true"{% endif %}>{{ label }} · {{ n }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
     <form class="search" method="get" action="/{{ current }}">
       {% if chosen %}<input type="hidden" name="f" value="{{ chosen }}">{% endif %}
+      {% if kind %}<input type="hidden" name="k" value="{{ kind }}">{% endif %}
       <input type="search" name="q" value="{{ query }}" placeholder="Назва, бренд, номер поста або слово з тексту" aria-label="Пошук">
       <button type="submit">Шукати</button>
-      {% if query %}<a href="/{{ current }}{% if chosen %}?f={{ chosen }}{% endif %}">Скинути</a>{% endif %}
+      {% if query %}<a href="{{ reset_url }}">Скинути</a>{% endif %}
     </form>
   </div>
 </div>
 
 {% if not cards %}
-<p class="empty">{% if query %}Нічого не знайдено.{% elif chosen %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
+<p class="empty">{% if query %}Нічого не знайдено.{% elif chosen or kind %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
 {% endif %}
 
 {% block cards %}
@@ -52,6 +60,7 @@
         {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
         {% if card.fields["section"].value %}<span class="details">{{ card.fields["section"].value | replace(" / ", " · ") }}</span>{% endif %}
         <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date] | select | join(" · ") }}</span>
+        {% if card.status in ("review", "approved") and not is_old(card.folder_name) %}<span class="tag new-card">Нова · {{ card.photos | length }} фото</span>{% endif %}
         {% if card.old_rules %}<span class="tag old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто перезаповнити">заповнено старими правилами</span>{% endif %}
       </span>
     </a>
