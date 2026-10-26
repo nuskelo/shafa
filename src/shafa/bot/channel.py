@@ -92,6 +92,7 @@ class Finder:
     ) -> None:
         self.conn, self.looker, self.sleep, self.log, self.limit = conn, looker, sleep, log, limit
         self.requests = 0
+        self.browsed = False  # повний перегляд уже був: усе, що в каналі є, — у пам'яті
 
     def find(self, own: str) -> list[int] | None:
         """Номери постів, що збіглися з описом `own`. `None` — перегляд не завершився: нічого
@@ -108,7 +109,11 @@ class Finder:
         }
         if not known or self.looker is None:  # нема від чого відштовхнутись чи кого просити
             return []
-        return self._browse(target, known)
+        if self.browsed:  # BOT-016: той самий Finder на кілька постів — канал лише раз
+            return []
+        found = self._browse(target, known)
+        self.browsed = found is not None
+        return found
 
     def _browse(self, target: str, known: set[int]) -> list[int] | None:
         looker = self.looker

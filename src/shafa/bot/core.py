@@ -96,6 +96,8 @@ EDIT = "edit"
 NO_EDIT = "noedit"
 PUBLISH_ALL = "puball"
 CANCEL_ALL = "cancelall"
+QUEUE_ALL = "queueall"  # BOT-016: «Усі лише в чергу Шафи» у зведенні чернеток
+QUEUE_ALL_NAMES = 10  # скільки не знайдених постів називає підсумок «Усіх лише в чергу»
 PUBLISH_ALL_PAUSE = 3  # секунд між постами «Опублікувати всі»
 SUMMARY_DELAY = timedelta(seconds=2)  # «Чернеток: N» — після останнього прев'ю, без мигтіння
 OPEN = ("collecting", "preview", "editing")  # відкриті чернетки
@@ -141,6 +143,17 @@ TEXTS = {
     "edit_canceled": "Редагування скасовано — ось прев'ю знову.",
     "summary": "Чернеток: {n}",
     "all_busy": "Уже публікую всі — зачекай",
+    "queue_all_busy": "Уже виконую — зачекай",
+    "queue_all_answer": "Шукаю в каналі…",
+    "queue_all_start": "Шукаю {n} постів у каналі — перший пошук може тривати до 5 хв.",
+    "queue_all_nothing": "Немає прев'ю, які можна поставити в чергу.",
+    "queue_all_done": "У черзі Шафи: {k} ({numbers}).",
+    "queue_all_known": "Уже були в черзі або опубліковані: {numbers}.",
+    "queue_all_missing": "Не знайшов: {m} — {names} — перешли ці пости з каналу й натисни кнопку "
+    "в їхньому прев'ю.",
+    "queue_all_dropped": "Telegram не відповідає — спробуй пізніше. Не шукав ще {n} — вони "
+    "лишились з кнопками.",
+    "queue_all_failed": "Не вийшло: {n} (причини — у повідомленнях вище) — вони лишились з кнопками.",
     "all_start": "Публікую всі…",
     "all_done": "Опубліковано {done}, лишилось {left}.",
     "all_waiting": "Чекають твоєї відповіді: {names}.",
@@ -154,6 +167,10 @@ TEXTS = {
     "queue_done": "Пост {n} від {date} — у черзі Шафи, фото: {k}. На Шафу — не раніше {until}.",
     "queued": "Цей пост уже в черзі Шафи.",
 }
+
+
+class SearchDropped(Exception):
+    """Перегляд каналу не завершився (ліміт, збої Telegram) — «не знайшов» стверджувати не можна."""
 
 
 class PhotoError(Exception):
@@ -835,7 +852,7 @@ class Bot:
         if not self._allowed(chat, query.get("from")):
             self._mark(update_id)
             return
-        if action in (PUBLISH_ALL, CANCEL_ALL):
+        if action in (PUBLISH_ALL, CANCEL_ALL, QUEUE_ALL):
             self._all(update_id, query, chat["id"], action)
             return
         draft = None
@@ -1128,21 +1145,32 @@ class Bot:
             return
         self._mark(update_id)
         self._answer(callback_id, TEXTS["queue_search"])
-        parts = self._parts(draft_id)
-        found = self._find_post(parts)
+        try:
+            found = self._find_post(self._parts(draft["id"]))
+        except SearchDropped:
+            found = None
         if found is None:
             self.say(chat_id, TEXTS["queue_none"])  # чернетка лишається з кнопками
             return
+        self._enqueue(draft, found, quiet=False)
+
+    def _enqueue(self, draft: sqlite3.Row, found: tuple[int, int, str], *, quiet: bool) -> str:
+        """Знайдений пост → у чергу Шафи; спільна частина «Лише в чергу» і «Усі лише в чергу».
+        Результат: `queued` / `known` (пост уже в базі) / `failed` (їй уже написано) / `lost`
+        (чернетка встигла змінитись). `quiet` — без повідомлення «Пост N … у черзі» (підсумок
+        пише `_queue_all`)."""
+        draft_id, chat_id = draft["id"], draft["chat_id"]
         post_id, unix, text = found
         if self.conn.execute("SELECT 1 FROM posts WHERE post_id = ?", (post_id,)).fetchone():
-            self.say(chat_id, TEXTS["queue_known"].format(n=post_id))
-            return
+            if not quiet:
+                self.say(chat_id, TEXTS["queue_known"].format(n=post_id))
+            return "known"
         try:
-            photos = [self._download(p) for p in parts if p["file_id"]]
+            photos = [self._download(p) for p in self._parts(draft_id) if p["file_id"]]
         except (TelegramError, PhotoError, OSError) as error:
             self.log(f"Чернетка {draft_id}: {error}")
             self._photo_failed(draft_id, chat_id, error, "фото не завантажились")
-            return
+            return "failed"
         with self.conn:
             cursor = self.conn.execute(
                 "UPDATE bot_drafts SET state = 'queued', post_id = ?, updated_at = ? "
@@ -1150,7 +1178,7 @@ class Bot:
                 (post_id, self._stamp(), draft_id),
             )
             if cursor.rowcount == 0:
-                return
+                return "lost"
             self.conn.execute(
                 "INSERT INTO posts (post_id, date, text, source, added_at) "
                 "VALUES (?, ?, ?, 'bot', ?) ON CONFLICT (post_id) DO NOTHING",
@@ -1164,19 +1192,21 @@ class Bot:
             events.emit("post.failed", f"{post_id}: папку з фото не створено (у чергу не стала)")
             self.say(chat_id, TEXTS["failed"].format(why="папку з фото не створено"))
             self.tell_owner(f"пост {post_id} записано, але папку не створено: {error}")
-            return
+            return "failed"
         self._set(draft_id, folder_name=folder.name)
         self._to_site(post_id, folder.name, {"date": unix}, text)
-        posted = datetime.fromisoformat(local_date(unix))
-        self.say(chat_id, TEXTS["queue_done"].format(
-            n=post_id, date=posted.strftime("%d.%m.%Y"), k=len(photos),
-            until=(posted + timedelta(days=self._wait_days())).strftime("%d.%m.%Y"),
-        ))  # fmt: skip
+        if not quiet:
+            posted = datetime.fromisoformat(local_date(unix))
+            self.say(chat_id, TEXTS["queue_done"].format(
+                n=post_id, date=posted.strftime("%d.%m.%Y"), k=len(photos),
+                until=(posted + timedelta(days=self._wait_days())).strftime("%d.%m.%Y"),
+            ))  # fmt: skip
         if folder.name != str(post_id):
             self.tell_owner(
                 f"папка {post_id} уже була — фото поста {post_id} збережено в «{folder.name}». "
                 "Розберись, яка правильна."
             )
+        return "queued"
 
     @staticmethod
     def _wait_days() -> int:
@@ -1185,9 +1215,13 @@ class Bot:
         except batch.SetupError:
             return batch.WAIT_DAYS
 
-    def _find_post(self, parts: list[sqlite3.Row]) -> tuple[int, int, str] | None:
+    def _find_post(
+        self, parts: list[sqlite3.Row], finder: channel.Finder | None = None
+    ) -> tuple[int, int, str] | None:
         """(номер, дата Unix, текст поста з каналу) або None — не знайшов. Пересланий з каналу
-        пост — без пошуку, але текст чернетки має збігтися з текстом поста."""
+        пост — без пошуку, але текст чернетки має збігтися з текстом поста. Перегляд каналу
+        кинуто (ліміт, збої) — `SearchDropped`: нічого стверджувати не можна. `finder` — один на
+        всі чернетки «Усіх лише в чергу»: канал переглядається не більше одного разу."""
         own = own_text([p["text"] for p in parts if p["text"]])
         target = channel.normalize(own)
         # пересланий пост: номер із пересланого повідомлення, текст — як у каналі (запам'ятали при
@@ -1201,11 +1235,13 @@ class Bot:
             ids = origin[:1]
         else:
             try:
-                ids = self._finder().find(own)
-            except Exception as error:  # noqa: BLE001 — збій пошуку = «не знайшов», не падіння
+                ids = (finder or self._finder()).find(own)
+            except Exception as error:  # noqa: BLE001 — збій пошуку = перегляд кинуто, не падіння
                 self.log(f"Пошук у каналі: {type(error).__name__}")
-                return None
-            if ids is None or len(ids) != 1:
+                raise SearchDropped from None
+            if ids is None:
+                raise SearchDropped
+            if len(ids) != 1:
                 return None
         row = self.conn.execute(
             "SELECT date, text FROM channel_posts WHERE post_id = ?", (ids[0],)
@@ -1422,10 +1458,13 @@ class Bot:
         ).fetchall()
 
     def _summary_markup(self) -> dict:
-        return {"inline_keyboard": [[
-            {"text": "Опублікувати всі", "callback_data": f"{PUBLISH_ALL}:0"},
-            {"text": "Скасувати всі", "callback_data": f"{CANCEL_ALL}:0"},
-        ]]}  # fmt: skip
+        return {"inline_keyboard": [
+            [
+                {"text": "Опублікувати всі", "callback_data": f"{PUBLISH_ALL}:0"},
+                {"text": "Скасувати всі", "callback_data": f"{CANCEL_ALL}:0"},
+            ],
+            [{"text": "📦 Усі лише в чергу Шафи", "callback_data": f"{QUEUE_ALL}:0"}],
+        ]}  # fmt: skip
 
     def _summaries(self) -> None:
         """«Чернеток: N» з кнопками, коли відкритих ≥ 2 — завжди НИЖЧЕ за останнє прев'ю.
@@ -1514,13 +1553,17 @@ class Bot:
                 "SELECT running FROM bot_summaries WHERE chat_id = ? AND message_id = ?",
                 (chat_id, pressed),
             ).fetchone()
-            self._answer(callback_id, TEXTS["all_busy"] if busy else TEXTS["gone"])
+            busy_text = TEXTS["queue_all_busy" if action == QUEUE_ALL else "all_busy"]
+            self._answer(callback_id, busy_text if busy else TEXTS["gone"])
             return
         self._drop_buttons(chat_id, pressed)
         try:
             if action == CANCEL_ALL:
                 self._answer(callback_id, TEXTS["canceled"])
                 self._cancel_all(chat_id)
+            elif action == QUEUE_ALL:
+                self._answer(callback_id, TEXTS["queue_all_answer"])
+                self._queue_all(chat_id)
             else:
                 self._answer(callback_id, TEXTS["all_start"])
                 self._publish_all(chat_id)
@@ -1571,6 +1614,65 @@ class Bot:
             names = ", ".join(f"«{first_line(d['id'], self)}»" for d in left)
             text += "\n" + TEXTS["all_waiting"].format(names=names)
         self.say(chat_id, text)
+
+    # --- «Усі лише в чергу Шафи» (BOT-016) ---
+
+    def _queue_all(self, chat_id: int) -> None:
+        """Усі свіжі прев'ю — по черзі, як `_queue` для однієї; в канал нічого. Один підсумок."""
+        fresh = (self.clock() - PREVIEW_VALID).isoformat(timespec="seconds")
+        drafts = self._open_drafts(chat_id)
+        ready = [
+            d["id"] for d in drafts if d["state"] == "preview" and (d["preview_at"] or "") >= fresh
+        ]
+        queued: list[int] = []
+        known: list[int] = []
+        missing: list[int] = []
+        failed = 0
+        dropped_at = None
+        if ready:
+            self.say(chat_id, TEXTS["queue_all_start"].format(n=len(ready)))
+        finder = self._finder()
+        for n, draft_id in enumerate(ready):
+            draft = self.conn.execute(
+                "SELECT * FROM bot_drafts WHERE id = ?", (draft_id,)
+            ).fetchone()
+            if draft["state"] != "preview":
+                continue
+            try:
+                found = self._find_post(self._parts(draft_id), finder)
+            except SearchDropped:
+                dropped_at = n
+                break
+            if found is None:
+                missing.append(draft_id)
+                continue
+            outcome = self._enqueue(draft, found, quiet=True)
+            if outcome == "queued":
+                queued.append(found[0])
+            elif outcome == "known":
+                known.append(found[0])
+            elif outcome == "failed":
+                failed += 1
+        lines = []
+        if queued:
+            numbers = ", ".join(str(n) for n in sorted(queued))
+            lines.append(TEXTS["queue_all_done"].format(k=len(queued), numbers=numbers))
+        if known:
+            lines.append(TEXTS["queue_all_known"].format(numbers=", ".join(map(str, known))))
+        if missing:
+            shown = [f"«{first_line(i, self)}»" for i in missing[:QUEUE_ALL_NAMES]]
+            if len(missing) > QUEUE_ALL_NAMES:
+                shown.append(f"і ще {len(missing) - QUEUE_ALL_NAMES}")
+            lines.append(TEXTS["queue_all_missing"].format(m=len(missing), names=", ".join(shown)))
+        if dropped_at is not None:
+            lines.append(TEXTS["queue_all_dropped"].format(n=len(ready) - dropped_at))
+        if failed:
+            lines.append(TEXTS["queue_all_failed"].format(n=failed))
+        waiting = [d for d in drafts if d["id"] not in ready]
+        if waiting:
+            names = ", ".join(f"«{first_line(d['id'], self)}»" for d in waiting)
+            lines.append(TEXTS["all_waiting"].format(names=names))
+        self.say(chat_id, "\n".join(lines) or TEXTS["queue_all_nothing"])
 
 
 def first_line(draft_id: int, bot: "Bot") -> str:
