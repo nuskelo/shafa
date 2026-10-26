@@ -3,7 +3,7 @@
 import pytest
 
 from shafa import web
-from shafa.db import Status
+from shafa.db import Status, now
 from shafa.robot import browser, lock
 from test_review import add_card
 from test_web import PORT, TOKEN, get, html, location, post
@@ -337,10 +337,10 @@ def test_deleted_post_reason_shown_in_archive(conn, root, app):
     item = card(conn, root)
     with conn:
         conn.execute(
-            "UPDATE items SET status = 'archived', archived_at = '2026-10-18T00:00:00+00:00', "
+            "UPDATE items SET status = 'archived', archived_at = ?, "
             "problem_code = 'post_deleted', problem_text = 'Пост видалено з каналу — продано' "
             "WHERE id = ?",
-            (item,),
+            (now(), item),  # свіжа дата: через 7 днів Архів прибирає запис
         )
     assert "Пост видалено з каналу — продано" in html(get(app, "/archived"))
 
