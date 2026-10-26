@@ -131,8 +131,11 @@ def test_get_updates_waits_longer_than_poll():
 
     assert telegram(handler).get_updates(41, 25) == []
     params, read_timeout = seen[0]
-    assert params == {"timeout": 25, "allowed_updates": ["message", "callback_query", "edited_channel_post"],
-                      "offset": 41}  # fmt: skip
+    assert params == {
+        "timeout": 25,
+        "allowed_updates": ["message", "callback_query", "edited_channel_post", "channel_post"],
+        "offset": 41,
+    }
     assert read_timeout > 25
 
 

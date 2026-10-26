@@ -49,16 +49,22 @@ class Presence:
 
     def check(self, post_id: int) -> str:
         """`PRESENT`, `GONE` або `UNKNOWN`. Копію в службовому чаті одразу видаляє."""
+        return self.look(post_id)[0]
+
+    def look(self, post_id: int) -> tuple[str, dict | None]:
+        """Те саме, що `check`, плюс пересланий пост (повідомлення Telegram з `forward_origin`,
+        текстом чи підписом) — коли він `PRESENT` (BOT-015: пошук поста за описом). Копія — так
+        само одразу видаляється; відповіді Telegram бот ніде більше не лишає."""
         self.retry_after = None
         self._clean()
         try:
             sent = self.tg.forward_message(self.service_chat, self.channel_id, post_id)
         except TelegramError as error:
             if error.code == 400 and any(m in error.description.lower() for m in GONE_MARKS):
-                return GONE
+                return GONE, None
             self.retry_after = error.retry_after
             self.log(f"Канал: пост {post_id} — перевірити не вдалося ({error})")
-            return UNKNOWN
+            return UNKNOWN, None
         copy = sent.get("message_id") if isinstance(sent, dict) else None
         if isinstance(copy, int):
             entry = {"chat": self.service_chat, "message_id": copy, "at": self.clock()}
@@ -66,7 +72,7 @@ class Presence:
             self._clean()
         else:
             self.log("Канал: Telegram не повернув номер копії перевірки — прибрати її нічим")
-        return PRESENT
+        return PRESENT, sent if isinstance(sent, dict) else None
 
     def settle(
         self,
