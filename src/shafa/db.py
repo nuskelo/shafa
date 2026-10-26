@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 class Status(StrEnum):
@@ -401,9 +401,72 @@ ALTER TABLE my_listings ADD COLUMN state TEXT;
 ALTER TABLE my_listings ADD COLUMN reason TEXT;
 """
 
+# Версія 16 (BOT-015): пост, який вона вже виклала в канал сама, — «📦 Лише в чергу Шафи».
+# `bot_drafts.state` отримує `queued` (CHECK не змінити — таблиця перебудовується, `bot_draft_parts`
+# посилається на неї, тому зв'язки на час перебудови вимкнено, як для `items`); у частини чернетки —
+# звідки переслано (`origin_post`, `origin_date` — номер і дата поста нашого каналу). `channel_posts`
+# — тексти постів каналу, які бот бачив (`channel_post`) чи знайшов переглядом: `date` — Unix.
+BOT_QUEUE = """
+CREATE TABLE bot_drafts_v16 (
+    id                 INTEGER PRIMARY KEY,
+    chat_id            INTEGER NOT NULL,
+    state              TEXT NOT NULL CHECK (state IN ('collecting', 'preview', 'editing',
+                       'publishing', 'published', 'uncertain', 'failed', 'canceled', 'expired',
+                       'queued')),
+    asked              INTEGER NOT NULL DEFAULT 0,
+    preview_message_id INTEGER,
+    preview_at         TEXT,
+    edit_message_id    INTEGER,
+    post_id            INTEGER,
+    folder_name        TEXT,
+    note               TEXT,
+    published_at       TEXT,
+    comments           TEXT CHECK (comments IN ('waiting', 'late', 'sending', 'done', 'failed')),
+    created_at         TEXT NOT NULL,
+    last_message_at    TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+INSERT INTO bot_drafts_v16 (id, chat_id, state, asked, preview_message_id, preview_at,
+                            edit_message_id, post_id, folder_name, note, published_at, comments,
+                            created_at, last_message_at, updated_at)
+SELECT id, chat_id, state, asked, preview_message_id, preview_at, edit_message_id, post_id,
+       folder_name, note, published_at, comments, created_at, last_message_at, updated_at
+FROM bot_drafts;
+DROP TABLE bot_drafts;
+ALTER TABLE bot_drafts_v16 RENAME TO bot_drafts;
+
+ALTER TABLE bot_draft_parts ADD COLUMN origin_post INTEGER;
+ALTER TABLE bot_draft_parts ADD COLUMN origin_date INTEGER;
+
+CREATE TABLE channel_posts (
+    post_id        INTEGER PRIMARY KEY,
+    date           INTEGER NOT NULL,
+    text           TEXT NOT NULL,
+    media_group_id TEXT,
+    seen_at        TEXT NOT NULL
+);
+"""
+
+
+def _bot_queue(conn: sqlite3.Connection) -> None:
+    """Перебудова `bot_drafts` без втрати частин чернеток: або вся, або ніяк."""
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = OFF")  # інакше DROP TABLE bot_drafts зачепить частини
+    try:
+        conn.executescript("BEGIN;" + BOT_QUEUE + "PRAGMA user_version = 16; COMMIT;")
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    if conn.execute("PRAGMA foreign_key_check").fetchall():
+        raise RuntimeError("Після перебудови бази порушено зв'язки таблиць")
+
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
     9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD, 13: ANSWERS, 14: LISTING_STATE,
+    15: _bot_queue,
 }  # fmt: skip
 
 

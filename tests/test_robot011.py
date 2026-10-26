@@ -155,6 +155,10 @@ def test_migration_from_old_database_adds_state_and_reason(tmp_path):
         conn.executescript(
             "ALTER TABLE my_listings DROP COLUMN state; ALTER TABLE my_listings DROP COLUMN reason;"
         )
+        conn.executescript(
+            "DROP TABLE channel_posts; ALTER TABLE bot_draft_parts DROP COLUMN origin_post; "
+            "ALTER TABLE bot_draft_parts DROP COLUMN origin_date;"
+        )  # BOT-015 (16)
         conn.execute(
             "INSERT INTO my_listings VALUES (5, 'Кеди', NULL, 's', '[]', 'u', '[]', NULL, NULL, 'x')"
         )
@@ -163,7 +167,7 @@ def test_migration_from_old_database_adds_state_and_reason(tmp_path):
 
     conn = db.connect(path)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 15
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 16
     assert tuple(conn.execute("SELECT id, name, state, reason FROM my_listings").fetchone()) == (
         5, "Кеди", None, None
     )  # fmt: skip
