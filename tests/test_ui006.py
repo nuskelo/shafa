@@ -5,11 +5,12 @@
 
 import re
 import shutil
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import pytest
 
-from shafa import web
+from shafa import review, web
 from shafa.db import Status
 from test_review import add_card
 from test_ui004 import ready, set_note
@@ -248,13 +249,17 @@ def test_photos_missing_card_offers_recheck_not_dead_archive(conn, root, app):
 # --- Архів ---
 
 
+# вчора: фіксована дата «старіла» і Картку очищало (CORE-018: тест червонів 27.10.2026)
+ARCHIVED_AT = (datetime.now(UTC) - timedelta(days=1)).isoformat(timespec="seconds")
+
+
 def archived(conn, root, code=None, text=None, folder="1342", post_id=1342, shafa_id=None):
     item = add_card(conn, root, folder=folder, post_id=post_id, status=Status.ARCHIVED)
     with conn:
         conn.execute(
             "UPDATE items SET archived_at = ?, problem_code = ?, problem_text = ?, shafa_id = ? "
             "WHERE id = ?",
-            ("2026-10-20T10:00:00+00:00", code, text, shafa_id, item),
+            (ARCHIVED_AT, code, text, shafa_id, item),
         )
     return item
 
@@ -262,7 +267,7 @@ def archived(conn, root, code=None, text=None, folder="1342", post_id=1342, shaf
 def test_archive_shows_deletion_date_reason_and_restore(conn, root, app):
     item = archived(conn, root, "post_deleted", "Пост видалено з каналу — продано")
     page = html(get(app, "/archived"))
-    assert "видалиться 27.10.2026" in page
+    assert f"видалиться {review.deletion_date(ARCHIVED_AT):%d.%m.%Y}" in page
     assert "Пост видалено з каналу — продано" in page
     assert 'name="action" value="restore"' in page
     assert f'action="/item/{item}"' in page
