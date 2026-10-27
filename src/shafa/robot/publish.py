@@ -263,8 +263,8 @@ def session_queue(
     return take(rows, Groups(0, 0), limits, min(limit, day_limit))
 
 
-POST_DELETED = "post_deleted"
-POST_DELETED_TEXT = "Пост видалено з каналу — продано"
+POST_DELETED = review.POST_DELETED  # CORE-018: логіка й текст — `review.archive_gone`
+POST_DELETED_TEXT = review.POST_DELETED_TEXT
 # DUP-001: що ШІ сказав про схоже оголошення (показує екран, див. `dup.verdict_text`)
 ARCHIVED_DUPLICATE = "Уже є на Шафі: {url} — {why}"
 SIMILAR_NO = "Схоже: {url} — ШІ: інша пара ({why})"
@@ -790,14 +790,7 @@ class Run:
             return False
         if self.presence(card.post_id) != GONE:
             return False
-        with self.conn:
-            cursor = self.conn.execute(
-                "UPDATE items SET status = ?, archived_at = ?, problem_code = ?, "
-                "problem_text = ?, updated_at = ? WHERE id = ? AND status = ?",
-                (Status.ARCHIVED, now(), POST_DELETED, POST_DELETED_TEXT, now(), card.id,
-                 Status.APPROVED),
-            )  # fmt: skip
-        if cursor.rowcount == 1:
+        if review.archive_gone(self.conn, card.post_id):
             report.notes.append(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві")
             self.log(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві, не публікую")
             events.emit(
