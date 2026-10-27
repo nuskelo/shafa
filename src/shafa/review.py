@@ -665,6 +665,50 @@ def purge_archive(conn: sqlite3.Connection, today: datetime | None = None) -> li
     return ids
 
 
+POST_DELETED = "post_deleted"
+POST_DELETED_TEXT = "Пост видалено з каналу — продано"
+_GONE_STATUSES = (Status.NEW, Status.REVIEW, Status.APPROVED)
+
+
+def archive_gone(conn: sqlite3.Connection, post_id: int) -> int:
+    """CORE-018: пост бота зник з каналу (вона видаляє лише продане) → усі його Картки в
+    `new`/`review`/`approved` у Архів з причиною `post_deleted`. Скільки Карток перенесено.
+
+    Не чіпає опубліковані й Картки з `shafa_id`, проблеми, `publishing` і старі пости з Експорту
+    (`borh-…`, source `export`: видалений старий пост ≠ продано). «Повернути» з Архіву лишається."""
+    stamp = now()
+    with conn:
+        cursor = conn.execute(
+            "UPDATE items SET status = ?, archived_at = ?, problem_code = ?, problem_text = ?, "
+            "updated_at = ? WHERE post_id = ? AND shafa_id IS NULL "
+            f"AND status IN ({', '.join('?' * len(_GONE_STATUSES))}) "
+            "AND post_id IN (SELECT post_id FROM posts WHERE source = 'bot')",
+            (Status.ARCHIVED, stamp, POST_DELETED, POST_DELETED_TEXT, stamp, post_id,
+             *_GONE_STATUSES),
+        )  # fmt: skip
+    return cursor.rowcount
+
+
+def archive_all_gone(conn: sqlite3.Connection) -> dict[int, int]:
+    """CORE-018: разове (ідемпотентне) прибирання на старті — Картки постів бота, які сайт
+    скасував через зникнення (`site_jobs.state = 'cancelled'`) чи нічна перевірка позначила
+    (`post_checks.gone_at`). «Невідомо» (`unknown_since`) — не підстава. `post_id → скільки`."""
+    posts = [
+        r[0]
+        for r in conn.execute(
+            f"SELECT DISTINCT i.post_id FROM items i JOIN posts p ON p.post_id = i.post_id "
+            f"WHERE p.source = 'bot' AND i.shafa_id IS NULL "
+            f"AND i.status IN ({', '.join('?' * len(_GONE_STATUSES))}) "
+            "AND (i.post_id IN (SELECT post_id FROM site_jobs WHERE state = 'cancelled') "
+            "OR i.post_id IN (SELECT post_id FROM post_checks WHERE gone_at IS NOT NULL)) "
+            "ORDER BY i.post_id",
+            _GONE_STATUSES,
+        )
+    ]
+    done = {post: archive_gone(conn, post) for post in posts}
+    return {post: n for post, n in done.items() if n}
+
+
 def deletion_date(archived_at: str) -> datetime:
     """Коли Картку з архіву буде прибрано (місцевий час)."""
     return (datetime.fromisoformat(archived_at) + timedelta(days=ARCHIVE_DAYS)).astimezone()

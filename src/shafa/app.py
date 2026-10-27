@@ -119,6 +119,7 @@ def start(
             for item_id in review.purge_archive(conn):
                 photos.drop_thumbnails(cache, item_id)
             fill.recheck(conn)  # нова версія правил — перерахунок без ШІ (CORE-009 B)
+            gone = review.archive_all_gone(conn)  # CORE-018: Картки постів, що вже зникли
         finally:
             conn.close()
         holder: dict[str, web.Server] = {}
@@ -137,6 +138,10 @@ def start(
         url_file.write_text(url, encoding="utf-8")
         print(f"Екран перевірки: {url}")
         events.emit("app.start", f"Програму запущено (версія {events.version()})")
+        for post_id, n in gone.items():
+            events.emit(
+                "post.gone", f"{post_id} видалено з каналу — {events.cards(n)} прибрано в Архів"
+            )
         night_stop = threading.Event()
         threading.Thread(
             target=nightly(path).run, args=(night_stop,), daemon=True, name="rehearse-nightly"

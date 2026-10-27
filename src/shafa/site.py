@@ -45,7 +45,7 @@ import anthropic
 import httpx2
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from shafa import ai, config, events, fill, folders, photos, rules
+from shafa import ai, config, events, fill, folders, photos, review, rules
 from shafa import sizes as sizes_mod
 from shafa.bot.presence import GONE, PRESENT, UNKNOWN, Presence
 from shafa.catalog import Kind
@@ -489,6 +489,7 @@ class Night:
     checked: int = 0
     gone: int = 0
     unknown: int = 0
+    archived: int = 0  # CORE-018: Карток прибрано в Архів
     gone_ids: list[int] = field(default_factory=list)  # зникли з каналу цієї ночі (для журналу)
 
 
@@ -652,9 +653,10 @@ class Worker:
         elif result == GONE:
             self._set(post_id, state="cancelled", next_at=None, error=None)
             self.log(f"Сайт: пост {post_id} видалено з каналу до виходу — на сайт не йде")
-            events.emit(
-                "post.gone", f"{post_id} видалено з каналу до виходу на сайт — на сайт не піде"
-            )
+            text = f"{post_id} видалено з каналу до виходу на сайт — на сайт не піде"
+            if archived := review.archive_gone(self.conn, post_id):  # CORE-018
+                text += f"; {events.cards(archived)} прибрано в Архів"
+            events.emit("post.gone", text)
         else:
             self._later(job, "не вдалося перевірити, чи пост є в каналі")
             self._tell_unknown()
@@ -772,6 +774,8 @@ class Worker:
             text += f", зникло з каналу {len(night.gone_ids)} ({shown}) → «Продано» піде на сайт"
         else:
             text += ", зниклих постів немає"
+        if night.archived:
+            text += f"; {events.cards(night.archived)} прибрано в Архів"
         if night.unknown:
             text += f"; не вдалося перевірити {night.unknown}"
         events.emit("site.night", text)
@@ -832,6 +836,7 @@ class Worker:
         if result == GONE and row["gone_at"] is None:
             night.gone += 1
             night.gone_ids.append(post_id)
+            night.archived += review.archive_gone(self.conn, post_id)  # CORE-018
             self.log(f"Сайт: пост {post_id} зник з каналу — продано")
         elif result == UNKNOWN:
             night.unknown += 1
