@@ -11,6 +11,8 @@
 `python -m shafa ui --db … --root … [--port P] [--no-browser]` — екран перевірки в браузері.
 `python -m shafa health [--json]` — самоперевірка (UI-003): база, папка, диск, ключі, бот, сайт,
 вхід робота; без браузера, нічого не міняє; код виходу 1, якщо є «помилка».
+`python -m shafa transfer-pack --out <zip>` / `transfer-unpack --zip <zip>` — перенесення пілоту
+на інший комп'ютер (OPS-001): без секретів, нічого не видаляє й не перезаписує.
 `python -m shafa report [--day YYYY-MM-DD]` — текст щоденного звіту Власнику (BOT-009); лише друкує,
 нічого не надсилає.
 `python -m shafa robot --login | --sync-catalog | --dry-fill --db … --post N [--post M …]` — робот
@@ -178,6 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--day", help="доба YYYY-MM-DD (типово сьогодні, місцевий час)")
     commands.add_parser("quit", help="закрити програму: екран і бота (для оновлення)")
     commands.add_parser("setup", help="майстер налаштування на її ноутбуці (секрети приховано)")
+    cmd = commands.add_parser("transfer-pack", help="перенесення пілоту: усе потрібне в один zip")
+    cmd.add_argument("--out", type=Path, required=True, help="куди записати zip (має не існувати)")
+    cmd = commands.add_parser("transfer-unpack", help="перенесення пілоту: розпакувати zip сюди")
+    cmd.add_argument("--zip", type=Path, required=True, help="zip з `transfer-pack`")
     cmd = commands.add_parser("ui", help="екран перевірки в браузері (лише на цьому комп'ютері)")
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
@@ -715,6 +721,20 @@ def run_health(args: argparse.Namespace) -> int:
     return 1 if health.has_failures(checks) else 0
 
 
+def run_transfer(args: argparse.Namespace) -> int:
+    from shafa import transfer
+
+    try:
+        if args.command == "transfer-pack":
+            print(transfer.pack(args.out).text())
+        else:
+            print(transfer.unpack(args.zip, log=print).text())
+    except transfer.TransferError as error:
+        print(f"Не вдалося: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def run_report(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     from shafa import app
     from shafa.bot import report
@@ -767,6 +787,8 @@ def main(argv: list[str] | None = None) -> int:
         from shafa import wizard
 
         return wizard.run()
+    if args.command in ("transfer-pack", "transfer-unpack"):
+        return run_transfer(args)
     if args.command == "quit":
         from shafa import app
 
