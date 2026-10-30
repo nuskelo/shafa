@@ -67,15 +67,24 @@ def test_archive_gone_all_sisters_of_the_post(conn):
     assert state(conn, a) == ARCHIVED and state(conn, b) == ARCHIVED
 
 
-def test_old_post_is_never_archived(conn):
-    """Видалений старий пост (Експорт, `borh-`) — не «продано»."""
+def test_old_post_is_archived_too(conn):
+    """CORE-019: зник старий пост (Експорт, `borh-`) — теж продано."""
     export = card(conn, post_id=100, source="export", status=Status.APPROVED)
     borh = card(conn, post_id=101, source="export", folder="borh-101")
 
-    assert review.archive_gone(conn, 100) == 0 and review.archive_gone(conn, 101) == 0
+    assert review.archive_gone(conn, 100) == 1 and review.archive_gone(conn, 101) == 1
 
-    assert state(conn, export) == (Status.APPROVED, None)
-    assert state(conn, borh) == (Status.NEW, None)
+    assert state(conn, export) == ARCHIVED and state(conn, borh) == ARCHIVED
+
+
+def test_old_post_published_or_with_shafa_id_untouched(conn):
+    published = card(conn, post_id=102, source="export", status=Status.PUBLISHED, shafa_id="7")
+    with_id = card(conn, post_id=103, source="export", status=Status.REVIEW, shafa_id="8")
+
+    assert review.archive_gone(conn, 102) == 0 and review.archive_gone(conn, 103) == 0
+
+    assert state(conn, published) == (Status.PUBLISHED, None)
+    assert state(conn, with_id) == (Status.REVIEW, None)
 
 
 @pytest.mark.parametrize(
@@ -127,7 +136,7 @@ def test_night_gone_archives_card_and_tells_count(conn, root, on, worker, clock,
     assert night and "1 Картка прибрано в Архів" in night[-1]
 
 
-def test_night_gone_old_post_card_untouched(conn, root, on, worker, clock, channel):
+def test_night_gone_old_post_card_archived(conn, root, on, worker, clock, channel):
     item = card(conn, source="export", status=Status.APPROVED)
     done_post(conn, root, worker, clock)
     channel.posts.discard(1401)
@@ -135,7 +144,7 @@ def test_night_gone_old_post_card_untouched(conn, root, on, worker, clock, chann
 
     steps(worker)
 
-    assert state(conn, item) == (Status.APPROVED, None)
+    assert state(conn, item) == ARCHIVED
 
 
 def test_night_unknown_is_not_a_reason(conn, root, on, worker, clock, channel):
@@ -215,16 +224,32 @@ def seed_gone(conn):
 def test_cleanup_archives_cancelled_and_gone_idempotent(conn):
     cancelled, checked, unknown, old, published = seed_gone(conn)
 
-    assert review.archive_all_gone(conn) == {1: 1, 2: 1}
+    assert review.archive_all_gone(conn) == {1: 1, 2: 1, 4: 1}
 
     assert state(conn, cancelled) == ARCHIVED and state(conn, checked) == ARCHIVED
     assert state(conn, unknown) == (Status.NEW, None)
-    assert state(conn, old) == (Status.NEW, None)
+    assert state(conn, old) == ARCHIVED  # CORE-019: старий пост — теж
     assert state(conn, published) == (Status.PUBLISHED, None)
     query = "SELECT updated_at, archived_at FROM items WHERE id = ?"
     before = tuple(conn.execute(query, (cancelled,)).fetchone())
     assert review.archive_all_gone(conn) == {}  # другий запуск нічого не міняє
     assert tuple(conn.execute(query, (cancelled,)).fetchone()) == before
+
+
+def test_cleanup_old_with_shafa_id_or_published_untouched(conn):
+    """CORE-019: Картка старого поста з `shafa_id` чи `published` лишається, хоч `gone_at` є."""
+    published = card(conn, post_id=6, source="export", status=Status.PUBLISHED, shafa_id="1")
+    with_id = card(conn, post_id=7, source="export", status=Status.REVIEW, shafa_id="2")
+    plain = card(conn, post_id=8, source="export", status=Status.REVIEW)
+    with conn:
+        for post in (6, 7, 8):
+            conn.execute("INSERT INTO post_checks (post_id, gone_at) VALUES (?, 'x')", (post,))
+
+    assert review.archive_all_gone(conn) == {8: 1}
+
+    assert state(conn, published) == (Status.PUBLISHED, None)
+    assert state(conn, with_id) == (Status.REVIEW, None)
+    assert state(conn, plain) == ARCHIVED
 
 
 def test_app_start_cleans_up_and_tells():
