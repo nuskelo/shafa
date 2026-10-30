@@ -272,10 +272,10 @@ UNSURE_ASKED = ". ШІ не впевнений: {why}"
 UNSURE_NOT_ASKED = ". ШІ не порівняв: {why}"
 
 
-def from_bot(conn: sqlite3.Connection, post_id: int) -> bool:
-    """Пост опублікував бот (у канал `TELEGRAM_BOT_CHANNEL_ID`) — лише такі перевіряємо."""
-    row = conn.execute("SELECT source FROM posts WHERE post_id = ?", (post_id,)).fetchone()
-    return row is not None and row[0] == "bot"
+def known_gone(conn: sqlite3.Connection, post_id: int) -> bool:
+    """CORE-019: нічна перевірка вже знайшла, що поста немає в каналі (`post_checks.gone_at`)."""
+    row = conn.execute("SELECT gone_at FROM post_checks WHERE post_id = ?", (post_id,)).fetchone()
+    return row is not None and row[0] is not None
 
 
 def already_published(conn: sqlite3.Connection, item_id: int, post_id: int | None) -> str | None:
@@ -784,11 +784,14 @@ class Run:
         return None
 
     def _post_deleted(self, report: Report, card: review.Card) -> bool:
-        """SITE-002: пост від бота видалено з каналу (вона видаляє лише продане) → Архів, не
-        публікуємо. «Невідомо» (мережа, 429) — публікуємо як завжди: це не продаж."""
-        if self.presence is None or card.post_id is None or not from_bot(self.conn, card.post_id):
+        """SITE-002: пост видалено з каналу (вона видаляє лише продане) → Архів, не публікуємо.
+        CORE-019: і старий пост з Експорту; `gone_at` від нічної перевірки — без запиту в Telegram.
+        «Невідомо» (мережа, 429) — публікуємо як завжди: це не продаж."""
+        if card.post_id is None:
             return False
-        if self.presence(card.post_id) != GONE:
+        if not known_gone(self.conn, card.post_id) and (
+            self.presence is None or self.presence(card.post_id) != GONE
+        ):
             return False
         if review.archive_gone(self.conn, card.post_id):
             report.notes.append(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві")
