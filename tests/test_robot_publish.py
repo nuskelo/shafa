@@ -984,14 +984,50 @@ def test_unknown_presence_is_not_sold_published_as_usual(env):
     assert state(env.conn, item)[0] == Status.PUBLISHED
 
 
-def test_only_bot_posts_checked(env):
-    item = add(env)  # пост з Експорту — інший канал, не перевіряємо
+def test_old_export_post_gone_archived_not_published(env):
+    """CORE-019: старий пост з Експорту, що зник з каналу, — теж продано."""
+    item = add(env)  # пост з Експорту (source не `bot`)
     env.presence = {1342: "gone"}
+
+    report = env.run()
+
+    assert env.checked == [1342]
+    assert state(env.conn, item) == (Status.ARCHIVED, "post_deleted")
+    assert report.published == [] and env.driver.submits == []
+
+
+def test_old_export_post_unknown_presence_published_as_usual(env):
+    item = add(env)
+    env.presence = {1342: "unknown"}
 
     env.run()
 
-    assert env.checked == []
+    assert env.checked == [1342]
     assert state(env.conn, item)[0] == Status.PUBLISHED
+
+
+def test_known_gone_archived_without_presence_call(env):
+    """CORE-019: `post_checks.gone_at` уже є — Архів без запиту в Telegram."""
+    item = add(env)
+    env.presence = {1342: "present"}
+    with env.conn:
+        env.conn.execute("INSERT INTO post_checks (post_id, gone_at) VALUES (1342, 'x')")
+
+    report = env.run()
+
+    assert env.checked == []
+    assert state(env.conn, item) == (Status.ARCHIVED, "post_deleted")
+    assert report.published == [] and env.driver.submits == []
+
+
+def test_known_gone_archived_even_without_presence_checker(env):
+    item = add(env)  # env.presence = None — перевірки Telegram немає зовсім
+    with env.conn:
+        env.conn.execute("INSERT INTO post_checks (post_id, gone_at) VALUES (1342, 'x')")
+
+    env.run()
+
+    assert state(env.conn, item) == (Status.ARCHIVED, "post_deleted")
 
 
 # --- ROBOT-006: бренд ---
