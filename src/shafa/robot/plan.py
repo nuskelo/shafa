@@ -105,6 +105,19 @@ class Precheck:
     notes: list[str]
 
 
+# UX-002: чому Картка не готова — людською мовою (код — з `Card.approve_block`)
+NOT_READY = {
+    "no_section": "немає розділу — відкрийте Картку й оберіть розділ",
+    "section_unknown": "такого розділу немає на Шафі — відкрийте Картку й оберіть розділ зі списку",
+    "section_yellow": "розділ позначено жовтим — відкрийте Картку, підтвердіть розділ і схваліть знову",
+    "no_sizes": "немає розміру — відкрийте Картку, впишіть розмір і схваліть знову",
+    "babies_size": "«Для малюків» — лише до 22 розміру — відкрийте Картку й оберіть «Для дівчаток» "
+    "чи «Для хлопчиків»",
+    "no_colors": "немає кольору — відкрийте Картку, оберіть колір і схваліть знову",
+    "no_gender": "для малюків Шафа вимагає «Стать» — відкрийте Картку й оберіть",
+}
+
+
 def precheck(card: Card, root: Path | None) -> Precheck:
     """Та сама перевірка, що в `plan()`, але без вимоги «Схвалено» й без `approve_block`.
 
@@ -130,7 +143,7 @@ def plan(card: Card, root: Path) -> tuple[list[Step], list[str]]:
     if card.status != Status.APPROVED:
         raise PlanError("Картка не схвалена")
     if block := card.approve_block():
-        raise PlanError(f"Картка не готова: {block}")
+        raise PlanError(f"Картка не готова: {NOT_READY.get(block, block)}")
     return _build(card, root)
 
 
