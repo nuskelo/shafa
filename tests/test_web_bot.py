@@ -32,7 +32,7 @@ def with_token(monkeypatch):
 
 def test_no_token(app, started):
     page = html(get(app, "/review"))
-    assert "Бот: не налаштований (немає токена)" in page
+    assert "Бот: не налаштований — скажіть Власнику" in page
     assert "Запустити бота" not in page
     assert location(post(app, "/bot", action="start", back="/review")) == (
         "/review?msg=bot_no_token"
@@ -63,7 +63,8 @@ def test_failed_bot_shows_reason(conn, app, with_token):
     with conn:
         conn.execute("INSERT INTO bot_status VALUES (1, 'x', 'x', 'Бот не адміністратор каналу')")
     page = html(get(app, "/review"))
-    assert "Бот: зупинився: Бот не адміністратор каналу" in page
+    assert "Бот: зупинився через помилку — якщо повториться, скажіть Власнику" in page
+    assert "Для Власника: Бот не адміністратор каналу" in page
     assert "Запустити бота" in page
 
 

@@ -461,7 +461,7 @@ def test_button_refused_while_publishing_nothing_changes(conn, root, app, spawne
         )
         page = html(get(app, "/review"))
         assert "Пробно заповнити завтрашні" not in page and "Робот публікує" in page
-    assert "перевірка після неї" in html(get(app, "/review?msg=rehearse_busy"))
+    assert "пробну перевірку не запущено" in html(get(app, "/review?msg=rehearse_busy"))
 
     assert spawner.calls == []
     assert (

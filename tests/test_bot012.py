@@ -456,10 +456,10 @@ def test_single_card_ai_run_is_one_short_line(conn, root, data):
 def test_ai_run_where_every_card_fails_is_a_loud_stop(conn, root, data):
     many(conn, root, 2)
     planned = [fill.plan(conn, root, r) for r in fill.pick_items(conn, None, 10)]
-    error = ai.AiError("Ключ Claude API не прийнято (401)", None)
+    error = ai.AiError("Ключ ШІ не приймається — скажіть Власнику", None)
     fill.fill_all(conn, FakeClient(error), planned)
     last = journal(data)[-1]
-    assert last["kind"] == "ai.stop" and "Ключ Claude API не прийнято" in last["text"]
+    assert last["kind"] == "ai.stop" and "Ключ ШІ не приймається" in last["text"]
     assert events.info(last["kind"]).loud
 
 
@@ -542,7 +542,7 @@ def test_batch_not_created_is_loud(conn, root, data):
     many(conn, root, 2)
     batch.send(conn, client, root, TODAY, LIMITS)
     [stop] = journal(data)
-    assert stop["kind"] == "ai.stop" and "Ключ Claude API не прийнято" in stop["text"]
+    assert stop["kind"] == "ai.stop" and "Ключ ШІ не приймається" in stop["text"]
 
 
 def test_rules_only_runs_are_short_events(conn, root, data):

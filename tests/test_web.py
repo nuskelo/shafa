@@ -69,7 +69,7 @@ def test_localhost_allowed(app, item_id):
 def test_post_without_token_or_from_foreign_page_refused(conn, app, item_id, token, origin):
     response = post(app, f"/item/{item_id}", token=token, origin=origin, action="reject")
     assert response.status == 403
-    assert "застаріла" in response.body.decode("utf-8")
+    assert "Програму перезапускали" in response.body.decode("utf-8")
     assert status(conn, item_id) == Status.REVIEW
 
 

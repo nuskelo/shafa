@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Закрити програму? · Шафа-помічник{% endblock %}
+{% block status %}{% endblock %}
+{% block main %}
+<section class="problem-box confirm">
+  <p class="problem">Закрити програму? Бот у Telegram перестане приймати пости, а продане не зніматиметься з сайту, доки програма закрита. Щоб усе працювало — просто згорніть вікно.</p>
+  <form method="post" action="/quit" class="decide">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="sure" value="1">
+    <button class="reject">Закрити</button>
+    <a class="button" href="{{ back_url }}">Не закривати</a>
+  </form>
+</section>
+{% endblock %}

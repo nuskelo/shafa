@@ -81,7 +81,7 @@ def test_quit_button_stops_screen_and_bot():
         assert status == 200 and ">Вийти</button>" in page
         token = re.search(r'name="token" value="([^"]+)"', page)[1]
 
-        status, page = _post(url, "/quit", {"token": token})
+        status, page = _post(url, "/quit", {"token": token, "sure": "1"})
 
     assert status == 200 and "Програму закрито" in page and "Бота зупинено." in page
     thread.join(timeout=10)

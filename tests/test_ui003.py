@@ -200,7 +200,7 @@ def test_ai_key_missing_broken_timeout_and_ok(ready, monkeypatch):
 
     assert ready.run()["Ключ ШІ"].status == OK
     check = ready.run(ai_models=refuse)["Ключ ШІ"]
-    assert check.status == FAIL and "Немає з'єднання" in check.text
+    assert check.status == FAIL and "Немає зв'язку з ШІ" in check.text
 
     monkeypatch.setattr(health, "NET_LIMIT", 0.05)
     gate = threading.Event()
@@ -217,7 +217,7 @@ def test_ai_key_missing_broken_timeout_and_ok(ready, monkeypatch):
 
 def test_ai_budget_ok_and_exhausted(ready, monkeypatch):
     check = ready.run()["Бюджет ШІ на сьогодні"]
-    assert check.status == OK and "$3.00" in check.text
+    assert check.status == OK and "3,00 $" in check.text
     monkeypatch.setattr(health.batch, "budget_left", lambda *a: 0)
     check = ready.run()["Бюджет ШІ на сьогодні"]
     assert check.status == WARN and check.fix == "ШІ продовжить завтра"
@@ -238,7 +238,7 @@ def test_bot_token_missing_and_rights_error(ready, monkeypatch):
     check = ready.run(bot_rights=no_rights)["Бот"]
     assert check.status == FAIL and "не адміністратор" in check.text
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN")
-    assert "токена" in ready.run()["Бот"].text
+    assert ready.run()["Бот"].text == "Бот не підключений"
 
 
 def test_bot_process_states(ready):
@@ -273,7 +273,7 @@ def test_bot_not_running(ready, tmp_path):
 def test_site_skip_missing_key_errors_ok(ready, monkeypatch):
     assert ready.run()["Сайт"].status == SKIP
     monkeypatch.setenv("SHAFA_SITE_SEND", "так")
-    assert "ключа" in ready.run()["Сайт"].text
+    assert ready.run()["Сайт"].text == "Сайт не підключений"
     monkeypatch.setenv("SITE_INTEGRATION_KEY", SITE_KEY)
     assert ready.run()["Сайт"].status == OK
 
@@ -440,7 +440,7 @@ def panel_app(conn, tmp_path, root, checks, calls=None):
 
 GOOD = [Check(name, OK, "добре") for name in NAMES]
 BAD = [
-    Check("Ключ ШІ", FAIL, "Ключ ШІ не працює: Ключ Claude API не прийнято (401)", "Напишіть Власнику"),
+    Check("Ключ ШІ", FAIL, "Ключ ШІ не приймається — скажіть Власнику", "Скажіть Власнику"),
     Check("Бот", WARN, "Права є, але бот @x не запущений", "Натисніть «Запустити бота»"),
     Check("База", OK, "добре"),
 ]  # fmt: skip
@@ -460,9 +460,9 @@ def test_panel_problems_show_what_and_how_red_first(conn, tmp_path, root):
     post(app, "/health", back="/review")
     page = html(get(app, "/review"))
     assert "Є що виправити" in page and "Все гаразд" not in page
-    assert page.index("Ключ ШІ не працює") < page.index("не запущений")  # червоні вище жовтих
-    assert "Що зробити: Напишіть Власнику" in page and "Що зробити: Натисніть" in page
-    assert "решта (1)" in page and "health-fail" in page and "health-warn" in page
+    assert page.index("Ключ ШІ не приймається") < page.index("не запущений")  # червоні вище жовтих
+    assert "Що зробити: Скажіть Власнику" in page and "Що зробити: Натисніть" in page
+    assert "інші 1 — гаразд" in page and "health-fail" in page and "health-warn" in page
 
 
 def test_panel_says_checking_while_running(conn, tmp_path, root):

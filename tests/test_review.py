@@ -29,7 +29,7 @@ BLANK = [
     ai.Field("teen", None),
     ai.Field("gender", None),
     ai.Field("keywords", ["кеди", "ecco", "шкіряні", "білі"]),
-    ai.Field("photo_order", ["IMG_2.JPG", "IMG_1.JPG"], True, "ШІ переставило фото"),
+    ai.Field("photo_order", ["IMG_2.JPG", "IMG_1.JPG"], True, "ШІ переставив фото"),
 ]
 
 
