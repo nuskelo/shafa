@@ -135,7 +135,7 @@ def test_not_found_stays_preview_and_is_named(conn, bot, tg, upd, clock):
     answer = last_text(tg)
     assert "У черзі Шафи: 2 (7001, 7002)." in answer
     assert "Не знайшов: 1 — «Шкіряна сумка Furla. 1800грн» — перешли ці пости з каналу" in answer
-    assert "натисни кнопку в їхньому прев'ю" in answer
+    assert "під новими прев'ю натисни «📦 Пост уже в каналі»" in answer
     assert [r["post_id"] for r in posts(conn)] == [7000, 7001, 7002]
     assert not (conn.execute("SELECT 1 FROM site_jobs WHERE post_id = 7003").fetchone())
 

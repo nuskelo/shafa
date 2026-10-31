@@ -360,8 +360,10 @@ def test_album_preview_then_publish(conn, bot, tg, upd, clock, root):
     post = conn.execute("SELECT * FROM posts WHERE post_id = 1401").fetchone()
     assert (post["source"], post["text"]) == ("bot", caption)
     assert post["date"] == core.local_date(1_791_960_000)
+    until = (datetime.fromisoformat(post["date"]) + timedelta(days=7)).strftime("%d.%m.%Y")
     assert tg.texts(SELLER)[-1] == (
-        "Опубліковано: https://t.me/c/2394827824/1401\nЗбережено фото для Шафи: 3."
+        "Опубліковано: https://t.me/c/2394827824/1401\nЗбережено фото для Шафи: 3.\n"
+        f"На Шафу — не раніше {until}."
     )
 
 
@@ -682,7 +684,8 @@ def test_too_big_file(conn, bot, tg, upd):
 def test_video_and_command(conn, bot, tg, upd):
     bot.handle(upd(message=message(11, video={"file_id": "v"})))
     bot.handle(upd(message=message(12, text="/start")))
-    assert tg.texts(SELLER) == [core.TEXTS["not_photo"], core.TEXTS["help"]]
+    help_text = core.TEXTS["help"].format(max=core.MAX_PHOTOS, wait="тиждень")
+    assert tg.texts(SELLER) == [core.TEXTS["not_photo"], help_text]
     assert conn.execute("SELECT count(*) FROM bot_drafts").fetchone()[0] == 0
 
 
@@ -691,9 +694,8 @@ def test_broken_photo_publishes_nothing(conn, bot, tg, upd, clock, root):
     tg.files["f2"] = b"not a jpeg"
     press(upd, bot, tg)
     assert tg.channel_posts == [] and state(conn) == "failed"
-    assert tg.texts(SELLER)[-1] == (
-        "Не вийшло: фото не відкривається. Нічого не опубліковано — надішли пост ще раз."
-    )
+    assert tg.texts(SELLER)[-1] == core.TEXTS["failed_format"]
+    assert "(не файлом)" in tg.texts(SELLER)[-1]
 
 
 def test_download_error_publishes_nothing(conn, bot, tg, upd, clock):
@@ -739,7 +741,7 @@ def long_post(length):
 def test_too_long_text(conn, bot, tg, upd, clock):
     send_post(bot, tg, upd, clock, files=1, text=long_post(1025))
     assert state(conn) == "failed"
-    assert tg.texts(SELLER)[-1].startswith("Текст задовгий: 1025 символів")
+    assert tg.texts(SELLER)[-1].startswith("Текст задовгий: скороти ще на 1 символ (")
 
 
 def test_longest_text_fits(conn, bot, tg, upd, clock):
