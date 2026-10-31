@@ -52,24 +52,46 @@ OPTIONS = (
     Option(
         DAILY_LIMIT_SETTING, "Публікацій на Шафі за добу", "від 1 до 100", str(DAILY_LIMIT), "int"
     ),
-    Option(MONEY_SETTING, "Витрати на ШІ за добу, $", "від 0,01 до 100", str(DAILY_USD), "money"),
     Option(
-        WAIT_SETTING, "ШІ — через скільки днів після посту", "від 0 до 60", str(WAIT_DAYS), "int"
+        MONEY_SETTING,
+        "Скільки можна витратити на ШІ за день, доларів",
+        "від 0,01 до 100; на 3 $ ШІ заповнює ≈ 70 Карток",
+        str(DAILY_USD),
+        "money",
     ),
-    Option(BATCH_SETTING, "Товарів в одному пакеті ШІ", "від 1 до 500", "50", "int"),
+    Option(
+        WAIT_SETTING,
+        "Скільки днів чекати, перш ніж ШІ заповнить нову пару",
+        "від 0 до 60; за цей час частина пар продається — і не коштує грошей",
+        str(WAIT_DAYS),
+        "int",
+    ),
+    Option(
+        BATCH_SETTING,
+        "Скільки Карток відправляти на ШІ за раз",
+        "від 1 до 500; не змінювати без Власника",
+        "50",
+        "int",
+    ),
     Option(
         listings.DAYS_SETTING,
-        "Перечитувати «Мої речі» кожні N днів",
+        "Як часто перечитувати «Мої речі» на Шафі, днів",
         "від 1 до 30; опубліковане роботом дописується одразу",
         str(listings.DAYS_DEFAULT),
         "int",
     ),
     Option(ROOT_SETTING, "Головна папка з фото", "папка має існувати", "", "path"),
-    Option(DELETE_SETTING, "Видаляти папки з «Опубліковано» через 3 дні", "", "", "flag"),
+    Option(
+        DELETE_SETTING,
+        "Видаляти папки з «Опубліковано» через 3 дні",
+        "Фото опублікованих пар і старих постів стираються назавжди через 3 дні.",
+        "",
+        "flag",
+    ),
     Option(
         site.SEND_SETTING,
         "Відправляти на сайт нові пари з бота",
-        "потрібен ключ сайту в майстрі налаштувань",
+        "ключ сайту налаштовує Власник",
         "",
         "flag",
     ),
@@ -83,14 +105,15 @@ OPTIONS = (
     Option(
         site.SOLD_SETTING,
         "Перевіряти продане щоночі",
-        "зник пост з каналу — на сайті «Продано»",
+        "Зник пост з каналу — на сайті «Продано». Не знімайте: інакше продані пари лишаться на сайті.",
         "1",
         "flag",
     ),
     Option(
         site.FUSE_SETTING,
-        "Запобіжник: найбільше зниклих постів за ніч",
-        "від 1 до 1000; зникло більше — «Продано» не надсилається, Власнику повідомлення",
+        "Захист від помилкового «Продано»: якщо за ніч зникло більше постів, ніж стільки — "
+        "«Продано» не надсилати, а спитати",
+        "від 1 до 1000",
         str(site.FUSE_DEFAULT),
         "int",
     ),
@@ -119,6 +142,24 @@ def current() -> dict[str, str]:
     return values
 
 
+def _unchanged_root(raw: str) -> bool:
+    """Папку в полі не міняли: там те саме, що діє зараз (навіть якщо її вже нема на диску)."""
+    return raw.strip('"') == current()[ROOT_SETTING]
+
+
+def folder_warnings(path: Path) -> list[str]:
+    """Про Головну папку: її немає на диску чи вона в OneDrive (збереженню не заважає)."""
+    if not path.is_dir():
+        return [f"Папки «{path}» зараз немає на комп'ютері — поверніть її або вкажіть іншу."]
+    if places.in_onedrive(path):
+        text = (
+            "Головна папка в OneDrive: фото поїдуть у хмару, програма читатиме їх "
+            f"повільно. Краще {places.default_root()}"
+        )
+        return [text]
+    return []
+
+
 def check(form: dict[str, str]) -> tuple[dict[str, str], dict[str, str], list[str]]:
     """Форма → (значення для `.env`, помилки за назвою поля, попередження)."""
     values: dict[str, str] = {}
@@ -131,37 +172,60 @@ def check(form: dict[str, str]) -> tuple[dict[str, str], dict[str, str], list[st
         elif option.kind == "int":
             low, high = _LIMITS[option.name]
             if not raw.isdigit() or not low <= int(raw) <= high:
-                errors[option.name] = f"ціле число {option.hint}"
+                errors[option.name] = f"ціле число від {low} до {high}"
             else:
                 values[option.name] = str(int(raw))
         elif option.kind == "money":
+            # «$», пробіли й кома — як пише людина: «2,5 $»
+            cleaned = raw.replace("$", "").replace("\xa0", "").replace(" ", "").replace(",", ".")
             try:
-                money = Decimal(raw.replace(",", "."))
+                money = Decimal(cleaned)
             except InvalidOperation:
-                money = Decimal(-1)
+                errors[option.name] = "лише число, напр. 3 або 2,5"
+                continue
             if not money.is_finite() or not Decimal(0) < money <= 100:
-                errors[option.name] = f"сума {option.hint}"
+                errors[option.name] = "від 0,01 до 100"
             else:
                 values[option.name] = format(money.normalize(), "f")
         else:
             path = Path(raw.strip('"')) if raw else None
-            if path is None or not path.is_dir():
-                errors[option.name] = "такої папки немає"
-            else:
+            if path is not None and path.is_dir():
                 values[option.name] = str(path)
-                if places.in_onedrive(path):
-                    warnings.append(
-                        "Головна папка в OneDrive: фото поїдуть у хмару, програма читатиме їх "
-                        f"повільно. Краще {places.default_root()}"
-                    )
+                warnings += folder_warnings(path)
+            elif path is not None and _unchanged_root(raw):
+                # не змінювали — не блокуємо решту полів; папку лишаємо як є
+                warnings += folder_warnings(path)
+            else:
+                where = f"Папки «{raw}» немає на комп'ютері." if raw else "Папку не вказано."
+                errors[option.name] = (
+                    f"{where} Вставте шлях до папки з фото "
+                    "(Провідник → адресний рядок → копіювати)."
+                )
     if OLD_SETTING in values and NEW_SETTING in values:
         total = int(values[OLD_SETTING]) + int(values[NEW_SETTING])
         if total > GROUPS_MAX:
             errors[OLD_SETTING] = errors[NEW_SETTING] = (
                 f"старих і нових разом {total}, а можна не більше {GROUPS_MAX} на день — "
-                "зменш одне з чисел"
+                "зменште одне з чисел"
             )
     return values, errors, warnings
+
+
+def notes(values: dict[str, str]) -> dict[str, str]:
+    """Попередження під полем (значення не міняються): добовий ліміт менший за старих + нових."""
+    try:
+        limit = int(values[DAILY_LIMIT_SETTING])
+        total = int(values[OLD_SETTING]) + int(values[NEW_SETTING])
+    except (KeyError, ValueError):
+        return {}
+    if limit >= total:
+        return {}
+    return {
+        DAILY_LIMIT_SETTING: (
+            f"Публікацій за добу ({limit}) менше, ніж старих + нових ({total}): "
+            f"робот зупиниться на {limit}."
+        )
+    }
 
 
 def save(form: dict[str, str]) -> tuple[dict[str, str], list[str]]:

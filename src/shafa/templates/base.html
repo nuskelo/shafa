@@ -28,8 +28,7 @@
       </details>
     </nav>
     {% if can_quit %}
-    <form method="post" action="/quit" class="quit">
-      <input type="hidden" name="token" value="{{ token }}">
+    <form method="get" action="/quit" class="quit">
       <button title="Закрити програму: екран і бота">Вийти</button>
     </form>
     {% endif %}

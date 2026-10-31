@@ -52,6 +52,8 @@ from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
 from shafa.scan import NO_SECTION_TEXT, OLD_NO_SECTION_TEXT, STICKY, scan
 
+AI_SETTINGS_TEXT = "Налаштування ШІ зіпсоване — скажіть Власнику"
+UNKNOWN_ACTION = "Програма не зрозуміла цю дію. Поверніться на головну й спробуйте ще раз."
 HEALTH_EVERY = 30  # секунд: «Перевірити ще раз» не частіше
 COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
 FINISHED_SHOWN = timedelta(days=2)  # так довго панель пам'ятає «Готово о …» (UX-001)
@@ -80,7 +82,7 @@ TAB_TITLES = {
 CARD_TABS = (Status.REVIEW, Status.APPROVED, Status.PROBLEM, Status.ARCHIVED)
 MY_ITEMS = "https://shafa.ua/uk/my/clothes/active"
 STICKY_TITLES = {  # проблеми публікації — простими словами, без кодів
-    "publish_uncertain": "Не впевнений, чи товар з'явився на Шафі — перевір",
+    "publish_uncertain": "Не впевнений, чи товар з'явився на Шафі — перевірте",
     "publish_error": "Шафа не прийняла при публікації",
     "possible_duplicate": "Схожий товар уже є на Шафі",
     "already_published": "Цей пост уже опубліковано з іншої папки",
@@ -151,10 +153,10 @@ MESSAGES = {
     "robot_fake_login": "У підставному режимі вхід на Шафу не потрібен",
     "rehearse_started": "Пробна перевірка запускається — за хвилину відкриється окреме вікно Chrome. "
     "Нічого не публікується; не закривайте вікно, поки воно працює",
-    "rehearse_busy": "Робот зайнятий (йде публікація чи інша справа) — пробна перевірка після неї",
+    "rehearse_busy": "Робот зараз зайнятий — пробну перевірку не запущено. Натисніть ще раз, коли робот зупиниться.",
     "rehearse_cannot": "Пробну перевірку зараз не запустити: немає Схвалених або робот ще запускається",
     "rehearse_fake": "У підставному режимі пробної перевірки немає",
-    "rehearse_setup": "Пробну перевірку не запущено: неправильне налаштування кількості Карток",
+    "rehearse_setup": "Пробну перевірку не запущено: налаштування зіпсоване — скажіть Власнику.",
     "health_started": "Перевіряю — результат з'явиться на панелі за кілька секунд",
     "health_running": "Перевірка вже йде",
     "health_wait": "Щойно перевіряли — зачекайте пів хвилини",
@@ -164,15 +166,24 @@ MESSAGES = {
     "ваші правки збережуться",
     "ai_unavailable": "ШІ зараз недоступний — Картку поставлено в чергу; скажіть Власнику.",
     "recheck_done": "Картки оновлено за новими правилами, без ШІ — ваші правки збережено",
-    "ai_retry_done": "ШІ заповнило бланк заново — ваші правки збережено",
-    "ai_retry_failed": "ШІ не вдалося — старий бланк лишився (подробиці на панелі)",
+    "ai_retry_done": "ШІ заповнив бланк заново — ваші правки збережено",
+    "ai_retry_failed": "ШІ не зміг — старий бланк лишився (подробиці на панелі)",
     "ai_budget": "Ліміт витрат на ШІ за добу вичерпано — спробуйте завтра",
-    "ai_no_key": "Немає ключа ШІ (ANTHROPIC_API_KEY) — скажіть Власнику",
+    "ai_no_key": "ШІ не підключений — скажіть Власнику",
     "ai_settings": "Неправильні налаштування ШІ — скажіть Власнику (подробиці на панелі)",
-    "ai_photo": "Фото Картки не відкривається — ШІ не запускалось",
+    "ai_photo": "Фото Картки не відкривається — ШІ не запускався",
     "bot_started": "Запускаю бота — за кілька секунд він з'явиться на панелі",
     "bot_running": "Бот уже працює",
-    "bot_no_token": "Бот не налаштований: немає TELEGRAM_BOT_TOKEN у .env — скажіть Власнику",
+    "bot_no_token": "Бот не підключений — скажіть Власнику",
+    "settings_saved": "Збережено. Нові значення діють з наступного «Старт».",
+    "settings_root": "Збережено. Нова папка діятиме для бота після перезапуску програми: "
+    "«Вийти» і відкрити ярликом знову.",
+    "reread_started": "При наступному «Старт» робот спершу перечитає «Мої речі» — це додасть 5–10 хв.",
+    "sold_released": "Добре: «Продано» для {n} пар надішле бот, поки програма відкрита.",
+    "sold_none": "Відкладених «Продано» немає.",
+    "export_bad": "Це не експорт каналу Telegram (потрібен файл result.json)",
+    "export_done": "Експорт завантажено: постів {posts}, нових {added}. "
+    "Папок {folders}, у «Проблемах» {problems}.",
 }
 PROBLEM_HINTS = {
     "bad_folder_name": "Перейменуйте папку на номер поста (наприклад, 1342).",
@@ -186,7 +197,7 @@ PROBLEM_HINTS = {
     "too_many_photos": "Залиште в папці не більше 10 фото.",
     "folder_missing": "Папку перейменовано або видалено.",
     "robot_field_missing": "Шафа, мабуть, змінила форму. «Повернути на перевірку» — виправте поля й схваліть знову; «Перевірити ще раз» — робот спробує ще раз без змін. Якщо повторюється — скажіть Власнику.",
-    "ai_error": "ШІ не заповнило бланк. «Перевірити ще раз» поверне Картку в чергу на ШІ.",
+    "ai_error": "ШІ не заповнив бланк. «Перевірити ще раз» поверне Картку в чергу на ШІ.",
     "publish_uncertain": "Робот натиснув «Додати річ», але не дочекався відповіді. Перевірте на Шафі, чи товар з'явився. Робот сам не повторює.",
     "possible_duplicate": "Схожий товар уже є на Шафі або цей пост уже опубліковано. Повторне оголошення заборонене правилами Шафи.",
     "shafa_declined": "Шафа перевірила оголошення вже після публікації й відхилила його. Відкрийте його на Шафі й виправте вручну або приберіть Картку в «В архів». Робот цей товар вдруге не публікує.",
@@ -354,6 +365,7 @@ class AiState:
     new_posts: int = 0  # пости бота, з яких ще немає Карток (потрібна кнопка)
     cost: str | None = None  # «≈ 1,36 $» — лише під «Детальніше»
     error: bool = False  # немає ключа, бюджет, збій — єдине, що фарбує кружок жовтим
+    detail: str = ""  # технічна причина — лише під «Детальніше» (для Власника)
     wait_text: str = ""  # «7 днів»
 
 
@@ -373,7 +385,8 @@ class HealthView:
     code: str
     at: str = ""
     rows: list[health.Check] = field(default_factory=list)  # червоні, потім жовті
-    ok: int = 0
+    ok: int = 0  # решта перевірок (гаразд чи не потрібні): рядків + ok = усього
+    old: bool = False  # результат з файлу: у цьому запуску програми ще не перевіряли
 
 
 @dataclass
@@ -383,6 +396,7 @@ class BotState:
     code: str  # running / stopped / failed / no_token
     text: str
     can_start: bool = False
+    detail: str = ""  # технічна причина — лише під «Детальніше» (для Власника)
 
 
 def _spawn_bot(args: list[str]) -> object:
@@ -455,11 +469,22 @@ class App:
             lstrip_blocks=True,
         )
         self.env.filters["dmy"] = dmy
+        self.env.globals["when"] = self.when
         self.env.filters["card_name"] = card_name
         self.env.filters["plain"] = plain
         self.env.filters["names"] = names
         self.env.globals["archive_reason"] = archive_reason
         self.env.globals["plural"] = plural
+
+    def when(self, stamp: str | None) -> str:
+        """«сьогодні о 10:08» / «вчора о 22:22» / «30.10 о 22:22» (місцевий час)."""
+        try:
+            moment = datetime.fromisoformat(stamp or "").astimezone(self.today().tzinfo)
+        except ValueError:
+            return stamp or ""
+        days = (self.today().date() - moment.date()).days
+        day = "сьогодні" if days == 0 else "вчора" if days == 1 else f"{moment:%d.%m}"
+        return f"{day} о {moment:%H:%M}"
 
     # --- Захист ---
 
@@ -485,14 +510,19 @@ class App:
             response = self.page(
                 "error.html",
                 403,
-                message="Сторінка застаріла. Відкрийте вкладку заново.",
+                message="Програму перезапускали, тому дію не виконано. Натисніть «На головну» і повторіть.",
             )
         else:
             try:
                 response = self.route(request)
             except Exception:  # noqa: BLE001 — будь-яка помилка: сторінка, а не обрив з'єднання
                 traceback.print_exc()
-                response = self.page("error.html", 500, message="Щось пішло не так.")
+                response = self.page(
+                    "error.html",
+                    500,
+                    message="Щось пішло не так — дію не виконано. Поверніться на головну й "
+                    "спробуйте ще раз; якщо повториться — скажіть Власнику.",
+                )
         response.headers = {**SECURITY_HEADERS, **response.headers}
         return response
 
@@ -533,9 +563,12 @@ class App:
             return self.release_sold_post(request)
         if (match := _DUPLICATE_PHOTO.fullmatch(path)) and get:
             return self.duplicate_photo(int(match[1]))
-        if path == "/quit" and request.method == "POST" and self.on_quit is not None:
-            done = self.on_quit()
-            return self.page("quit.html", done=done)
+        if path == "/quit" and self.on_quit is not None:
+            if request.method == "POST" and (request.form.get("sure") or [""])[0]:
+                done = self.on_quit()
+                return self.page("quit.html", done=done)
+            if get or request.method == "POST":  # без підтвердження програма працює далі
+                return self.quit_page(request)
         if path.strip("/") in CARD_TABS and get:
             return self.tab_page(Status(path.strip("/")), request)
         if match := _ITEM.fullmatch(path):
@@ -549,10 +582,14 @@ class App:
         if (match := _STATIC.fullmatch(path)) and get and match[1] in STATIC:
             body = (PACKAGE / "static" / match[1]).read_bytes()
             return Response(200, body, STATIC[match[1]])
-        return text(404, "Не знайдено")
+        return self.error(404, "Такої сторінки немає.")
 
     def connect(self):
         return db.connect(self.db_path)
+
+    def error(self, status: int, message: str) -> Response:
+        """Помилка сторінкою з причиною й «На головну» (не голим текстом)."""
+        return self.page("error.html", status, message=message)
 
     def page(self, template: str, status: int = 200, **context) -> Response:
         html = self.env.get_template(template).render(token=self.token, local=local_time, **context)
@@ -569,7 +606,9 @@ class App:
                 "ai": "warn" if ai_.error and not ai_.busy else "ok",
                 "bot": BOT_TONES.get(bot.code, "warn"),
                 "site": "warn" if site_ and site_[3] else "ok",
-                "health": HEALTH_TONES.get(health_.code, "idle")
+                "health": "idle"
+                if health_.old
+                else HEALTH_TONES.get(health_.code, "idle")
                 if health_.code != "problems"
                 else ("bad" if any(r.status == health.FAIL for r in health_.rows) else "warn"),
             },
@@ -605,21 +644,36 @@ class App:
     ) -> Response:
         conn = self.connect()
         try:
+            shown = values or options.current()
+            if warnings is None and shown.get(options.ROOT_SETTING):
+                warnings = options.folder_warnings(Path(shown[options.ROOT_SETTING]))
             return self.page(
                 "settings.html",
                 **self._chrome(conn, request),
                 current="settings",
                 options=options.OPTIONS,
                 blocks=settings_blocks(),
-                values=values or options.current(),
+                values=shown,
                 snapshot=listings_mod.snapshot_info(conn),
                 held=site.summary(conn)[3],
                 errors=errors or {},
+                notes=options.notes(shown) if not errors else {},
                 warnings=warnings or [],
-                message=message or MESSAGES.get(request.arg("msg")),
+                message=message or self._counted_message(request),
             )
         finally:
             conn.close()
+
+    def _counted_message(self, request: Request) -> str | None:
+        """Повідомлення за `msg`; числа в тексті (`{posts}`…) — з адреси, лише цифри."""
+        text_ = MESSAGES.get(request.arg("msg"))
+        if text_ is None:
+            return None
+        return re.sub(
+            r"\{(\w+)\}",
+            lambda m: request.arg(m[1]) if request.arg(m[1]).isdigit() else "кілька",
+            text_,
+        )
 
     def settings_post(self, request: Request) -> Response:
         form = {name: (values or [""])[0] for name, values in request.form.items()}
@@ -628,9 +682,25 @@ class App:
             return self.settings_page(
                 request, form, errors, warnings, "Не збережено: виправте поля, позначені червоним"
             )
-        self.root = Path(form[options.ROOT_SETTING].strip().strip('"'))  # екран — одразу
-        message = "Збережено. Робот і бот візьмуть нові значення з наступного запуску."
-        return self.settings_page(request, warnings=warnings, message=message)
+        new_root = Path(form[options.ROOT_SETTING].strip().strip('"'))
+        changed = new_root.is_dir() and new_root != self.root
+        if new_root.is_dir():
+            self.root = new_root  # екран — одразу
+        return redirect(f"/settings?msg={'settings_root' if changed else 'settings_saved'}")
+
+    def quit_page(self, request: Request) -> Response:
+        """«Вийти» питає: закриття вимикає бота й нічні перевірки (UX-005)."""
+        conn = self.connect()
+        try:
+            return self.page(
+                "quit_confirm.html",
+                **self._chrome(conn, request),
+                current=None,
+                message=None,
+                back_url=_referer_path(request),
+            )
+        finally:
+            conn.close()
 
     def reread_post(self, request: Request) -> Response:
         """«Перечитати зараз»: знімок «Мої речі» застарів — робот прочитає кабінет на старті."""
@@ -639,8 +709,7 @@ class App:
             listings_mod.reset(conn)
         finally:
             conn.close()
-        message = "Добре: робот перечитає «Мої речі» на Шафі під час наступного запуску (5–10 хв)."
-        return self.settings_page(request, message=message)
+        return redirect("/settings?msg=reread_started")
 
     def release_sold_post(self, request: Request) -> Response:
         """«Надіслати відкладені Продано» (SITE-003): Власник перевірив канал — запобіжник знято."""
@@ -649,12 +718,7 @@ class App:
             count = site.release_held(conn)
         finally:
             conn.close()
-        message = (
-            f"Добре: «Продано» для {count} пар надішле бот, поки програма відкрита."
-            if count
-            else "Відкладених «Продано» немає."
-        )
-        return self.settings_page(request, message=message)
+        return redirect(f"/settings?msg={'sold_released' if count else 'sold_none'}&n={count}")
 
     def _duplicate_file(self, item_id: int) -> Path:
         return self.cache_dir.parent / listings_mod.PHOTOS_DIR / f"{item_id}.jpg"
@@ -673,9 +737,7 @@ class App:
         try:
             posts = parse_export(data)
         except ValueError:
-            return self.settings_page(
-                request, message="Це не експорт каналу Telegram (потрібен файл result.json)"
-            )
+            return redirect("/settings?msg=export_bad")
         conn = self.connect()
         try:
             known = {r[0] for r in conn.execute("SELECT post_id FROM posts")}
@@ -683,11 +745,10 @@ class App:
         finally:
             conn.close()
         added = len(set(posts) - known)
-        message = (
-            f"Експорт завантажено: постів {len(posts)}, нових {added}. "
-            f"Папок {result.folders}, у «Проблемах» {len(result.problems)}."
+        return redirect(
+            f"/settings?msg=export_done&posts={len(posts)}&added={added}"
+            f"&folders={result.folders}&problems={len(result.problems)}"
         )
-        return self.settings_page(request, message=message)
 
     # --- Самоперевірка (UI-003) ---
 
@@ -724,13 +785,14 @@ class App:
     def health_view(self) -> HealthView:
         if self.health_running:
             return HealthView("running")
-        if self.health_result is None:
+        old = self.health_result is None
+        saved = health.load_last(config.data_dir()) if old else self.health_result
+        if saved is None:
             return HealthView("none")
-        at, checks = self.health_result
+        at, checks = saved
         rows = [c for c in checks if c.status == health.FAIL]
         rows += [c for c in checks if c.status == health.WARN]
-        ok = sum(1 for c in checks if c.status == health.OK)
-        return HealthView("problems" if rows else "ok", at, rows, ok)
+        return HealthView("problems" if rows else "ok", at, rows, len(checks) - len(rows), old)
 
     def health_post(self, request: Request) -> Response:
         back = safe_back((request.form.get("back") or [""])[0])
@@ -752,10 +814,18 @@ class App:
         if lock.busy(self._bot_lock()) is not None:
             return BotState("running", f"працює{', але: ' + error if error else ''}")
         if config.setting(run.TOKEN) is None:
-            return BotState("no_token", "не налаштований (немає токена)")
+            return BotState("no_token", "не налаштований — скажіть Власнику")
         if error:
-            return BotState("failed", f"зупинився: {error}", can_start=True)
-        return BotState("stopped", "вимкнений", can_start=True)
+            return BotState(
+                "failed",
+                "зупинився через помилку — якщо повториться, скажіть Власнику",
+                can_start=True,
+                detail=error,
+            )
+        return BotState(
+            "stopped", "вимкнений — пости в Telegram через нього зараз не публікуються",
+            can_start=True,
+        )  # fmt: skip
 
     def start_bot(self) -> str:
         """Запустити бота окремим процесом (як робота). Повертає код повідомлення."""
@@ -773,7 +843,7 @@ class App:
         back = safe_back((request.form.get("back") or [""])[0])
         sep = "&" if "?" in back else "?"
         if action != "start":
-            return text(400, "Невідома дія")
+            return self.error(400, UNKNOWN_ACTION)
         return redirect(f"{back}{sep}msg={self.start_bot()}")
 
     # --- ШІ ---
@@ -794,7 +864,7 @@ class App:
         try:
             lim = batch.limits()
         except batch.SetupError as error:
-            return AiState(busy=self.ai_busy, note=str(error), error=True)
+            return AiState(busy=self.ai_busy, note=AI_SETTINGS_TEXT, error=True, detail=str(error))
         today = self.today()
         q = batch.queue(conn, today, lim.wait_days)
         active, done = batch.active(conn), batch.last_finished(conn)
@@ -863,8 +933,8 @@ class App:
                     self._note(outcome.text, outcome.error)
             except config.ConfigError:
                 self._note(MESSAGES["ai_no_key"], True)
-            except batch.SetupError as error:
-                self._note(str(error), True)
+            except batch.SetupError:
+                self._note(AI_SETTINGS_TEXT, True)
             except Exception:  # noqa: BLE001 — фонова робота не валить сервер
                 traceback.print_exc()
                 self._note("ШІ: щось пішло не так — скажіть Власнику", True)
@@ -922,7 +992,7 @@ class App:
         if action == "recheck":
             return redirect(f"{back}{sep}msg={self.recheck()}")
         if action != "update":
-            return text(400, "Невідома дія")
+            return self.error(400, UNKNOWN_ACTION)
         started = self._start(self._update, "шукаю нові пости й відправляю…")
         return redirect(f"{back}{sep}msg={'ai_started' if started else 'ai_busy'}")
 
@@ -1010,8 +1080,8 @@ class App:
             try:
                 left = batch.budget_left(conn, self.today(), batch.limits())
                 client = self.ai_client()
-            except batch.SetupError as error:
-                self._note(str(error), True)
+            except batch.SetupError:
+                self._note(AI_SETTINGS_TEXT, True)
                 return "ai_settings"
             except config.ConfigError:
                 return "ai_no_key"
@@ -1019,7 +1089,7 @@ class App:
                 return "ai_budget"
             result = fill.retry(conn, client, planned)
             if result.error:
-                self._note(f"«ШІ, спробуй ще раз» ({planned.folder_name}): {result.error}", True)
+                self._note(f"ШІ не заповнив Картку {planned.folder_name}: {result.error}", True)
                 return "ai_retry_failed"
             return "ai_retry_done"
         finally:
@@ -1094,7 +1164,7 @@ class App:
                 message = {"pause": "robot_paused", "resume": "robot_resumed",
                            "stop": "robot_stopping"}[action]  # fmt: skip
                 return redirect(f"{back}{sep}msg={message if done else 'robot_not_running'}")
-            return text(400, "Невідома дія")
+            return self.error(400, UNKNOWN_ACTION)
         finally:
             conn.close()
 
@@ -1343,7 +1413,7 @@ class App:
         try:
             card = review.load_card(conn, item_id)
             if card is None:
-                return text(404, "Картку не знайдено")
+                return self.error(404, "Такої Картки немає — можливо, її вже видалено.")
             bad = {name for name in request.query.get("bad", []) if name in review.SPEC}
             row = conn.execute(
                 "SELECT duplicate_url, duplicate_name, shafa_url, shafa_id, problem_code FROM items WHERE id = ?",
@@ -1417,7 +1487,7 @@ class App:
         try:
             card = review.load_card(conn, item_id)
             if card is None:
-                return text(404, "Картку не знайдено")
+                return self.error(404, "Такої Картки немає — можливо, її вже видалено.")
 
             stay = (request.form.get("stay") or [""])[
                 0
@@ -1518,7 +1588,7 @@ class App:
                     left = card.problem_code if card.problem_code in review.NO_RESTORE else None
                     return redirect(back(msg=f"recheck_{left}" if left else result.code))
                 return redirect(back(msg=result.code))
-            return text(400, "Невідома дія")
+            return self.error(400, UNKNOWN_ACTION)
         finally:
             conn.close()
 
@@ -1651,7 +1721,7 @@ class App:
         try:
             row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
             if row is None:
-                return text(404, "Сесію не знайдено")
+                return self.error(404, "Такої сесії немає.")
             ids = [
                 r[0]
                 for r in conn.execute(
@@ -1727,6 +1797,13 @@ def parse_multipart(
         else:
             form.setdefault(name, []).append(data.decode("utf-8", errors="replace"))
     return form, files
+
+
+def _referer_path(request: Request) -> str:
+    """Звідки прийшли (лише свій шлях); з самого `/quit` чи без Referer — на головну."""
+    parts = urlsplit(request.headers.get("referer") or "")
+    path = parts.path + (f"?{parts.query}" if parts.query else "")
+    return "/" + Status.REVIEW if parts.path in ("", "/quit") else safe_back(path)
 
 
 def safe_back(path: str) -> str:
@@ -2044,7 +2121,7 @@ def card_mark(card: review.Card, check: Precheck) -> Mark | None:
 def settings_blocks() -> list[tuple[str, list]]:
     """Налаштування за блоками (UI-006): поля й порядок ті самі, що в `options.OPTIONS`."""
     own = {
-        "Сайт: «Продано»": (
+        "Сайт Viktoria Shoes": (
             site.SEND_SETTING, site.WAIT_SETTING, site.SOLD_SETTING, site.FUSE_SETTING
         ),
         "«Мої речі» на Шафі": (listings_mod.DAYS_SETTING,),

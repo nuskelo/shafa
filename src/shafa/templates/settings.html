@@ -4,7 +4,7 @@
 <div class="page-head">
   <div>
     <h1>Налаштування</h1>
-    <p class="intro">Ключ ШІ, токен бота й чати — лише в майстрі налаштування (секрети на екрані не показуються).</p>
+    <p class="intro">Ключ ШІ, бота Telegram і канал налаштовує Власник — тут їх змінити не можна.</p>
   </div>
 </div>
 {% for warning in warnings %}<p class="note yellow">{{ warning }}</p>{% endfor %}
@@ -22,24 +22,30 @@
     <div class="input">
       {% if o.kind == "flag" %}
       <input form="settings" type="checkbox" id="s-{{ o.name }}" name="{{ o.name }}" value="1"{% if values.get(o.name) == "1" %} checked{% endif %}>
+      {% if o.hint %}<small>{{ o.hint }}</small>{% endif %}
       {% else %}
       <input form="settings" id="s-{{ o.name }}" name="{{ o.name }}" value="{{ values.get(o.name, "") }}"{% if o.kind != "path" %} class="short" inputmode="decimal"{% endif %}>
       {% if o.hint %}<small>{{ o.hint }}</small>{% endif %}
       {% endif %}
       {% if o.name in errors %}<p class="error">{{ errors[o.name] }}</p>{% endif %}
+      {% if o.name in notes %}<p class="note yellow">{{ notes[o.name] }}</p>{% endif %}
     </div>
   </div>
   {% endfor %}
   {% if title.startswith("«Мої речі»") %}
   <form method="post" action="/listings/reread" class="export">
     <input type="hidden" name="token" value="{{ token }}">
-    <p>Її товарів у знімку: {{ snapshot[0] }}{% if snapshot[1] %}, прочитано {{ local(snapshot[1]) }}{% else %}, перечитається на наступному запуску робота{% endif %}.</p>
+    {% if snapshot[1] %}
+    <p>На Шафі у вас {{ plural(snapshot[0], "товар", "товари", "товарів") }} (перечитано {{ local(snapshot[1])[:5] }}).</p>
+    {% else %}
+    <p>Список ваших товарів на Шафі ще не прочитано — робот прочитає його при наступному «Старт».</p>
+    {% endif %}
     <button>Перечитати зараз</button>
   </form>
   {% elif title.startswith("Сайт") %}
   <form method="post" action="/site/release-sold" class="export">
     <input type="hidden" name="token" value="{{ token }}">
-    <p>Відкладено запобіжником: {{ held }}. Якщо за ніч зникло забагато постів, «Продано» на сайт не надсилається — перевір канал; якщо все правильно, натисни кнопку.</p>
+    <p>Відкладено запобіжником: {{ held }}. Якщо за ніч зникло забагато постів, «Продано» на сайт не надсилається — перевірте канал; якщо все правильно, натисніть кнопку.</p>
     <button>Надіслати відкладені Продано</button>
   </form>
   {% endif %}
@@ -49,6 +55,7 @@
   <h2>Експорт каналу</h2>
   <form method="post" action="/export" enctype="multipart/form-data" class="export">
     <input type="hidden" name="token" value="{{ token }}">
+    <p>Потрібно лише для старих постів (до бота), наприклад якщо дописали ціну в старий пост.</p>
     <p>Telegram Desktop → канал → «Експорт історії чату» (лише текст, формат JSON) → файл <b>result.json</b>.</p>
     <input type="file" name="export" accept=".json,application/json" required>
     <button>Завантажити експорт каналу</button>
