@@ -1075,8 +1075,8 @@ class Worker:
         self.notify.owner(f"Сайт не прийняв пару з поста {post_id}: {why}. Повторно не шлю.")
         if seller:
             self.notify.seller(
-                f"Пару з поста {post_id} не вдалося завести на сайт — додай її в адмінці сайту "
-                "руками. Власник уже знає."
+                f"Сайт Viktoria Shoes не прийняв пару з поста {post_id} — додай її вручну через "
+                "кабінет сайту. Власник уже знає."
             )
 
     def _failed_request(self, job: sqlite3.Row, error: SiteError) -> float:

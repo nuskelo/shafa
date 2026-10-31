@@ -106,8 +106,10 @@ TEXTS = {
     "detail_on": "Детально: бачиш усе, що відбувається у фоні (ШІ, робот, довідники). "
     "Щоб лишити лише важливе — /detali.",
     "detail_off": "Лише важливе: тривоги, Проблеми, зупинки. Щоб бачити все — /detali.",
-    "help": "Надішли текст поста і фото (до 10) — я покажу, як буде в каналі, і чекатиму "
-    "«Опублікувати».",
+    "help": "Надішли фото (до {max}) і текст пари — покажу, як буде в каналі. Під прев'ю: "
+    "«✅ Опублікувати в канал». Пост уже в каналі — перешли його мені й натисни "
+    "«📦 Пост уже в каналі». Хештег додам сам; не треба — напиши «без хештега». Прев'ю живе "
+    "24 год. На Шафу пара піде сама приблизно через {wait}.",
     "unsupported": "Цей файл я не прочитаю. Надішли це фото як звичайне фото або JPG.",
     "heic_failed": "Не можу відкрити це фото — надішліть, будь ласка, як звичайне фото.",
     "too_big": "Файл більший за 20 МБ — Telegram не дає його боту. Надішли як звичайне фото.",
@@ -120,22 +122,28 @@ TEXTS = {
     "розмір»); сумка, гаманець, рюкзак чи ремінь — допиши це слово; хештег не потрібен — напиши "
     "«без хештега».",
     "too_many": "Забагато фото: {n}. Максимум 10 — надішли пост заново.",
-    "too_long": "Текст задовгий: {n} символів разом із підписом, максимум 1024. Скороти й надішли "
-    "пост заново.",
+    "too_long": "Текст задовгий: скороти ще на {over} (разом із рядками «Пишіть сюди…», "
+    "«Більше взуття…», які я додаю сам). Потім надішли пост заново.",
     "preview": "Так буде в каналі (фото: {n}; у канал — перше{comments}, у папку для Шафи — усі).\n"
-    "{tag}.\nОпублікувати?",
+    "{tag}.\nОпублікувати?\nПост уже виклала в канал сама? Тоді «📦 Пост уже в каналі».",
     "publishing": "Публікую…",
     "already": "Цей пост уже опубліковано: {link}",
     "busy": "Уже публікую — зачекай",
     "uncertain_seller": "Не впевнений, чи пост з'явився в каналі — перевір канал. Повторно я не "
-    "публікую, Власник уже знає.",
+    "публікую, Власник уже знає. Пост є — нічого не роби. Поста немає — надішли його мені ще раз.",
     "expired": "Прев'ю застаріло — надішли пост ще раз.",
     "canceled": "Скасовано. Нічого не опубліковано.",
     "gone": "Цієї чернетки вже немає — надішли пост ще раз.",
     "old_preview": "Це старе прев'ю — натисни кнопку під останнім.",
     "updating": "Ти ще дописуєш — за мить покажу нове прев'ю.",
     "failed": "Не вийшло: {why}. Нічого не опубліковано — надішли пост ще раз.",
-    "done": "Опубліковано: {link}\nЗбережено фото для Шафи: {n}.",
+    "failed_format": "Не вийшло: фото не підійшло. Нічого не опубліковано — надішли пост ще раз, "
+    "а фото — як звичайне фото (не файлом).",
+    "failed_retry": "Не вийшло: {why}. Нічого не опубліковано — спробуй ще раз за хвилину: "
+    "надішли пост заново.",
+    "done": "Опубліковано: {link}\nЗбережено фото для Шафи: {n}.\nНа Шафу — не раніше {until}.",
+    "done_no_photos": "Опубліковано в каналі: {link}\n⚠️ Фото для Шафи зберегти не вдалося — "
+    "Власник уже знає. Пост повторно не надсилай.",
     "late": "(отримано о {time}, опубліковано із запізненням)",
     "editing": "Ти редагуєш текст — надішли новий текст або натисни «Скасувати редагування».",
     "edit_start": "Редагую",
@@ -149,8 +157,8 @@ TEXTS = {
     "queue_all_nothing": "Немає прев'ю, які можна поставити в чергу.",
     "queue_all_done": "У черзі Шафи: {k} ({numbers}).",
     "queue_all_known": "Уже були в черзі або опубліковані: {numbers}.",
-    "queue_all_missing": "Не знайшов: {m} — {names} — перешли ці пости з каналу й натисни кнопку "
-    "в їхньому прев'ю.",
+    "queue_all_missing": "Не знайшов: {m} — {names} — перешли ці пости з каналу, а під новими "
+    "прев'ю натисни «📦 Пост уже в каналі».",
     "queue_all_dropped": "Telegram не відповідає — спробуй пізніше. Не шукав ще {n} — вони "
     "лишились з кнопками.",
     "queue_all_failed": "Не вийшло: {n} (причини — у повідомленнях вище) — вони лишились з кнопками.",
@@ -160,13 +168,29 @@ TEXTS = {
     "all_canceled": "Скасовано чернеток: {n}. Нічого не опубліковано.",
     "comments_late": "Пост {link} є, але фото в коментарі ще не додались — додам, щойно зможу.",
     "comments_done": "Фото додано в коментарі до поста {link}.",
+    "comments_failed": "Фото в коментарі до поста {link} так і не додались — додай їх руками в "
+    "коментарях до поста.",
     "queue_search": "Шукаю пост у каналі — це може тривати кілька хвилин…",
-    "queue_none": "Не знайшов у каналі пост з таким описом. Перешли мені цей пост з каналу — і "
-    "натисни кнопку ще раз.",
+    "queue_none": "Не знайшов у каналі пост з таким описом. Перешли мені цей пост з каналу, а під "
+    "новим прев'ю натисни «📦 Пост уже в каналі».",
     "queue_known": "Пост {n} уже в черзі або опубліковано — нічого не змінюю.",
     "queue_done": "Пост {n} від {date} — у черзі Шафи, фото: {k}. На Шафу — не раніше {until}.",
     "queued": "Цей пост уже в черзі Шафи.",
 }
+
+
+# PhotoError: фото не годиться (їй — «надішли як звичайне фото») чи не завантажилось (повтор)
+FORMAT_ERRORS = ("фото не JPG", "фото не відкривається")
+DOWNLOAD_ERRORS = ("фото не завантажилось",)
+
+
+def symbols(n: int) -> str:
+    """«1 символ», «3 символи», «12 символів»."""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} символ"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} символи"
+    return f"{n} символів"
 
 
 class SearchDropped(Exception):
@@ -523,7 +547,7 @@ class Bot:
             elif chat_id == self.settings.owner_chat and is_command(text, DETAIL_COMMAND):
                 self._detail(chat_id)
             else:
-                self.say(chat_id, TEXTS["help"])
+                self.say(chat_id, TEXTS["help"].format(max=MAX_PHOTOS, wait=self._wait_phrase()))
             return
         if refusal or (part is None and not text):
             self._mark(update_id)
@@ -793,18 +817,26 @@ class Bot:
             return
         if caption_length(caption) > CAPTION_MAX:
             self._set(draft_id, state="failed", note="задовгий текст")
-            self.say(chat_id, TEXTS["too_long"].format(n=caption_length(caption)))
+            self.say(
+                chat_id,
+                TEXTS["too_long"].format(over=symbols(caption_length(caption) - CAPTION_MAX)),
+            )
             return
         if draft["preview_message_id"]:  # старе прев'ю цієї чернетки — без кнопок
             self._drop_buttons(chat_id, draft["preview_message_id"])
         markup = {
             "inline_keyboard": [
-                [{"text": "Опублікувати", "callback_data": f"{PUBLISH}:{draft_id}"}],
+                [{"text": "✅ Опублікувати в канал", "callback_data": f"{PUBLISH}:{draft_id}"}],
                 [
                     {"text": "Редагувати", "callback_data": f"{EDIT}:{draft_id}"},
                     {"text": "Скасувати", "callback_data": f"{CANCEL}:{draft_id}"},
                 ],
-                [{"text": "📦 Лише в чергу Шафи", "callback_data": f"{QUEUE}:{draft_id}"}],
+                [
+                    {
+                        "text": "📦 Пост уже в каналі — лише на Шафу",
+                        "callback_data": f"{QUEUE}:{draft_id}",
+                    }
+                ],
             ]
         }
         comments = ", у коментарі — усі" if len(photos) >= 2 else ""
@@ -973,7 +1005,13 @@ class Bot:
             self.say(chat_id, TEXTS["heic_failed"])
             self.tell_owner(f"не вдалося прочитати HEIC-фото чернетки {draft_id}")
             return
-        self.say(chat_id, TEXTS["failed"].format(why=self._why(error, other)))
+        if isinstance(error, PhotoError) and str(error) in FORMAT_ERRORS:
+            self.say(chat_id, TEXTS["failed_format"])
+        elif isinstance(error, PhotoError) and str(error) not in DOWNLOAD_ERRORS:
+            self.say(chat_id, TEXTS["failed"].format(why=self._why(error, other)))
+        else:  # не завантажились чи Telegram не відповів — допоможе повтор
+            why = other if isinstance(error, TelegramError) else "фото не завантажились"
+            self.say(chat_id, TEXTS["failed_retry"].format(why=why))
 
     def _download(self, part: sqlite3.Row) -> bytes:
         info = self.tg.get_file(part["file_id"])
@@ -1026,7 +1064,7 @@ class Bot:
             # без папки альбому для коментарів немає — Власник розбереться руками
             self._set(draft_id, note=f"папка не створена: {error}", comments=comments and "failed")
             events.emit("post.failed", f"{post_id}: папку з фото не створено (пост у каналі є)")
-            self.say(chat_id, TEXTS["done"].format(link=link, n=0))
+            self.say(chat_id, TEXTS["done_no_photos"].format(link=link))
             self.tell_owner(f"пост {post_id} опубліковано, але папку не створено: {error}")
             return
         self._set(draft_id, folder_name=folder.name)
@@ -1039,7 +1077,11 @@ class Bot:
             late = "\n" + TEXTS["late"].format(
                 time=datetime.fromisoformat(received).strftime("%H:%M")
             )
-        self.say(chat_id, TEXTS["done"].format(link=link, n=len(photos)) + late)
+        until = datetime.fromisoformat(date) + timedelta(days=self._wait_days())
+        self.say(
+            chat_id,
+            TEXTS["done"].format(link=link, n=len(photos), until=until.strftime("%d.%m.%Y")) + late,
+        )
         if folder.name != str(post_id):
             self.tell_owner(
                 f"папка {post_id} уже була — фото поста {post_id} збережено в «{folder.name}». "
@@ -1208,6 +1250,10 @@ class Bot:
             )
         return "queued"
 
+    def _wait_phrase(self) -> str:
+        days = self._wait_days()
+        return "тиждень" if days == 7 else f"{days} дн."
+
     @staticmethod
     def _wait_days() -> int:
         try:
@@ -1360,10 +1406,12 @@ class Bot:
         for row in self.conn.execute(
             "SELECT * FROM bot_drafts WHERE comments = 'late' AND published_at <= ?", (give_up,)
         ).fetchall():
+            link = post_link(self.settings.channel_id, row["post_id"])
             self._set(row["id"], comments="failed")
+            self.say(row["chat_id"], TEXTS["comments_failed"].format(link=link))
             self.tell_owner(
-                f"пост {post_link(self.settings.channel_id, row['post_id'])}: за добу фото в "
-                "коментарі так і не додались — додай руками з папки поста."
+                f"пост {link}: за добу фото в коментарі так і не додались — додай руками з "
+                "папки поста."
             )
 
     # --- «Редагувати» ---
