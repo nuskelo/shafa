@@ -13,6 +13,8 @@
 Пауза/Стоп — команда в базі (`sessions.command`), робот перевіряє її між товарами.
 """
 
+import contextlib
+import json
 import random
 import re
 import shutil
@@ -74,6 +76,7 @@ STREAK_SESSION = 5  # Карток з помилкою за сесію
 STREAK_TEXT = "{n} {what} не вдались ({codes}) — схоже, загальна причина. Скажіть Власнику"
 TICK = 5.0  # с: як часто під час паузи перевіряється Стоп
 SLEEP_JUMP = 60.0  # с: «тік» став довшим — ноутбук засинав
+NOW_NAME = "robot-now.json"  # UX-002: що робить сесія зараз — для панелі (лише читання екраном)
 ITEM_URL = "https://shafa.ua/uk/item/{id}-shafa"  # Шафа переводить на справжню адресу (301)
 
 STALE_TEXT = (
@@ -355,6 +358,38 @@ def recover(conn: sqlite3.Connection) -> list[int]:
     return ids
 
 
+def now_path() -> Path:
+    return config.data_dir() / NOW_NAME
+
+
+def write_now(session_id: int, stage: str, **fields: Any) -> None:
+    """UX-002: запис «що робить робот зараз» (`fill`/`submit`/`pause`/`retry`/`between`) у теку даних.
+    Лише для панелі: збій запису ніколи не ламає публікацію."""
+    data = {"session": session_id, "stage": stage, "at": now(), **fields}
+    path = now_path()
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(NOW_NAME + ".tmp")
+        temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        temp.replace(path)
+
+
+def read_now(session_id: int | None = None) -> dict:
+    """Запис стану сесії `session_id`; немає, зіпсований чи від іншої сесії — порожній словник."""
+    try:
+        data = json.loads(now_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or (session_id is not None and data.get("session") != session_id):
+        return {}
+    return data
+
+
+def clear_now() -> None:
+    with contextlib.suppress(OSError):
+        now_path().unlink()
+
+
 def command(conn: sqlite3.Connection, session_id: int) -> str | None:
     row = conn.execute("SELECT command FROM sessions WHERE id = ?", (session_id,)).fetchone()
     return row[0] if row else None
@@ -481,6 +516,9 @@ class Run:
         self.fetch_photo, self.photos_dir = fetch_photo, photos_dir
         self.page_photo = page_photo  # DUP-002: головне фото зі сторінки оголошення (адреса)
         self.sleep, self.clock, self.rand, self.today = sleep, clock, rand, today
+        self._card: review.Card | None = None  # UX-002: Картка, з якою працює `_one`
+        self._last: dict | None = None  # UX-002: чим закінчилась остання Картка сесії
+        self._plan, self._handled = 0, 0  # UX-002: скільки Карток взято на сьогодні / оброблено
 
     def start(self, limit: int, day_limit: int) -> Report:
         # recover() закриває відкриту сесію й Картки `publishing` — лише з узятим замком:
@@ -535,6 +573,7 @@ class Run:
 
     def _finish(self, report: Report) -> None:
         self._announce_end(report)
+        clear_now()
         with self.conn:
             self.conn.execute(
                 "UPDATE sessions SET ended_at = ?, published = ?, problems = ?, stop_reason = ?, "
@@ -559,6 +598,8 @@ class Run:
         limits, started = group_limits(), started_groups(self.conn, today)
         if not (taken := take(rows, started, limits, allowed)):
             return Stop("limit", f"на сьогодні все: {started.text(limits)}")
+        self._plan = len(taken)
+        self._write(report.session_id, "start")
         old = sum(1 for row in taken if is_old(row["folder_name"]))
         events.emit(
             "robot.start",
@@ -597,6 +638,7 @@ class Run:
                 held_back = True
                 continue
             previous = self._one(report, row["id"], driver, listings)
+            self._between(report.session_id, previous)
             if previous is True:
                 done += 1
                 streak.clear()
@@ -763,15 +805,41 @@ class Run:
         self._problem(report, card, Status.APPROVED, "possible_duplicate", text)
         self._link_found(card, found)
 
+    def _write(self, session_id: int, stage: str, **fields: Any) -> None:
+        write_now(
+            session_id, stage, plan=self._plan, handled=self._handled, last=self._last, **fields
+        )
+
+    def _between(self, session_id: int, result: object) -> None:
+        """Картка закінчена (успіх, Проблема чи пропуск): робот між товарами — не «дописує товар»
+        (A13), а панель знає, чим закінчилась остання."""
+        with self.conn:
+            self.conn.execute(
+                "UPDATE sessions SET item_started_at = NULL WHERE id = ?", (session_id,)
+            )
+        card = self._card
+        if card is not None and (result is True or isinstance(result, Failed)):
+            self._last = {"post": card.post_id, "ok": result is True}
+            self._handled += 1
+        self._write(session_id, "between")
+
+    def _working(self, session_id: int, stage: str, card: review.Card) -> None:
+        title = card.fields["title"].value if "title" in card.fields else ""
+        self._write(session_id, stage, post=card.post_id, title=(title or "")[:80])
+
     def _wait_command(self, session_id: int) -> Stop | None:
         """Стоп → причина; Пауза → чекати, доки не скасують."""
         while (what := command(self.conn, session_id)) == "pause":
             self.sleep(TICK)
         return Stop("stop", "Стоп") if what == "stop" else None
 
-    def _pause(self, session_id: int, span: tuple[float, float] = PAUSE) -> Stop | None:
+    def _pause(
+        self, session_id: int, span: tuple[float, float] = PAUSE, stage: str = "pause"
+    ) -> Stop | None:
         """Пауза людини між товарами (чи перед повтором); Стоп і сон ноутбука перериває її."""
         left = self.rand(*span)
+        until = (datetime.now(UTC) + timedelta(seconds=left)).isoformat(timespec="seconds")
+        self._write(session_id, stage, until=until)
         while left > 0:
             step = min(TICK, left)
             started = self.clock()
@@ -900,7 +968,7 @@ class Run:
                     self.log(PHOTO_RETRY_LOG.format(card.post_id))
             if attempt == ATTEMPTS:
                 break
-            if (stop := self._pause(report.session_id, RETRY_PAUSE)) is not None:
+            if (stop := self._pause(report.session_id, RETRY_PAUSE, "retry")) is not None:
                 return stop
         shot = self._shot(card, "збій")
         self.log(f"Пост {card.post_id}: {ATTEMPTS} спроби невдалі. Екран: {shot.name}")
@@ -913,8 +981,10 @@ class Run:
         """Одна Картка. True — опубліковано; Failed — Картка в «Проблемах», сесія йде далі; Stop —
         причина зупинки; None — Картку пропущено без спроби."""
         card = review.load_card(self.conn, item_id)
+        self._card = None
         if card is None or card.status != Status.APPROVED:
             return None
+        self._card = card
         ok = Status.APPROVED
         if other := already_published(self.conn, card.id, card.post_id):
             self._problem(report, card, ok, "already_published",
@@ -951,6 +1021,7 @@ class Run:
             self.conn.execute(
                 "UPDATE sessions SET item_started_at = ? WHERE id = ?", (now(), report.session_id)
             )
+        self._working(report.session_id, "fill", card)
 
         try:
             filled = self._fill(report, card, driver, steps)
@@ -1003,6 +1074,7 @@ class Run:
             )
         if cursor.rowcount != 1:
             return None
+        self._working(report.session_id, "submit", card)
         pub = Status.PUBLISHING
         status = self.conn.execute("SELECT status FROM items WHERE id = ?", (card.id,)).fetchone()
         try:
