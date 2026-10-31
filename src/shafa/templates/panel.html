@@ -20,24 +20,34 @@
       <span class="dot dot-{{ tones.ai }}" aria-hidden="true"></span>
       <div class="tile-body">
         <strong class="tile-title">ШІ{% if ai.busy %}: {{ ai.busy }}{% endif %}</strong>
-        <span class="tile-sub">готові {{ ai.ready }} · чекають відповіді {{ ai.pending }}</span>
+        <span class="tile-sub">{% for text, href in ai.counters %}{% if not loop.first %} · {% endif %}{% if href %}<a href="{{ href }}">{{ text }}</a>{% else %}{{ text }}{% endif %}{% else %}Зараз ШІ нічого не чекає й нічого не заповнює{% endfor %}</span>
+        {% if ai.filling %}<span class="tile-sub ai-progress">{{ ai.filling }}</span>{% endif %}
+        {% if ai.checking %}<span class="tile-sub">{{ ai.checking }}</span>
+        <span class="tile-sub">Тримайте вікно програми відкритим (можна згорнути) — інакше результати не заберуться.</span>{% endif %}
+        {% if ai.finished %}<span class="tile-sub">{{ ai.finished }}</span>{% endif %}
+        {% if ai.held %}<span class="tile-sub">{{ ai.held }}</span>{% endif %}
+        {% if ai.new_posts %}<span class="tile-sub">Нових постів з бота: {{ ai.new_posts }} — натисніть «Знайти нові пости і відправити на ШІ»</span>{% endif %}
         {% if ai.note %}<span class="tile-sub ai-note">{{ ai.note }}</span>{% endif %}
         <form method="post" action="/ai" class="tile-buttons">
           <input type="hidden" name="token" value="{{ token }}">
           <input type="hidden" name="back" value="{{ back }}">
-          <button name="action" value="update"{% if ai.busy %} disabled{% endif %}>Оновити</button>
+          <button name="action" value="update"{% if ai.busy %} disabled{% endif %}>Знайти нові пости і відправити на ШІ</button>
           {% if ai.recheckable and not ai.busy %}
-          <button name="action" value="recheck">Перерахувати правилами ({{ ai.recheckable }})</button>
+          <button name="action" value="recheck">Оновити Картки за новими правилами ({{ ai.recheckable }}, безкоштовно)</button>
           {% endif %}
           {% if ai.refillable and not ai.busy %}
-          <a class="button" href="/refill">Перезаповнити ({{ ai.refillable }})</a>
+          <a class="button" href="/refill">Заповнити ШІ заново ({{ ai.refillable }}, платно)</a>
           {% endif %}
         </form>
+        <span class="tile-sub">{% if ai.pending %}ШІ працює… можна натиснути, щоб додати нові пости.{% else %}Натискайте після нових постів у каналі — без цього нові пости не стануть Картками. Поки ШІ заповнює — натискати не треба.{% endif %}</span>
+        {% if (ai.recheckable or ai.refillable) and not ai.busy %}<span class="tile-sub">Програму оновили — натисніть, щоб Картки врахували зміни.</span>{% endif %}
         <details class="more-info" data-key="ai">
           <summary>Детальніше</summary>
-          <p class="why">Готові до ШІ {{ ai.ready }} · Чекають відповіді ШІ {{ ai.pending }} · Нові чекають {{ ai.wait_days }} днів після посту {{ ai.young }}</p>
-          <p class="why">«Оновити»: нові папки → ШІ пакетом; результати зазвичай до години</p>
-          {% if ai.recheckable and not ai.busy %}<p class="why">«Перерахувати правилами»: нові правила — без ШІ, безкоштовно; ваші правки лишаються</p>{% endif %}
+          <p class="why">Нові пости йдуть на ШІ через {{ ai.wait_text }} після публікації в каналі (зараз таких: {{ ai.young }}) — щоб не оформлювати те, що швидко продасться.</p>
+          <p class="why">«Знайти нові пости і відправити на ШІ»: програма шукає нові папки з постами, забирає готові результати й відправляє нові Картки на ШІ одним пакетом — результати зазвичай до години.</p>
+          {% if ai.cost %}<p class="why">Орієнтовна вартість пакета, що зараз заповнюється: {{ ai.cost }}.</p>{% endif %}
+          {% if ai.recheckable and not ai.busy %}<p class="why">«Оновити Картки за новими правилами»: безкоштовно, без ШІ; ваші правки лишаються.</p>{% endif %}
+          {% if ai.refillable and not ai.busy %}<p class="why">«Заповнити ШІ заново»: платно — на наступній сторінці буде видно, скільки це коштує.</p>{% endif %}
         </details>
       </div>
     </div>

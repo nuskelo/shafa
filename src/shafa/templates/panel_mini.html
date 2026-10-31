@@ -1,7 +1,7 @@
 <div class="status mini" aria-label="Стан програми" aria-live="polite">
   {% if fake %}<span class="fake">ПІДСТАВНА ШАФА</span>{% endif %}
   <span class="mini-item robot robot-{{ robot.code }}" title="{{ robot.groups_text }} · Схвалених {{ robot.approved }}"><span class="dot dot-{{ tones.robot }}" aria-hidden="true"></span>{{ robot.text }}</span>
-  <span class="mini-item ai" title="готові {{ ai.ready }} · чекають відповіді {{ ai.pending }}{% if ai.note %} · {{ ai.note }}{% endif %}"><span class="dot dot-{{ tones.ai }}" aria-hidden="true"></span>ШІ{% if ai.busy %}: {{ ai.busy }}{% endif %}</span>
+  <span class="mini-item ai" title="Чекають на ШІ: {{ ai.ready }} · ШІ зараз заповнює: {{ ai.pending }}{% if ai.note %} · {{ ai.note }}{% endif %}"><span class="dot dot-{{ tones.ai }}" aria-hidden="true"></span>ШІ{% if ai.busy %}: {{ ai.busy }}{% endif %}</span>
   <span class="mini-item bot-{{ bot.code }}" title="{{ bot.text }}"><span class="dot dot-{{ tones.bot }}" aria-hidden="true"></span>Бот</span>
   {% if site %}<span class="mini-item" title="чекає {{ site[0] }} · вийде сьогодні {{ site[1] }}"><span class="dot dot-{{ tones.site }}" aria-hidden="true"></span>Сайт</span>{% endif %}
 </div>

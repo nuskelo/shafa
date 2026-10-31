@@ -7,7 +7,7 @@ import anthropic
 import httpx2
 import pytest
 
-from shafa import web
+from shafa import batch, web
 from shafa.db import Status
 from test_ai import GOOD, message
 from test_batch import TODAY, line
@@ -74,6 +74,20 @@ def update(app):
     return post(app, "/ai", action="update", back="/review")
 
 
+def sent_hm(conn, today=TODAY):
+    """Година відправки пакета так, як її бачить панель."""
+    stamp = conn.execute("SELECT min(created_at) FROM ai_batches").fetchone()[0]
+    return datetime.fromisoformat(stamp).astimezone(today.tzinfo).strftime("%H:%M")
+
+
+def new_app(app, tmp_path, root, client, clock):
+    """Той самий екран після перезапуску програми: пам'ять нова, база та сама."""
+    return web.App(
+        app.db_path, root, tmp_path / "thumbs", PORT, token=TOKEN,
+        ai_client=lambda: client, run=lambda job: job(), clock=clock, today=lambda: TODAY,
+    )  # fmt: skip
+
+
 # --- Панель ---
 
 
@@ -81,9 +95,11 @@ def test_panel_counts(conn, app, root):
     new_card(conn, root)
     new_card(conn, root, folder="1349", post_id=1349, date="2026-10-12T10:00:00")
     page = html(get(app, "/review"))
-    assert "Готові до ШІ 1 · Чекають відповіді ШІ 0 · Нові чекають 7 днів після посту 1" in page
-    assert 'action="/ai"' in page and ">Оновити</button>" in page
-    assert "Готові до ШІ 1" in html(get(app, "/robot/panel?back=/review"))
+    assert "Чекають на ШІ: 1" in page and "ШІ зараз заповнює" not in page  # нулі не показуємо
+    assert "через 7 днів після публікації в каналі (зараз таких: 1)" in page
+    assert 'action="/ai"' in page and ">Знайти нові пости і відправити на ШІ</button>" in page
+    assert 'name="action" value="update"' in page  # форма та сама, змінився лише підпис
+    assert "Чекають на ШІ: 1" in html(get(app, "/robot/panel?back=/review"))
 
 
 def test_update_scans_sends_batch_and_reports(conn, app, root, client):
@@ -100,10 +116,13 @@ def test_update_scans_sends_batch_and_reports(conn, app, root, client):
 
     ((_, requests),) = client.batches.created
     assert len(requests) == 2
-    assert app.ai_note.startswith("Відправлено на ШІ 2 товарів, результати зазвичай до години")
+    assert app.ai_note is None  # «що пішло» панель бере з бази, а не з примітки
     page = html(get(app, "/review"))
-    assert "Чекають відповіді ШІ 2" in page
-    assert app.ai_note in page
+    assert "ШІ зараз заповнює: 2" in page
+    assert f"ШІ заповнює 2 Картки (відправлено о {sent_hm(conn)})" in page
+    assert "натискати нічого не треба" in page
+    assert "Тримайте вікно програми відкритим" in page
+    assert "ШІ працює… можна натиснути, щоб додати нові пости" in page
     assert app.ai_busy is None and not app.ai_lock.locked()
 
 
@@ -139,11 +158,171 @@ def test_results_collected_on_open_and_every_few_minutes(conn, app, root, client
     page = html(get(app, "/review"))
 
     assert status(conn, item_id) == Status.REVIEW
-    assert "ШІ заповнило бланків: 1" in page
+    assert "(відправлено о" not in page and "Тримайте вікно" not in page
+    assert "Готові до перевірки: 1" in page and 'href="/review"' in page
+    assert "Готово о " in page and "1 Картка у «На перевірку»" in page
     clock.now += web.COLLECT_EVERY
     calls = len(client.batches.calls)
     get(app, "/review")  # незібраних пакетів немає — API не питаємо
     assert len(client.batches.calls) == calls
+
+
+# --- UX-001: панель зрозумілими словами ---
+
+
+def test_batch_note_survives_restart_and_disappears_when_collected(
+    conn, app, root, client, clock, tmp_path
+):
+    item_id = new_card(conn, root)
+    update(app)
+
+    restarted = new_app(app, tmp_path, root, client, clock)
+    page = html(get(restarted, "/review"))
+    assert restarted.ai_note is None  # у пам'яті порожньо, а пакет видно з бази
+    assert f"ШІ заповнює 1 Картка (відправлено о {sent_hm(conn)})" in page
+    assert "Зазвичай готово до " in page
+
+    clock.now += web.COLLECT_EVERY
+    client.batches.status["msgbatch_1"] = "ended"
+    client.batches.lines["msgbatch_1"] = [line(f"b1-i{item_id}")]
+    page = html(get(restarted, "/review"))
+    assert "(відправлено о" not in page and "ШІ зараз заповнює" not in page
+    assert "Готово о " in page
+
+    again = new_app(app, tmp_path, root, client, clock)
+    assert "Готово о " in html(get(again, "/review"))
+
+
+def test_checking_line_shows_last_check_time(conn, app, root, client):
+    new_card(conn, root)
+    update(app)
+    page = html(get(app, "/review"))
+    assert "Перевіряю, чи готово, кожні 3 хв · востаннє о 12:00 — ще не готово." in page
+
+
+def test_old_finished_batch_is_not_shown_forever(conn, app, root, client, clock):
+    item_id = new_card(conn, root)
+    update(app)
+    client.batches.status["msgbatch_1"] = "ended"
+    client.batches.lines["msgbatch_1"] = [line(f"b1-i{item_id}")]
+    clock.now += web.COLLECT_EVERY
+    get(app, "/review")
+    with conn:
+        conn.execute("UPDATE ai_batches SET ended_at = '2026-10-01T10:00:00+00:00'")
+    assert "Готово о " not in html(get(app, "/review"))
+
+
+def test_note_is_replaced_not_stuck(conn, app, root, client):
+    update(app)  # нічого відправляти
+    first = html(get(app, "/review"))
+    assert "12:00 · Немає нових товарів для ШІ" in first
+    new_card(conn, root)
+    update(app)
+    assert app.ai_note is None
+    assert "Немає нових товарів" not in html(get(app, "/review"))
+
+
+def test_panel_without_anything_says_so(app):
+    page = html(get(app, "/review"))
+    assert "Зараз ШІ нічого не чекає й нічого не заповнює" in page
+    assert "Чекають на ШІ" not in page and "Готово о" not in page
+
+
+def test_dot_is_calm_while_ai_works_and_warns_on_real_errors(conn, app, root, client):
+    new_card(conn, root)
+    update(app)
+    context = app._panel_context(conn)
+    assert context["ai"].pending == 1 and context["tones"]["ai"] == "ok"  # звичайна робота
+
+    app.ai_client = no_key
+    update(app)
+    assert app.ai_note_error
+    assert app._panel_context(conn)["tones"]["ai"] == "warn"
+    assert "Немає ключа ШІ" in html(get(app, "/review"))
+
+
+def test_info_note_does_not_turn_the_dot_yellow(conn, app):
+    update(app)  # «Немає нових товарів для ШІ» — не помилка
+    assert app.ai_note and not app.ai_note_error
+    assert app._panel_context(conn)["tones"]["ai"] == "ok"
+
+
+def test_no_cents_in_panel(conn, app, root, client):
+    from pathlib import Path
+
+    new_card(conn, root)
+    update(app)
+    page = html(get(app, "/review"))
+    assert "¢" not in page and "≈ " not in page.split("Детальніше")[0].split("tile ai")[-1]
+    assert "$" in page  # сума — лише під «Детальніше», у доларах
+    for name in ("panel.html", "panel_mini.html"):
+        assert "¢" not in (Path(web.__file__).parent / "templates" / name).read_text("utf-8")
+    sent = batch.Sent(batch.Plan(planned=[]), batch_id=None)
+    assert "¢" not in batch.sent_text(sent, batch.Limits(), panel=True)
+    assert batch.approx_usd(1_360_000) == "≈ 1,36 $"
+
+
+def test_held_note_hidden_when_everything_fits(conn, root, tmp_path, app, monkeypatch):
+    from test_batch import old_cards
+
+    monkeypatch.setenv("SHAFA_DAILY_OLD", "1")  # наперед — 3 Картки
+    old_cards(conn, root, 3, tmp_path)
+    assert "чекають своєї черги" not in html(get(app, "/review"))  # усі влізуть у пакет
+
+
+def test_held_text_counts_old_beyond_ahead_days(conn, root, tmp_path, app, monkeypatch):
+    from test_batch import old_cards
+
+    monkeypatch.setenv("SHAFA_DAILY_OLD", "1")
+    old_cards(conn, root, 5, tmp_path)
+    page = html(get(app, "/review"))
+    assert "Чекають на ШІ: 5" in page
+    assert "2 чекають своєї черги: ШІ готує Картки лише на 3 дні роботи робота наперед" in page
+    assert "наступним пакетом" not in page
+
+
+def test_sent_text_does_not_promise_next_batch_for_held_cards(conn, root, tmp_path, monkeypatch):
+    from test_batch import old_cards
+
+    old_cards(conn, root, 5, tmp_path)
+    lim = batch.Limits(old_per_day=1)
+    plan = batch.prepare(conn, root, TODAY, lim)
+    assert (len(plan.planned), plan.held) == (3, 2)
+    text = batch.sent_text(batch.Sent(plan, batch_id=1), lim, panel=True)
+    assert text == "2 чекають своєї черги: ШІ готує Картки лише на 3 дні роботи робота наперед"
+    assert "наступним пакетом" not in text
+
+
+def test_new_bot_posts_hint_needs_the_button(conn, app):
+    with conn:
+        conn.execute("INSERT INTO posts VALUES (7001, '2026-10-30T10:00:00', 'Пост', 'bot', 'x')")
+    page = html(get(app, "/review"))
+    assert "Нових постів з бота: 1 — натисніть «Знайти нові пости і відправити на ШІ»" in page
+
+
+def test_uncertain_and_busy_wording(app, conn, root):
+    assert (
+        batch.UNCERTAIN_TEXT
+        == "ШІ не відповів вчасно — перевірю сам пізніше, нічого робити не треба"
+    )
+    assert batch.days_word(1) == "1 день" and batch.days_word(3) == "3 дні"
+    assert batch.days_word(7) == "7 днів" and batch.days_word(11) == "11 днів"
+    new_card(conn, root)
+    app.ai_lock.acquire()
+    app.ai_busy = "шукаю нові пости й відправляю…"
+    page = html(get(app, "/review"))
+    assert "ШІ: шукаю нові пости й відправляю…" in page
+    assert 'name="action" value="update" disabled' in page
+
+
+def test_rule_buttons_have_plain_words(conn, root, app):
+    from test_core009 import stale_card
+
+    stale_card(conn, root)
+    page = html(get(app, "/review"))
+    assert "Оновити Картки за новими правилами (1, безкоштовно)" in page
+    assert "Програму оновили — натисніть, щоб Картки врахували зміни." in page
+    assert 'name="action" value="recheck"' in page
 
 
 def test_failing_job_frees_the_lock(conn, app, root):
