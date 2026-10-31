@@ -360,7 +360,12 @@ def test_session_page_empty_and_missing(conn, app):
 def test_settings_blocks(root, app):
     page = html(get(app, "/settings"))
     titles = re.findall(r'<section class="block-card">\s*<h2>([^<]*)</h2>', page)
-    assert titles == ["Ліміти й робот", "Сайт: «Продано»", "«Мої речі» на Шафі", "Експорт каналу"]
+    assert titles == [
+        "Ліміти й робот",
+        "Сайт Viktoria Shoes",
+        "«Мої речі» на Шафі",
+        "Експорт каналу",
+    ]
 
 
 def test_settings_every_option_once_in_order(root, app):
@@ -371,7 +376,7 @@ def test_settings_every_option_once_in_order(root, app):
     assert sorted(names) == sorted(o.name for o in options.OPTIONS)
     assert len(names) == len(set(names))
     blocks = dict(web.settings_blocks())
-    assert [o.name for o in blocks["Сайт: «Продано»"]] == [
+    assert [o.name for o in blocks["Сайт Viktoria Shoes"]] == [
         "SHAFA_SITE_SEND", "SHAFA_SITE_WAIT_DAYS", "SHAFA_SOLD_CHECK", "SHAFA_SOLD_FUSE",
     ]  # fmt: skip
     order = [o.name for o in options.OPTIONS]

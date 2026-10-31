@@ -156,7 +156,7 @@ def test_check_ai_error_has_no_key(monkeypatch):
 
     monkeypatch.setattr(anthropic.resources.models.Models, "list", failing)
     text = wizard.check_ai(AI_SECRET)
-    assert text == "Ключ ШІ не працює: Ключ Claude API не прийнято (401)"
+    assert text == "Ключ ШІ не працює: Ключ ШІ не приймається — скажіть Власнику"
     assert AI_SECRET not in text
 
 

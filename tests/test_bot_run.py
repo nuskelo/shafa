@@ -165,7 +165,21 @@ def test_poll_waits_after_network_error(conn, root):
     assert conn.execute("SELECT error FROM bot_status").fetchone()[0] is None  # відновився
 
 
-@pytest.mark.parametrize(("code", "text"), [(409, "Інший процес"), (401, "токен")])
+def test_poll_status_text_is_plain_not_technical(conn, root):
+    seen = []
+    error = TelegramError("Немає з'єднання з Telegram (getUpdates)")
+    flood = TelegramError("Telegram відмовив (getUpdates, 429)", code=429, retry_after=17)
+    tg, bot = polling(conn, root, [error, flood, []])
+
+    def sleep(_):
+        seen.append(conn.execute("SELECT error FROM bot_status").fetchone()[0])
+
+    run.poll(bot, tg, conn, stop=lambda: not tg.batches, sleep=sleep)
+    assert seen == [run.OFFLINE_TEXT, run.BUSY_TEXT]
+    assert not any("getUpdates" in text for text in seen)
+
+
+@pytest.mark.parametrize(("code", "text"), [(409, "іншому комп'ютері"), (401, "ключ бота")])
 def test_poll_stops_on_conflict_or_bad_token(conn, root, code, text):
     tg, bot = polling(conn, root, [TelegramError("x", code=code)])
     with pytest.raises(run.SetupError, match=text):

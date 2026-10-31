@@ -85,10 +85,10 @@ def test_running_program_explained(tmp_path, data, monkeypatch):
 
 
 def test_not_a_program_or_installed_itself(tmp_path, data):
-    with pytest.raises(install.InstallError, match="немає програми"):
+    with pytest.raises(install.InstallError, match="розпакованої папки"):
         install.install(tmp_path, data)
     install.install(fake_app(tmp_path / "v1" / "app", "1"), data)
-    with pytest.raises(install.InstallError, match="з розпакованої нової версії"):
+    with pytest.raises(install.InstallError, match="з розпакованої папки нової версії"):
         install.install(data / "app", data)
 
 

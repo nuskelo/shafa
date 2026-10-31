@@ -660,7 +660,7 @@ def cents(micro_usd: int) -> str:
 
 
 def dollars(micro_usd: int) -> str:
-    return f"${micro_usd / 1_000_000:.2f}".replace(".", ",")
+    return f"{micro_usd / 1_000_000:.2f}".replace(".", ",") + " $"
 
 
 def approx_usd(micro_usd: int) -> str:
@@ -696,7 +696,7 @@ def sent_text(sent: Sent, lim: Limits, *, panel: bool = False) -> str:
     if sent.count and not panel:
         parts.append(
             f"Відправлено на ШІ {sent.count} товарів, результати зазвичай до години "
-            f"(≈ {cents(plan.estimate)} або менше)"
+            f"({approx_usd(plan.estimate)} або менше)"
         )
     elif not sent.count and not plan.over_budget:
         parts.append("Немає нових товарів для ШІ")
@@ -715,7 +715,7 @@ def sent_text(sent: Sent, lim: Limits, *, panel: bool = False) -> str:
 def collected_text(report: Collected) -> str | None:
     parts = []
     if report.filled:
-        parts.append(f"ШІ заповнило бланків: {report.filled}")
+        parts.append(f"ШІ заповнив бланків: {report.filled}")
     if report.errors or report.lost:
         parts.append(f"у «Проблеми»: {report.errors + report.lost}")
     if report.returned:

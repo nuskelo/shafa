@@ -38,6 +38,13 @@ INSTALL_CMD = (
     "@echo off\r\n"
     "chcp 65001 >nul\r\n"
     "rem Встановлення або оновлення «Шафа-помічник». Дані (налаштування, база) не чіпаються.\r\n"
+    'if not exist "%~dp0app\\python\\python.exe" (\r\n'
+    "  echo Спершу розпакуйте архів: правою кнопкою → «Видобути все…», "
+    "потім запустіть «Встановити» з розпакованої папки.\r\n"
+    "  echo.\r\n"
+    "  pause\r\n"
+    "  exit /b 1\r\n"
+    ")\r\n"
     '"%~dp0app\\python\\python.exe" -m shafa.install "%~dp0app"\r\n'
     "echo.\r\n"
     "pause\r\n"

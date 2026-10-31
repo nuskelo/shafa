@@ -59,6 +59,7 @@
         {% if (ai.recheckable or ai.refillable) and not ai.busy %}<span class="tile-sub">Програму оновили — натисніть, щоб Картки врахували зміни.</span>{% endif %}
         <details class="more-info" data-key="ai">
           <summary>Детальніше</summary>
+          {% if ai.detail %}<p class="why">Для Власника: {{ ai.detail }}</p>{% endif %}
           <p class="why">Нові пости йдуть на ШІ через {{ ai.wait_text }} після публікації в каналі (зараз таких: {{ ai.young }}) — щоб не оформлювати те, що швидко продасться.</p>
           <p class="why">«Знайти нові пости і відправити на ШІ»: програма шукає нові папки з постами, забирає готові результати й відправляє нові Картки на ШІ одним пакетом — результати зазвичай до години.</p>
           {% if ai.cost %}<p class="why">Орієнтовна вартість пакета, що зараз заповнюється: {{ ai.cost }}.</p>{% endif %}
@@ -78,6 +79,12 @@
           <input type="hidden" name="back" value="{{ back }}">
           <button name="action" value="start">Запустити бота</button>
         </form>
+        {% endif %}
+        {% if bot.detail %}
+        <details class="more-info" data-key="bot">
+          <summary>Детальніше</summary>
+          <p class="why">Для Власника: {{ bot.detail }}</p>
+        </details>
         {% endif %}
       </div>
     </div>
@@ -99,12 +106,14 @@
         <strong class="tile-title">Перевіряю…</strong>
         {% elif health.code == "none" %}
         <strong class="tile-title">Самоперевірка ще не проходила</strong>
+        {% elif health.old %}
+        <strong class="tile-title">Востаннє {{ when(health.at) }}: {% if health.code == "ok" %}усе гаразд{% else %}є що виправити ({{ health.rows | length }}){% endif %}</strong>
         {% elif health.code == "ok" %}
         <strong class="tile-title">Все гаразд</strong>
-        <span class="tile-sub">перевірено {{ local(health.at) }}</span>
+        <span class="tile-sub">перевірено {{ when(health.at) }}</span>
         {% else %}
-        <strong class="tile-title">Є що виправити</strong>
-        <span class="tile-sub">перевірено {{ local(health.at) }} · решта ({{ health.ok }}) — гаразд</span>
+        <strong class="tile-title">Є що виправити ({{ health.rows | length }})</strong>
+        <span class="tile-sub">інші {{ health.ok }} — гаразд · перевірено {{ when(health.at) }}</span>
         {% endif %}
         {% if health.rows %}
         <details class="more-info" data-key="health" open>
@@ -120,7 +129,7 @@
         <form method="post" action="/health" class="tile-buttons">
           <input type="hidden" name="token" value="{{ token }}">
           <input type="hidden" name="back" value="{{ back }}">
-          <button>{% if health.code == "none" %}Перевірити{% else %}Перевірити ще раз{% endif %}</button>
+          <button>{% if health.code == "none" or health.old %}Перевірити{% else %}Перевірити ще раз{% endif %}</button>
         </form>
         {% endif %}
       </div>

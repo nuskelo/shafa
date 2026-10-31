@@ -326,12 +326,12 @@ def test_reread_listings_button(conn, app):
 
     listings.store(conn, [listings.Listing(1, "Кеди", None, "s", ("38",), "https://shafa.ua/1")])
     page = html(get(app, "/settings"))
-    assert "Її товарів у знімку: 1, прочитано" in page
-    assert "Перечитувати «Мої речі» кожні N днів" in page
+    assert "На Шафі у вас 1 товар (перечитано" in page
+    assert "Як часто перечитувати «Мої речі» на Шафі, днів" in page
     response = post(app, "/listings/reread")
-    assert "робот перечитає «Мої речі»" in html(response)
+    assert "робот спершу перечитає «Мої речі»" in html(get(app, location(response)))
     assert listings.stored(conn, 7) is None
-    assert "перечитається на наступному запуску" in html(get(app, "/settings"))
+    assert "ще не прочитано" in html(get(app, "/settings"))
 
 
 def test_deleted_post_reason_shown_in_archive(conn, root, app):
@@ -378,11 +378,13 @@ def test_held_sold_on_panel_and_release_button(conn, root, app, monkeypatch):
     assert "продано за тиждень 1 · відкладено (запобіжник) 2" in html(get(app, "/robot/panel"))
     assert "Відкладено запобіжником: 2" in html(get(app, "/settings"))
 
-    page = html(post(app, "/site/release-sold"))
+    page = html(get(app, location(post(app, "/site/release-sold"))))
 
     assert "«Продано» для 2 пар надішле бот" in page
     assert (
         conn.execute("SELECT COUNT(*) FROM post_checks WHERE hold IS NOT NULL").fetchone()[0] == 0
     )
     assert "відкладено (запобіжник) 0" in html(get(app, "/robot/panel"))
-    assert "Відкладених «Продано» немає" in html(post(app, "/site/release-sold"))
+    assert "Відкладених «Продано» немає" in html(
+        get(app, location(post(app, "/site/release-sold")))
+    )

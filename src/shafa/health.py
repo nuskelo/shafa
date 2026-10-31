@@ -9,6 +9,7 @@
 
 import contextlib
 import json
+import re
 import shutil
 import sqlite3
 import tempfile
@@ -34,7 +35,7 @@ CATALOG_DAYS = 30
 # тримає цикл бота довше: 10 хв без пульсу — справді не відповідає.
 BOT_STALE = 600
 BOT_START = 60  # секунд після запуску, поки бот ще не встиг записати перший пульс
-ASK_OWNER = "Напишіть Власнику"
+ASK_OWNER = "Скажіть Власнику"
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,13 @@ DB, FOLDER, DISK, AI_KEY, AI_BUDGET, BOT, SITE, LOGIN, CATALOG, REHEARSAL = (
 )
 
 
+def _plain(text: str) -> str:
+    """Помилка налаштування бота для екрана: назви змінних і `.env` людині нічого не кажуть."""
+    if re.search(r"\.env|TELEGRAM_|ANTHROPIC_", text):
+        return "Бот не налаштований до кінця — скажіть Власнику"
+    return text
+
+
 def _database(ctx: _Ctx) -> Check:
     path = ctx.data_dir / "shafa.sqlite"
     if not path.is_file():
@@ -181,7 +189,7 @@ def _folder(ctx: _Ctx) -> Check:
             FOLDER,
             WARN,
             "Головна папка лежить у OneDrive",
-            "Перенесіть її з OneDrive: він може забирати фото в хмару",
+            "Скажіть Власнику: OneDrive може забирати фото в хмару",
         )
     return Check(FOLDER, OK, "Головна папка на місці, запис працює")
 
@@ -203,12 +211,12 @@ def _ai_key(ctx: _Ctx) -> Check:
 
     key = config.setting(config.API_KEY)
     if key is None:
-        return Check(AI_KEY, FAIL, "Немає ключа ШІ", f"{ASK_OWNER}: потрібно вписати ключ ШІ")
+        return Check(AI_KEY, FAIL, "ШІ не підключений", ASK_OWNER)
     ctx.secrets.append(key)
     try:
         _limited(ctx.deps.ai_models, key)
     except anthropic.AnthropicError as error:
-        return Check(AI_KEY, FAIL, f"Ключ ШІ не працює: {ai.error_text(error)}", ASK_OWNER)
+        return Check(AI_KEY, FAIL, ai.error_text(error), ASK_OWNER)
     except TimeoutError:
         return Check(AI_KEY, FAIL, "ШІ не відповів за 10 секунд", "Перевірте інтернет і повторіть")
     return Check(AI_KEY, OK, "Ключ ШІ працює")
@@ -224,7 +232,7 @@ def _ai_budget(ctx: _Ctx) -> Check:
     left = batch.budget_left(ctx.conn, ctx.deps.now(), limits)
     if left <= 0:
         return Check(AI_BUDGET, WARN, "Ліміт ШІ на сьогодні вичерпано", "ШІ продовжить завтра")
-    return Check(AI_BUDGET, OK, f"На сьогодні лишилось ${left / 1_000_000:.2f}")
+    return Check(AI_BUDGET, OK, f"На сьогодні лишилось {batch.dollars(left)}")
 
 
 def _age(ctx: _Ctx, stamp: str | None) -> float | None:
@@ -268,12 +276,12 @@ def _bot(ctx: _Ctx) -> Check:
 
     token = config.setting(run.TOKEN)
     if token is None:
-        return Check(BOT, FAIL, "Немає токена бота", f"{ASK_OWNER}: потрібно вписати токен бота")
+        return Check(BOT, FAIL, "Бот не підключений", ASK_OWNER)
     ctx.secrets.append(token)
     try:
         name = _limited(ctx.deps.bot_rights, token, config.setting(run.CHANNEL))
     except run.SetupError as error:
-        return Check(BOT, FAIL, str(error), "Виправте в Telegram або напишіть Власнику")
+        return Check(BOT, FAIL, _plain(str(error)), "Виправте в Telegram або скажіть Власнику")
     except TimeoutError:
         return Check(BOT, FAIL, "Telegram не відповів за 10 секунд", "Перевірте інтернет")
     return _bot_beat(ctx, name)
@@ -284,7 +292,7 @@ def _site(ctx: _Ctx) -> Check:
         return Check(SITE, SKIP, "Відправка на сайт вимкнена")
     key = site.key()
     if key is None:
-        return Check(SITE, FAIL, "Немає ключа сайту", f"{ASK_OWNER}: потрібно вписати ключ сайту")
+        return Check(SITE, FAIL, "Сайт не підключений", ASK_OWNER)
     ctx.secrets.append(key)
     try:
         _limited(ctx.deps.site_get, key)
@@ -327,16 +335,21 @@ def _catalog(ctx: _Ctx) -> Check:
     try:
         checked = date.fromisoformat(str(json.loads(path.read_text(encoding="utf-8"))["checked"]))
     except (OSError, ValueError, KeyError, TypeError):
-        return Check(CATALOG, WARN, "Не вдалося прочитати дату довідників", ASK_OWNER)
+        return Check(
+            CATALOG,
+            WARN,
+            "Не вдалося прочитати дату оновлення списків розділів і брендів",
+            ASK_OWNER,
+        )
     days = (ctx.deps.now().date() - checked).days
     if days > CATALOG_DAYS:
         return Check(
             CATALOG,
             WARN,
-            f"Довідники Шафи звірено {days} днів тому",
-            f"{ASK_OWNER}: потрібно оновити довідники",
+            "Списки розділів і брендів Шафи давно не оновлювались",
+            f"{ASK_OWNER}: їх треба оновити",
         )
-    return Check(CATALOG, OK, f"Довідники Шафи звірено {checked:%d.%m.%Y}")
+    return Check(CATALOG, OK, f"Списки розділів і брендів Шафи оновлено {checked:%d.%m.%Y}")
 
 
 def _rehearsal(ctx: _Ctx) -> Check:
@@ -428,6 +441,19 @@ def save(checks: list[Check], at: datetime, folder: Path) -> Path:
     temp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     temp.replace(path)
     return path
+
+
+def load_last(folder: Path) -> tuple[str, list[Check]] | None:
+    """Останній збережений результат (`health-last.json`); немає чи зіпсований — None."""
+    try:
+        payload = json.loads((folder / LAST_NAME).read_text(encoding="utf-8"))
+        datetime.fromisoformat(payload["at"])
+        checks = [Check(**row) for row in payload["checks"]]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if not checks or any(c.status not in (OK, WARN, FAIL, SKIP) for c in checks):
+        return None
+    return payload["at"], checks
 
 
 def has_failures(checks: list[Check]) -> bool:
