@@ -72,10 +72,10 @@ def status_of(conn, item):
 def test_panel_on_every_page_and_start_disabled_without_approved(app):
     page = html(get(app, "/review"))
     assert "ПІДСТАВНА" not in page
-    assert "Робот зупинений" in page
+    assert "Робот чекає" in page
     assert 'value="start" class="approve" disabled' in page
-    assert "Немає Схвалених Карток" in page
-    assert "Сьогодні: старих 0 з 0 · нових 0 з 30" in page
+    assert "Немає Схвалених — схваліть Картки у «На перевірку»" in page
+    assert "Сьогодні на Шафі: з минулих постів 0 з 0 · з нових (бот) 0 з 30" in page
 
 
 def test_start_spawns_robot_process(conn, root, app, spawner):
@@ -93,12 +93,12 @@ def test_start_spawns_robot_process(conn, root, app, spawner):
 
 def test_start_refused_without_approved_or_when_running(conn, root, app, spawner, lock_file):
     assert location(post(app, "/robot", action="start", back="/review")).endswith(
-        "msg=robot_cannot_start"
+        "msg=robot_cannot_start_none"
     )
     card(conn, root)
     with lock.hold("publish", lock_file):  # робот уже працює (інший процес)
         assert location(post(app, "/robot", action="start", back="/review")).endswith(
-            "msg=robot_cannot_start"
+            "msg=robot_cannot_start_busy"
         )
         assert "Робот публікує" in html(get(app, "/review"))
     assert spawner.calls == []
@@ -189,7 +189,9 @@ def test_failed_start_shows_last_log_line(conn, root, app, spawner, monkeypatch,
     monkeypatch.setattr(web.control, "log_path", lambda: log)
     app.process = Process(code=2)
     page = html(get(app, "/review"))
-    assert "Робот не запустився: Робот уже працює" in page
+    assert "Робот не запустився. Натисніть «Старт» ще раз." in page
+    assert "Робот уже працює — другий запуск" not in page.split("Детальніше")[0]
+    assert "Робот уже працює — другий запуск" in page  # сирий рядок — лише під «Детальніше»
 
 
 @pytest.mark.parametrize("back", ["//evil.com/x", "https://evil.com", "", "\\\\evil"])
@@ -235,7 +237,7 @@ def test_sessions_tab_and_session_cards(conn, root, app):
         )
         conn.execute("UPDATE items SET session_id = 1 WHERE id = ?", (item,))
     page = html(get(app, "/sessions"))
-    assert "Ліміт на сьогодні вичерпано" in page and "/session/1" in page
+    assert "Денний ліміт вичерпано" in page and "/session/1" in page
     assert f"/item/{item}" in html(get(app, "/session/1"))
     assert get(app, "/session/99").status == 404
 

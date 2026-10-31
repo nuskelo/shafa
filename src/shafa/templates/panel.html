@@ -5,14 +5,30 @@
       <span class="dot dot-{{ tones.robot }}" aria-hidden="true"></span>
       <div class="tile-body">
         <strong class="tile-title">{{ robot.text }}</strong>
-        <span class="tile-sub">{{ robot.groups_text }} · Схвалених {{ robot.approved }}</span>
-        {% if robot.session_published is not none %}<span class="tile-sub">Публікує: у цій сесії {{ robot.session_published }} · у черзі {{ robot.approved }}</span>{% endif %}
+        {% set working = robot.code in ("running", "pausing", "paused", "stopping") %}
+        {% if robot.progress %}<span class="tile-sub robot-progress">{{ robot.progress }}</span>{% endif %}
+        {% if robot.doing %}<span class="tile-sub robot-doing">{{ robot.doing }}</span>{% endif %}
+        {% if robot.previous %}<span class="tile-sub robot-previous">{{ robot.previous }}</span>{% endif %}
+        {% if working and not robot.progress and robot.session_published is not none %}<span class="tile-sub">Публікує: у цій сесії {{ robot.session_published }} · у черзі {{ robot.approved }}</span>{% endif %}
+        <span class="tile-sub">{{ robot.groups_text }}{% if not working %} · Схвалених {{ robot.approved }}{% endif %}</span>
         {% if "start" in robot.buttons and robot.why_not %}<span class="tile-sub why">{{ robot.why_not }}</span>{% endif %}
-        {% if robot.last and "start" in robot.buttons %}<span class="tile-sub robot-last">Останній запуск: {{ robot.last }}</span>{% endif %}
+        {% if robot.eta_text %}<span class="tile-sub robot-eta">{{ robot.eta_text }}</span>{% endif %}
+        {% if robot.idle_note %}<span class="tile-sub robot-last">{{ robot.idle_note }}</span>{% endif %}
+        {% if robot.last and "start" in robot.buttons %}<span class="tile-sub robot-last">{{ robot.last }}{% if robot.last_problems %} → <a href="/problem">Відкрити Проблеми</a>{% endif %}{% if robot.last_session %} · <a href="/session/{{ robot.last_session }}">Подробиці сесії</a>{% endif %}</span>{% endif %}
         {% if robot.rehearsal and "start" in robot.buttons %}<span class="tile-sub robot-last">{{ robot.rehearsal }}{% if robot.rehearsal_problems %} · <a href="/problem">Проблеми</a>{% endif %}</span>{% endif %}
+        {% if robot.code == "running" %}<span class="tile-sub">Не закривайте вікно Chrome робота і кришку ноутбука, поки робот працює.</span>{% endif %}
+        {% if "pause" in robot.buttons or "resume" in robot.buttons %}<span class="tile-sub">Пауза — робот зачекає, «Продовжити» поверне до роботи. Стоп — допише поточний товар і завершить сесію.</span>{% endif %}
         {% if robot.code == "login_needed" %}
         <p class="robot-help">Робот вийшов із Шафи. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».</p>
+        {% elif robot.never_logged %}
+        <p class="robot-help">Робот ще не входив на Шафу. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».</p>
         {% endif %}
+        <details class="more-info" data-key="robot">
+          <summary>Детальніше</summary>
+          <p class="why">Ліміти «Сьогодні на Шафі» рахують усі спроби публікації, зокрема ті, що пішли в Проблеми, — тому цифра може бути більшою за кількість опублікованих.</p>
+          {% if "rehearse" in robot.buttons %}<p class="why">«Пробно заповнити завтрашні»: робот відкриє форму Шафи й заповнить її для завтрашніх Карток, але нічого не опублікує (≈ 5 хв). Так видно наперед, чи нема проблем.</p>{% endif %}
+          {% for line in robot.details %}<p class="why">{{ line }}</p>{% endfor %}
+        </details>
       </div>
     </div>
 
@@ -104,7 +120,7 @@
         <form method="post" action="/health" class="tile-buttons">
           <input type="hidden" name="token" value="{{ token }}">
           <input type="hidden" name="back" value="{{ back }}">
-          <button>Перевірити ще раз</button>
+          <button>{% if health.code == "none" %}Перевірити{% else %}Перевірити ще раз{% endif %}</button>
         </form>
         {% endif %}
       </div>
@@ -115,7 +131,7 @@
     <input type="hidden" name="token" value="{{ token }}">
     <input type="hidden" name="back" value="{{ back }}">
     {% if "rehearse" in robot.buttons %}
-    <button name="action" value="rehearse">Перевірити завтрашні</button>
+    <button name="action" value="rehearse" title="Робот заповнить форму Шафи для завтрашніх Карток, але нічого не опублікує">Пробно заповнити завтрашні (без публікації, ~5 хв)</button>
     {% endif %}
     {% if "pause" in robot.buttons %}<button name="action" value="pause">Пауза</button>{% endif %}
     {% if "resume" in robot.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
@@ -127,3 +143,4 @@
     {% endif %}
   </form>
 </section>
+{% if counts %}<span hidden data-counts="{% for key, value in counts.items() %}{{ key }}={{ value }};{% endfor %}"></span>{% endif %}

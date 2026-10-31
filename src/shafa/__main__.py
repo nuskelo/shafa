@@ -283,7 +283,7 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
     from playwright.sync_api import sync_playwright
 
-    from shafa.robot import browser, form, listings, publish, rehearse, sync
+    from shafa.robot import browser, control, form, listings, publish, rehearse, sync
 
     def log(line: str) -> None:
         print(line, flush=True)
@@ -294,6 +294,7 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
         if args.login:
             print("Увійдіть на Шафу у відкритому вікні й закрийте його.", flush=True)
             why = browser.wait_for_manual_login(p)
+            control.mark_login()  # UX-002: вікно закрито — «Старт» знову доступний
             print({"closed": "Вікно закрито.", "done": "Вікно закрито кнопкою «Я увійшов».",
                    "timeout": "15 хв минуло — вікно закрито."}[why], flush=True)  # fmt: skip
             return 0

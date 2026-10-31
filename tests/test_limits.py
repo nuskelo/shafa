@@ -224,9 +224,12 @@ def test_panel_state_counts_and_why_not(env):
 
     s = control.state(env.conn, env.tmp / "robot.lock", now=env.today)
 
-    assert s.groups_text == "Сьогодні: старих 0 з 2 · нових 1 з 1"
+    assert s.groups_text == "Сьогодні на Шафі: з минулих постів 0 з 2 · з нових (бот) 1 з 1"
     assert not s.can_start
-    assert s.why_not == "Сьогодні вже старих 0 з 2 · нових 1 з 1 — продовжимо завтра"
+    assert s.why_not == (
+        "На сьогодні все: з минулих постів 0 з 2 · з нових (бот) 1 з 1. "
+        "Завтра після 00:00 натисніть «Старт» ще раз."
+    )
 
     add_old(env, 800)
     s = control.state(env.conn, env.tmp / "robot.lock", now=env.today)

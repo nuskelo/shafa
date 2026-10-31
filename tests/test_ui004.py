@@ -235,7 +235,7 @@ def test_every_panel_action_is_in_the_markup(conn, root, app, monkeypatch):
         assert f'name="action" value="{value}"' in page
     assert 'action="/ai"' in page and 'name="action" value="update"' in page
     assert 'action="/bot"' in page and ">Запустити бота</button>" in page
-    assert 'action="/health"' in page and "Перевірити ще раз" in page
+    assert 'action="/health"' in page and "Перевірити</button>" in page
     assert page.count('name="token"') >= 4
     assert "Детальніше" in page  # довгі підказки — під «Детальніше»
 
@@ -279,7 +279,7 @@ def test_panel_endpoint_forgets_running_after_session_ends(conn, root, app, lock
     with conn:
         conn.execute("UPDATE sessions SET ended_at = 'y', stop_code = 'done'")
     page = html(get(app, "/robot/panel?back=/review"))
-    assert "Робот зупинений" in page and "Робот публікує" not in page
+    assert "Робот чекає" in page and "Робот публікує" not in page
     assert 'value="start"' in page
 
 
@@ -358,9 +358,7 @@ def test_browser_status_strip_updates_after_session_ends(conn, root, live, chrom
         held.release()
         with conn:
             conn.execute("UPDATE sessions SET ended_at = 'y', stop_code = 'done'")
-        assert wait_for(
-            lambda: "Робот зупинений" in page.inner_text("#robot")
-        )  # без перезавантаження
+        assert wait_for(lambda: "Робот чекає" in page.inner_text("#robot"))  # без перезавантаження
         assert page.locator("#robot button.approve").is_visible()
     finally:
         held.release()

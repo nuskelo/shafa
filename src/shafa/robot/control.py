@@ -12,33 +12,44 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from shafa import config
 from shafa.robot import lock, publish, rehearse
 
 ITEM_MINUTES = 4  # орієнтовно: стільки триває один товар (форма + фото + клік)
+POST_MINUTES = 3  # орієнтовно: стільки хвилин на пост разом із паузою, поки нема власних вимірів
 LOG_NAME = "robot-run.log"
+LOGIN_NAME = "login-last"  # UX-002: коли Власник/Продавчиня востаннє закривала вікно входу
 
 TEXTS = {
-    "stopped": "Робот зупинений",
+    "stopped": "Робот чекає",
     "starting": "Робот запускається…",
     "running": "Робот публікує",
     "pausing": "Пауза: чекаю, поки допишеться поточний товар",
-    "paused": "Робот на паузі",
+    "paused": "Робот на паузі — нічого не робить. «Продовжити» або «Стоп».",
     "stopping": "Стоп: чекаю, поки допишеться поточний товар",
     "login_needed": "Робот не увійшов на Шафу — потрібно увійти",
     "login_open": "Відкрито вікно входу на Шафу — увійдіть і закрийте вікно (або кнопка нижче)",
-    "rehearsing": "Йде пробний прогін: форма заповнюється, але нічого не публікується",
+    "rehearsing": "Йде пробна перевірка: форма заповнюється, але нічого не публікується",
     "busy": "Робот зайнятий іншою справою (Власник щось перевіряє)",
-    "crashed": "Робот зупинився несподівано — натисніть «Старт», щоб продовжити",
-    "failed": "Робот не запустився",
+    "crashed": "Робот зупинився посеред роботи. Натисніть «Старт», щоб продовжити. "
+    "Повториться — скажіть Власнику.",
+    "failed": "Робот не запустився. Натисніть «Старт» ще раз. Повториться — скажіть Власнику.",
 }
+CRASH_CLOSED = (
+    "Вікно Chrome робота закрилось — натисніть «Старт» ще раз. "
+    "Не закривайте це вікно, поки робот працює."
+)
+CRASH_TEXT = (
+    "Робот зупинився посеред роботи{done}. Натисніть «Старт», щоб продовжити. "
+    "Повториться — скажіть Власнику."
+)
 
 LAST = {  # причина зупинки останньої сесії — простими словами
-    "done": "Усі Схвалені опубліковано",
-    "limit": "Ліміт на сьогодні вичерпано",
+    "done": "Черга закінчилась",
+    "limit": "Денний ліміт вичерпано",
     "stop": "Зупинено кнопкою «Стоп»",
     "login": "Робот вийшов із Шафи",
     "no_form": "Шафа не показала форму «Додати товар» (сайт повільний чи змінився) — "
@@ -47,12 +58,17 @@ LAST = {  # причина зупинки останньої сесії — пр
     "site": "Шафа, мабуть, змінила форму — Картку в Проблемах, скажіть Власнику",
     "photos": "Не всі фото завантажились на форму — Картку в Проблемах, натисніть «Старт» ще раз; "
     "повториться — скажіть Власнику",
-    "slow": "Шафа довго не відповідала — натисніть «Старт» пізніше",
+    "slow": "Шафа довго не відповідала — натисніть «Старт» через 15–30 хв",
     "streak": "Кілька Карток поспіль не вдались — схоже, загальна причина; скажіть Власнику",
-    "error": "Помилка — Картку в Проблемах, перевірте її",
+    "error": "Робот зупинився посеред роботи — натисніть «Старт», щоб продовжити; "
+    "повториться — скажіть Власнику",
     "interrupted": "Робота перервано",
-    "crash": "Робот зупинився несподівано",
+    "crash": "Робот зупинився посеред роботи — натисніть «Старт», щоб продовжити; "
+    "повториться — скажіть Власнику",
 }
+
+# Що написати, коли «Старт» не спрацював (код — ключ у `web.MESSAGES`)
+WHY_CODES = {"busy": "busy", "none": "none", "limit": "limit", "login": "login", "setup": "setup"}
 
 
 @dataclass
@@ -65,7 +81,7 @@ class State:
     can_start: bool
     why_not: str = ""
     wait_minutes: int | None = None  # скільки ще дописувати поточний товар
-    last: str = ""  # як закінчилась остання сесія
+    last: str = ""  # як закінчилась остання сесія (рядок із датою)
     buttons: list[str] = field(default_factory=list)
     # CORE-005: почато сьогодні (старих, нових) і межі на день
     started: publish.Groups = field(default_factory=lambda: publish.Groups(0, 0))
@@ -73,21 +89,190 @@ class State:
     rehearsal: str = ""  # QA-003: підсумок останнього пробного прогону
     rehearsal_problems: int = 0
     session_published: int | None = None  # UI-004: скільки опубліковано в поточній сесії
+    # UX-002
+    why_code: str = ""  # ключ причини, чому «Старт» не спрацює (`WHY_CODES`)
+    last_session: int | None = None  # номер останньої сесії — для посилання «Подробиці сесії»
+    last_problems: int = 0  # скільки з неї пішло в Проблеми — для посилання «Відкрити Проблеми»
+    idle_note: str = ""  # «Сьогодні робот ще не запускався — можна натискати «Старт»»
+    queue_today: int = 0  # скільки Схвалених піде сьогодні (з огляду на ліміти)
+    eta_text: str = ""  # «Опублікує до 19 сьогодні (≈ 1 год)»
+    progress: str = ""  # «Публікує: 4 з 19 на сьогодні · працює 18 хв · ще ≈ 1 год 20 хв»
+    doing: str = ""  # «Зараз: пост 6979 «…» — заповнює форму» / «Пауза між товарами…»
+    previous: str = ""  # «Останній: пост 6393 — опубліковано ✓»
+    mini: str = ""  # «Робот: 4 з 19 · ≈ 1 год» — для міні-панелі на Картці
+    never_logged: bool = False  # профілю робота ще немає — показати «Увійти на Шафу»
+    details: list[str] = field(default_factory=list)  # «Детальніше»: пояснення й сирі рядки
 
     @property
     def groups_text(self) -> str:
-        return "Сьогодні: " + self.started.text(self.limits)
+        return "Сьогодні на Шафі: " + groups_line(self.started, self.limits)
+
+
+def groups_line(started: publish.Groups, limits: publish.Groups) -> str:
+    """«з минулих постів 0 з 20 · з нових (бот) 0 з 10» (A18)."""
+    return f"з минулих постів {started.old} з {limits.old} · з нових (бот) {started.new} з {limits.new}"
 
 
 def log_path() -> Path:
     return config.data_dir() / LOG_NAME
 
 
+def login_path() -> Path:
+    return config.data_dir() / LOGIN_NAME
+
+
+def mark_login(now: datetime | None = None) -> None:
+    """Вікно входу закрито: після цього «Старт» знову дозволений (`login_needed` знімається)."""
+    path = login_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text((now or datetime.now().astimezone()).isoformat(), encoding="utf-8")
+
+
+def _login_at() -> datetime | None:
+    try:
+        return datetime.fromisoformat(login_path().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+
+
 def _minutes_left(started: str | None, now: datetime) -> int | None:
+    """Скільки хвилин ще дописувати поточний товар; 0 — вже довше звичайного («ще трохи»)."""
     if not started:
         return None
     spent = (now - datetime.fromisoformat(started)).total_seconds() / 60
-    return max(1, math.ceil(ITEM_MINUTES - spent))
+    return max(0, math.ceil(ITEM_MINUTES - spent))
+
+
+def span(minutes: float, rough: bool = False) -> str:
+    """«менше хвилини», «12 хв», «1 год 20 хв»; `rough` (оцінка «ще ≈») — від 10 хв до 5 хв."""
+    if minutes < 1:
+        return "менше хвилини"
+    whole = int(5 * round(minutes / 5)) if rough and minutes >= 10 else round(minutes)
+    hours, rest = divmod(max(whole, 1), 60)
+    if not hours:
+        return f"{rest} хв"
+    return f"{hours} год" + (f" {rest} хв" if rest else "")
+
+
+def _stamp(value: str | None, now: datetime) -> datetime | None:
+    """Момент із бази (UTC-рядок) у місцевому часі `now`."""
+    try:
+        moment = datetime.fromisoformat(value or "")
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(now.tzinfo)
+
+
+def _when(moment: datetime, now: datetime) -> str:
+    """«сьогодні о 12:07», «вчора, 30.10 о 15:28», «28.10 о 15:28»."""
+    clock = f"{moment:%H:%M}"
+    days = (now.date() - moment.date()).days
+    if days == 0:
+        return f"сьогодні о {clock}"
+    if days == 1:
+        return f"вчора, {moment:%d.%m} о {clock}"
+    return f"{moment:%d.%m} о {clock}"
+
+
+def reason_of(code: str | None, reason: str | None) -> str:
+    """Причина зупинки сесії простими словами (UX-002: одна на панель і «Сесії»)."""
+    if code in ("error", "crash") and "TargetClosed" in (reason or ""):
+        return CRASH_CLOSED
+    return LAST.get(code or "", "") or (reason or "")
+
+
+def session_stats(row) -> str:
+    """«опубліковано 7, у Проблемах 11» — один підсумок для панелі й «Сесій» (A15)."""
+    line = f"опубліковано {row['published'] or 0}"
+    if row["problems"]:
+        line += f", у Проблемах {row['problems']}"
+    return line
+
+
+def _lower(text: str) -> str:
+    return text[:1].lower() + text[1:]
+
+
+def last_run(row, now: datetime, with_reason: bool = True) -> str:
+    """Рядок про останню сесію. Сьогодні — «Сесія 45 о 12:07 (1 год 12 хв): опубліковано 19, у
+    Проблемах 1»; раніше — з датою: «Останній запуск: вчора, 30.10 о 15:28 — опубліковано 13, …»."""
+    started = _stamp(row["started_at"], now)
+    ended = _stamp(row["ended_at"], now)
+    reason = (
+        ""
+        if row["stop_code"] == "done" or not with_reason
+        else _lower(reason_of(row["stop_code"], row["stop_reason"]))
+    )
+    if started is None:
+        return f"Останній запуск: {session_stats(row)}" + (f", {reason}" if reason else "")
+    if started.date() == now.date():
+        text = f"Сесія {row['id']} о {started:%H:%M}"
+        if ended is not None:
+            text += f" ({span((ended - started).total_seconds() / 60)})"
+        text += f": {session_stats(row)}"
+        return text + (f", {reason}" if reason else "")
+    if row["stop_code"] == "limit" and with_reason:
+        reason = "денний ліміт того дня вичерпано"
+    return f"Останній запуск: {_when(started, now)} — {session_stats(row)}" + (
+        f", {reason}" if reason else ""
+    )
+
+
+def rehearsal_text(summary: dict | None, now: datetime) -> tuple[str, int]:
+    """A11: «Пробна перевірка 28.10 (без публікації): 7 Карток — усе добре»; давніше 2 діб — немає."""
+    if not summary:
+        return "", 0
+    at = _stamp(summary.get("at"), now)
+    if at is None or now - at > timedelta(days=2):
+        return "", 0
+    checked, good = int(summary.get("checked") or 0), int(summary.get("good") or 0)
+    problems = int(summary.get("problems") or 0)
+    if checked == 0:
+        return f"Пробна перевірка {at:%d.%m} (без публікації): Карток для перевірки не було", 0
+    count = f"{checked} " + ("Картка" if checked == 1 else "Картки" if checked < 5 else "Карток")
+    if good == checked and not problems:
+        verdict = "усе добре"
+    else:
+        verdict = f"добре {good}"
+        if problems:
+            verdict += f", у Проблемах {problems}"
+            if summary.get("codes"):
+                verdict += f" ({summary['codes']})"
+        if rest := checked - good - problems:
+            verdict += f", з помилкою {rest}"
+    return f"Пробна перевірка {at:%d.%m} (без публікації): {count} — {verdict}", problems
+
+
+def _stage_lines(data: dict, now: datetime) -> tuple[str, str]:
+    """Рядки «Зараз: …» і «Останній: …» за записом `robot-now.json`."""
+    stage = data.get("stage")
+    post = data.get("post")
+    title = data.get("title") or ""
+    name = f"пост {post}" if post else "товар"
+    if title:
+        name += f" «{title[:40]}{'…' if len(title) > 40 else ''}»"
+    doing = {
+        "start": "Зараз: відкриває Шафу і читає ваші товари (щоб не було дублів) — це кілька хвилин",
+        "fill": f"Зараз: {name} — заповнює форму",
+        "submit": f"Зараз: {name} — натискає «Додати річ»",
+        "retry": "Шафа відповідає повільно — коротка пауза й ще одна спроба",
+        "between": "Зараз: переходить до наступного поста",
+    }.get(stage or "", "")
+    if stage == "pause":
+        until = _stamp(data.get("until"), now)
+        left = math.ceil((until - now).total_seconds() / 60) if until else 0
+        doing = "Пауза між товарами (як людина) — наступний " + (
+            f"за ~{left} хв" if left >= 1 else "зовсім скоро"
+        )
+    last = data.get("last")
+    previous = ""
+    if isinstance(last, dict) and last.get("post"):
+        previous = f"Останній: пост {last['post']} — " + (
+            "опубліковано ✓" if last.get("ok") else "потрапив у Проблеми"
+        )
+    return doing, previous
 
 
 def state(
@@ -97,8 +282,11 @@ def state(
     now: datetime | None = None,
     starting: bool = False,
     failed: bool = False,
+    spawned: datetime | None = None,
+    never_logged: bool = False,
 ) -> State:
-    """Що зараз з роботом і які кнопки доступні."""
+    """Що зараз з роботом і які кнопки доступні. `spawned` — коли екран запустив процес робота
+    (щоб відрізнити «впав посеред роботи» від «не запустився»)."""
     now = now or datetime.now().astimezone()
     day_limit = day_limit or publish.daily_limit()
     busy = lock.busy(lock_file)
@@ -116,6 +304,21 @@ def state(
         limits: publish.Groups | None = publish.group_limits()
     except publish.SetupError:
         limits = None  # робот на старті зупиниться з поясненням; екран не падає
+
+    # A14: «запускається» — лише поки сесії, почато після запуску (відкритої чи вже закритої), немає
+    if starting and spawned is not None:
+        newest = conn.execute("SELECT started_at FROM sessions ORDER BY id DESC LIMIT 1").fetchone()
+        opened = _stamp(newest[0], now) if newest else None
+        if opened is not None and opened >= spawned.astimezone(now.tzinfo):
+            starting = False
+    # A19: процес завершився з помилкою після того, як сесія вже почалась, — «впав посеред роботи»
+    crashed_after = bool(
+        failed
+        and last is not None
+        and spawned is not None
+        and (opened := _stamp(last["started_at"], now)) is not None
+        and opened >= spawned.astimezone(now.tzinfo)
+    )
 
     wait = None
     if busy and busy.get("mode") == "publish":
@@ -137,26 +340,44 @@ def state(
         code = "busy"
     elif starting:
         code = "starting"
-    elif open_session:
+    elif open_session or crashed_after:
         code = "crashed"  # сесія відкрита, а замок вільний — процес помер
     elif failed:
         code = "failed"
-    elif last is not None and last["stop_code"] == "login":
+    elif (
+        last is not None
+        and last["stop_code"] == "login"
+        and not ((at := _login_at()) is not None and at >= (_stamp(last["ended_at"], now) or at))
+    ):
         code = "login_needed"
     else:
         code = "stopped"
 
     idle = code in ("stopped", "login_needed", "crashed", "failed")
-    why_not = ""
-    if idle and approved == 0:
-        why_not = "Немає Схвалених Карток"
+    why_not, why_code = "", ""
+    after = "Завтра після 00:00 натисніть «Старт» ще раз."
+    if idle and code == "login_needed":
+        why_not, why_code = "Спершу увійдіть на Шафу: натисніть «Увійти на Шафу»", "login"
+    elif idle and approved == 0:
+        why_not = "Немає Схвалених — схваліть Картки у «На перевірку», потім «Старт»."
+        why_code = "none"
     elif idle and today >= day_limit:
-        why_not = f"Сьогодні вже {today} з {day_limit} — ліміт доби вичерпано, продовжимо завтра"
+        why_not = f"На сьогодні все: {today} з {day_limit}. {after}"
+        why_code = "limit"
     elif idle and limits is None:
         why_not = "Межі старих і нових на день у налаштуваннях неправильні"
+        why_code = "setup"
     elif idle and not any(publish.group_open(r["folder_name"], started, limits) for r in rows):
-        why_not = f"Сьогодні вже {started.text(limits)} — продовжимо завтра"
+        why_not = f"На сьогодні все: {groups_line(started, limits)}. {after}"
+        why_code = "limit"
+    elif not idle:
+        why_code = "busy"
     can_start = idle and not why_not
+
+    # Скільки піде сьогодні (A12/Б3): Схвалені з огляду на ліміти доби й груп
+    queue_today = 0
+    if idle and approved and limits is not None:
+        queue_today = len(publish.take(rows, started, limits, max(day_limit - today, 0)))
 
     buttons = []
     if idle:
@@ -167,30 +388,88 @@ def state(
         buttons += ["pause", "stop"]
     if code in ("pausing", "paused"):
         buttons += ["resume", "stop"]
-    if code == "login_needed":
+    if code == "login_needed" or (idle and never_logged):
         buttons.append("login")
     if code == "login_open":
         buttons.append("login_done")
 
-    text = TEXTS[code]
-    if wait:
-        text += f" (~{wait} хв)"
-    last_text = ""
-    if last is not None:
-        last_text = LAST.get(last["stop_code"] or "", "") or (last["stop_reason"] or "")
-        if last["stop_code"] == "done" and last["problems"]:  # не всі Схвалені опубліковано
-            last_text = f"Опубліковано {last['published']}, у Проблемах {last['problems']}"
-    summary = rehearse.last_summary()
-    in_session = None
+    published_in_session = None
     if code in ("running", "pausing", "paused", "stopping") and open_session:
-        in_session = conn.execute(
+        published_in_session = conn.execute(
             "SELECT count(*) FROM items WHERE session_id = ? AND status = 'published'",
             (open_session["id"],),
         ).fetchone()[0]
-    return State(code, text, today, day_limit, approved, can_start, why_not, wait, last_text,
-                 buttons, started, limits or publish.Groups(0, 0),
-                 summary["summary"] if summary else "",
-                 int(summary.get("problems") or 0) if summary else 0, in_session)  # fmt: skip
+
+    data = (
+        publish.read_now(open_session["id"])
+        if open_session and code in ("running", "pausing", "paused", "stopping")
+        else {}
+    )
+    doing, previous = _stage_lines(data, now) if data else ("", "")
+    if code == "paused":
+        doing = ""  # на паузі робот нічого не робить
+    progress, mini = "", ""
+    if data.get("plan"):
+        plan, handled = int(data["plan"]), int(data.get("handled") or 0)
+        began = _stamp(open_session["started_at"], now)
+        elapsed = max((now - began).total_seconds() / 60, 0) if began else 0
+        per = elapsed / handled if handled else POST_MINUTES
+        left = max(plan - handled, 0) * per
+        progress = f"Публікує: {handled} з {plan} на сьогодні · працює {span(elapsed)}"
+        mini = f"Робот: {handled} з {plan}"
+        if left >= 1:
+            progress += f" · ще ≈ {span(left, rough=True)}"
+            mini += f" · ≈ {span(left, rough=True)}"
+
+    text = TEXTS[code]
+    if code in ("pausing", "stopping"):
+        post = data.get("post") if data.get("stage") in ("fill", "submit") else None
+        what = f"пост {post}" if post else "поточний товар"
+        verb = "Пауза" if code == "pausing" else "Стоп"
+        text = f"{verb}: дописую {what}"
+        if wait is not None:
+            text += f", ще ≈ {wait} хв" if wait else ", ще трохи"
+    details: list[str] = []
+    if code == "crashed":
+        done = last["published"] if last is not None and crashed_after else 0
+        if open_session:
+            done = (
+                published_in_session
+                or conn.execute(
+                    "SELECT count(*) FROM items WHERE session_id = ? AND status = 'published'",
+                    (open_session["id"],),
+                ).fetchone()[0]
+            )
+        reason = (last["stop_reason"] or "") if last is not None and crashed_after else ""
+        text = (
+            CRASH_CLOSED
+            if "TargetClosed" in reason
+            else CRASH_TEXT.format(done=f" (опубліковано {done})" if done else "")
+        )
+        if reason:
+            details.append(reason)
+    last_text = (  # після збою причина вже в головному рядку — не повторюємо
+        last_run(last, now, with_reason=code not in ("crashed", "failed"))
+        if last is not None
+        else ""
+    )
+    idle_note = ""
+    if can_start and (
+        last is None or (_stamp(last["started_at"], now) or now).date() != now.date()
+    ):
+        idle_note = "Сьогодні робот ще не запускався — можна натискати «Старт»."
+    eta = ""
+    if can_start and queue_today:
+        eta = f"Опублікує до {queue_today} сьогодні (≈ {span(queue_today * POST_MINUTES, rough=True)})"
+    rehearsal, rehearsal_problems = rehearsal_text(rehearse.last_summary(), now)
+    return State(
+        code, text, today, day_limit, approved, can_start, why_not, wait, last_text, buttons,
+        started, limits or publish.Groups(0, 0), rehearsal, rehearsal_problems,
+        published_in_session, why_code,
+        last["id"] if last is not None else None,
+        int(last["problems"] or 0) if last is not None else 0,
+        idle_note, queue_today, eta, progress, doing, previous, mini, never_logged and idle, details,
+    )  # fmt: skip
 
 
 def log_line(text: str, log: Path | None = None) -> None:

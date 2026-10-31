@@ -19,9 +19,9 @@
       </span>
       <span class="s-stats">
         <span>Опубліковано <b>{{ s.published }}</b></span>
-        <span>У Проблемах <b>{{ s.problems }}</b></span>
+        <span>У Проблемах <b>{{ s.problems }}</b>{% if s.problems %} — подивіться{% endif %}</span>
       </span>
-      <span class="s-why tone-{{ tone }}">{% if tone == "run" %}працює{% else %}{{ reasons.get(s.stop_code or "", "") or (s.stop_reason or "") or "закінчилась" }}{% endif %}</span>
+      <span class="s-why tone-{{ tone }}">{% if tone == "run" %}працює{% else %}{{ reason_of(s.stop_code, s.stop_reason) or "закінчилась" }}{% endif %}</span>
     </a>
   </li>
 {% endfor %}

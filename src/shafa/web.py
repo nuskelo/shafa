@@ -120,8 +120,15 @@ MESSAGES = {
     "not_on_shafa": "Картку повернуто в Схвалені — робот опублікує її при наступному запуску",
     "other_item": "Картку повернуто в Схвалені — на схожість її більше не перевірятимемо",
     "duplicate_archived": "Картку перенесено в Архів",
-    "robot_started": "Робот запускається — за хвилину з'явиться вікно Chrome",
-    "robot_cannot_start": "Робота не запущено",
+    "robot_started": "Робот запускається — за хвилину відкриється окреме вікно Chrome. Не закривайте "
+    "його і нічого в ньому не натискайте (згорнути можна). Не закривайте кришку ноутбука, поки "
+    "робот працює. Стан — тут, на панелі.",
+    "robot_cannot_start": "Робота не запущено: зараз це неможливо",
+    "robot_cannot_start_busy": "Робота не запущено: робот уже працює",
+    "robot_cannot_start_none": "Робота не запущено: немає Схвалених Карток",
+    "robot_cannot_start_limit": "Робота не запущено: на сьогодні все — ліміт доби вичерпано",
+    "robot_cannot_start_login": "Робота не запущено: спершу увійдіть на Шафу",
+    "robot_cannot_start_setup": "Робота не запущено: у налаштуваннях неправильні межі на день",
     "robot_paused": "Пауза: робот допише поточний товар і зачекає",
     "robot_resumed": "Продовжуємо",
     "robot_stopping": "Стоп: робот допише поточний товар і зупиниться",
@@ -131,11 +138,12 @@ MESSAGES = {
     "robot_login_done": "Закриваю вікно входу — за кілька секунд можна натискати «Старт»",
     "robot_no_login_window": "Вікно входу вже закрито",
     "robot_fake_login": "У підставному режимі вхід на Шафу не потрібен",
-    "rehearse_started": "Пробний прогін запускається — за хвилину з'явиться вікно Chrome",
-    "rehearse_busy": "Робот зайнятий (йде публікація чи інша справа) — пробний прогін після неї",
-    "rehearse_cannot": "Пробний прогін зараз не запустити: немає Схвалених або робот ще запускається",
-    "rehearse_fake": "У підставному режимі пробного прогону немає",
-    "rehearse_setup": "Пробний прогін не запущено: неправильне налаштування кількості Карток",
+    "rehearse_started": "Пробна перевірка запускається — за хвилину відкриється окреме вікно Chrome. "
+    "Нічого не публікується; не закривайте вікно, поки воно працює",
+    "rehearse_busy": "Робот зайнятий (йде публікація чи інша справа) — пробна перевірка після неї",
+    "rehearse_cannot": "Пробну перевірку зараз не запустити: немає Схвалених або робот ще запускається",
+    "rehearse_fake": "У підставному режимі пробної перевірки немає",
+    "rehearse_setup": "Пробну перевірку не запущено: неправильне налаштування кількості Карток",
     "health_started": "Перевіряю — результат з'явиться на панелі за кілька секунд",
     "health_running": "Перевірка вже йде",
     "health_wait": "Щойно перевіряли — зачекайте пів хвилини",
@@ -387,6 +395,7 @@ class App:
         self.lock_file = lock_file
         self.process = None  # останній запущений з екрана процес робота
         self.started_at = 0.0
+        self.spawned_at: datetime | None = None  # UX-002: коли екран запустив процес робота
         # ШІ: одна робота за раз (Оновити, збір результатів, «спробуй ще раз») — без подвійних оплат.
         self.ai_client, self.run, self.clock, self.today = ai_client, run, clock, today
         self.ai_lock = threading.Lock()
@@ -527,10 +536,14 @@ class App:
             },
         }  # fmt: skip
 
-    def _chrome(self, conn, request: Request) -> dict:
-        """Спільне для всіх сторінок: вкладки з лічильниками і панель робота."""
+    def _counts(self, conn) -> dict:
         counts = review.counts(conn)
         counts["sessions"] = conn.execute("SELECT count(*) FROM sessions").fetchone()[0]
+        return counts
+
+    def _chrome(self, conn, request: Request) -> dict:
+        """Спільне для всіх сторінок: вкладки з лічильниками і панель робота."""
+        counts = self._counts(conn)
         return {
             "tabs": TAB_TITLES,
             "counts": counts,
@@ -968,9 +981,14 @@ class App:
         code = process.poll() if process is not None else None
         starting = process is not None and code is None and time.monotonic() - self.started_at < 60
         failed = process is not None and code not in (None, 0, 130)
-        state = control.state(conn, self.lock_file, starting=starting, failed=failed)
-        if state.code == "failed":
-            state.text += ": " + last_log_line(control.log_path())
+        state = control.state(
+            conn, self.lock_file, starting=starting, failed=failed, spawned=self.spawned_at,
+            never_logged=not self.fake_shafa and not _logged_in(),
+        )  # fmt: skip
+        if state.code in ("failed", "crashed") and failed:
+            state.details.append(
+                last_log_line(control.log_path())
+            )  # сирий рядок — лише в «Детальніше»
         return state
 
     def panel(self, request: Request) -> Response:
@@ -979,7 +997,7 @@ class App:
             template = "panel_mini.html" if request.arg("mini") else "panel.html"
             html = self.env.get_template(template).render(
                 token=self.token, local=local_time, back=safe_back(request.arg("back")),
-                fake=self.fake_shafa, **self._panel_context(conn),
+                fake=self.fake_shafa, counts=self._counts(conn), **self._panel_context(conn),
             )  # fmt: skip
         finally:
             conn.close()
@@ -994,7 +1012,8 @@ class App:
             if action == "start":
                 state = self.robot_state(conn)
                 if not state.can_start:
-                    return redirect(f"{back}{sep}msg=robot_cannot_start")
+                    why = control.WHY_CODES.get(state.why_code)
+                    return redirect(f"{back}{sep}msg=robot_cannot_start{'_' + why if why else ''}")
                 args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
                 self._spawn(args + (["--fake-shafa"] if self.fake_shafa else []))
                 return redirect(f"{back}{sep}msg=robot_started")
@@ -1042,6 +1061,7 @@ class App:
     def _spawn(self, args: list[str]) -> None:
         self.process = self.spawner(args)
         self.started_at = time.monotonic()
+        self.spawned_at = datetime.now().astimezone()
 
     # --- Сторінки ---
 
@@ -1355,7 +1375,7 @@ class App:
                 current="sessions",
                 sessions=sessions,
                 s_tones={r["id"]: session_tone(r) for r in sessions},
-                reasons=control.LAST,
+                reason_of=control.reason_of,
                 message=MESSAGES.get(request.arg("msg")),
             )
         finally:
@@ -1383,7 +1403,7 @@ class App:
                 tone=session_tone(row),
                 cards=cards,
                 rows={c.id: problem_row(c) for c in cards if c.status == Status.PROBLEM},
-                reasons=control.LAST,
+                reason_of=control.reason_of,
                 message=None,
             )
         finally:
@@ -1728,7 +1748,9 @@ def session_tone(row) -> str:
     if row["ended_at"] is None:
         return "run"
     if row["stop_code"] in CALM_STOPS:
-        return "ok"
+        return (
+            "warn" if row["problems"] else "ok"
+        )  # UX-002: частина пішла в Проблеми — не «все добре»
     return "warn" if row["stop_code"] or row["stop_reason"] else "idle"
 
 
@@ -1747,6 +1769,15 @@ def local_time(stamp: str | None) -> str:
         return datetime.fromisoformat(stamp).astimezone().strftime("%d.%m.%Y %H:%M")
     except ValueError:
         return stamp
+
+
+def _logged_in() -> bool:
+    """Профіль робота вже є (вхід на Шафу колись робили) — UX-002, кнопка «Увійти на Шафу»."""
+    profile = browser.profile_dir()
+    try:
+        return profile.is_dir() and any(profile.iterdir())
+    except OSError:
+        return False
 
 
 def last_log_line(path: Path) -> str:
