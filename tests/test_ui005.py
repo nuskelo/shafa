@@ -357,12 +357,12 @@ def test_reject_also_goes_next_and_last_says_all_done(conn, root, app):
     first, second, _ = build_review(conn, root)
     page = page_of(app, first)
     response = send_form(app, page, first, action="reject")
-    assert location(response) == f"/item/{second}?from=%2Freview&msg=rejected"
+    assert location(response) == f"/item/{second}?from=%2Freview&msg=rejected&ok={first}"
     assert status(conn, first) == Status.ARCHIVED
     last = page_of(app, second, f"/item/{second}?from=%2Freview%3Ff%3Dok")
     assert hidden_value(last, "next") is None  # у «Готових» 1343 — остання (1342 вже в архіві)
     response = send_form(app, last, second, action="reject")
-    assert location(response) == "/review?f=ok&msg=rejected"  # жовта ще на перевірці
+    assert location(response) == f"/review?f=ok&msg=rejected&ok={second}"  # жовта ще на перевірці
 
 
 @pytest.mark.parametrize(

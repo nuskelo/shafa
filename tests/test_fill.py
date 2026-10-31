@@ -84,7 +84,7 @@ def test_no_section_from_ai_is_problem_not_similar_section(conn, root):
 
     row = item(conn, item_id)
     assert (row["status"], row["problem_code"]) == (Status.PROBLEM, "no_section")
-    assert row["problem_text"].startswith("Немає підходящого розділу на Шафі")
+    assert row["problem_text"].startswith("Робот публікує лише взуття й аксесуари")
 
 
 def test_api_error_moves_to_problem_without_blank(conn, root):

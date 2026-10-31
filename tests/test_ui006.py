@@ -43,18 +43,18 @@ def status_of(conn, item_id):
 # --- Проблеми: мітка і «Що робити» для кожного коду ---
 
 CODES = [
-    ("many_items", "Кілька товарів", "опублікуй вручну"),
-    ("no_section", "Нема розділу", "опублікуй вручну"),
-    ("possible_duplicate", "Схожий є на Шафі", "відкрий Картку і порівняй"),
+    ("many_items", "Кілька пар у пості", "опублікуйте на Шафі вручну"),
+    ("no_section", "Не взуття й не аксесуар", "опублікуйте на Шафі вручну"),
+    ("possible_duplicate", "Схожий є на Шафі", "відкрийте Картку й порівняйте"),
     ("publish_uncertain", "Не впевнений", "«Мої речі» на Шафі"),
-    ("publish_error", "Шафа не прийняла", "відкрий Картку"),
-    ("shafa_declined", "Шафа не прийняла", "відкрий Картку"),
-    ("photos_missing", "Фото", "перевір папку з фото"),
-    ("robot_photos", "Фото", "перевір папку з фото"),
+    ("publish_error", "Шафа не прийняла при публікації", "відкрийте Картку"),
+    ("shafa_declined", "Шафа відхилила оголошення", "відкрийте Картку"),
+    ("photos_missing", "Фото", "перевірте папку з фото"),
+    ("robot_photos", "Фото", "робот спробує ще раз"),
     ("post_deleted", "Пост видалено", "продано"),
     ("robot_field_missing", "Робот", "робот спробує знову"),
     ("robot_brand_missing", "Робот", "робот спробує знову"),
-    ("щось_нове", "Проблема", "відкрий Картку"),
+    ("щось_нове", "Проблема", "відкрийте Картку"),
 ]
 
 
@@ -70,14 +70,14 @@ def test_problem_row_has_label_reason_and_todo(conn, root, app, code, label, tod
 
 
 def test_reason_is_problem_text_or_sticky_title(conn, root, app):
-    plain = problem(conn, root, "many_items", "У пості кілька товарів з різними цінами")
+    plain = problem(conn, root, "no_price", "У пості кілька товарів з різними цінами")
     sticky = problem(conn, root, "publish_error", "Шафа: price is invalid",
                      folder="1343", post_id=1343)  # fmt: skip
     page = html(get(app, "/problem"))
     assert "У пості кілька товарів з різними цінами" in row(page, plain)
     assert "<details" not in row(page, plain)
     # для проблем публікації причина — простими словами, текст Шафи — в «Подробицях»
-    assert '<p class="reason-line">Шафа не прийняла товар</p>' in row(page, sticky)
+    assert '<p class="reason-line">Шафа не прийняла при публікації</p>' in row(page, sticky)
     assert "Шафа: price is invalid" in row(page, sticky)
 
 
@@ -96,16 +96,16 @@ def buttons(page: str) -> set[str]:
 @pytest.mark.parametrize(
     ("code", "expected"),
     [
-        ("many_items", {"recheck", "to_archive"}),
-        ("no_section", {"recheck", "to_archive"}),
-        ("robot_field_missing", {"recheck"}),
-        ("photos_missing", {"recheck"}),
+        ("many_items", {"recheck", "to_archive", "on_shafa"}),
+        ("no_section", {"recheck", "to_archive", "on_shafa"}),
+        ("robot_field_missing", {"recheck", "to_archive", "to_review", "on_shafa"}),
+        ("photos_missing", {"recheck", "to_archive"}),
         ("щось_нове", {"recheck"}),
-        ("possible_duplicate", {"to_archive"}),
+        ("possible_duplicate", {"to_archive", "on_shafa"}),
         ("already_published", {"to_archive"}),
         ("shafa_declined", {"to_archive"}),
         ("publish_uncertain", set()),  # потрібне посилання на товар — лише на Картці
-        ("publish_error", set()),
+        ("publish_error", {"to_review"}),
     ],
 )
 def test_buttons_only_where_action_is_allowed(conn, root, app, code, expected):
@@ -134,13 +134,13 @@ def test_archive_button_really_archives(conn, root, app, code):
     """`ARCHIVE_CODES` — рівно ті коди, які `publish.to_archive` справді приймає."""
     item = problem(conn, root, code)
     response = post(
-        app, f"/item/{item}", action="to_archive", **{"from": "/problem", "stay": "list"}
-    )
+        app, f"/item/{item}", action="to_archive", sure="1", **{"from": "/problem", "stay": "list"}
+    )  # CORE-017 коди без повернення питають підтвердження (UX-004)
     assert location(response).startswith("/problem?msg=duplicate_archived")
     assert status_of(conn, item)[0] == Status.ARCHIVED
 
 
-@pytest.mark.parametrize("code", ["photos_missing", "robot_photos", "robot_field_missing"])
+@pytest.mark.parametrize("code", ["no_price", "ai_error", "robot_logged_out"])
 def test_no_archive_button_where_server_refuses(conn, root, app, code):
     """Для цих кодів `to_archive` нічого не робить — кнопки «В архів» немає (див. handoff)."""
     item = problem(conn, root, code)
@@ -243,7 +243,7 @@ def test_photos_missing_card_offers_recheck_not_dead_archive(conn, root, app):
     """На Картці `photos_missing` була кнопка «В Архів», яку сервер ігнорував, і не було «Перевірити ще раз»."""
     item = problem(conn, root, "photos_missing")
     page = html(get(app, f"/item/{item}"))
-    assert 'value="recheck"' in page and 'value="to_archive"' not in page
+    assert 'value="recheck"' in page and 'value="to_archive"' in page  # UX-004: «В архів» працює
 
 
 # --- Архів ---
@@ -267,8 +267,8 @@ def archived(conn, root, code=None, text=None, folder="1342", post_id=1342, shaf
 def test_archive_shows_deletion_date_reason_and_restore(conn, root, app):
     item = archived(conn, root, "post_deleted", "Пост видалено з каналу — продано")
     page = html(get(app, "/archived"))
-    assert f"видалиться {review.deletion_date(ARCHIVED_AT):%d.%m.%Y}" in page
-    assert "Пост видалено з каналу — продано" in page
+    assert f"видалиться з програми {review.deletion_date(ARCHIVED_AT):%d.%m.%Y}" in page
+    assert "пост видалено з каналу — пару, мабуть, продано" in page
     assert 'name="action" value="restore"' in page
     assert f'action="/item/{item}"' in page
 
@@ -426,7 +426,9 @@ def test_core017_archive_from_card_and_list(conn, root, app, code):
     item = problem(conn, root, code)
     assert 'value="to_archive"' in row(html(get(app, "/problem")), item)
     assert 'value="to_archive"' in html(get(app, f"/item/{item}?from=/problem"))
-    where = location(post(app, f"/item/{item}", action="to_archive", **{"from": "/problem"}))
+    where = location(
+        post(app, f"/item/{item}", action="to_archive", sure="1", **{"from": "/problem"})
+    )
     assert where.startswith("/problem?msg=duplicate_archived")
     assert "Картку перенесено в Архів" in html(get(app, where))
     assert status_of(conn, item) == (Status.ARCHIVED, code)
@@ -436,7 +438,7 @@ def test_core017_archive_from_card_and_list(conn, root, app, code):
 @pytest.mark.parametrize("code", FINAL)
 def test_core017_hint_mentions_archive(conn, root, app, code):
     item = problem(conn, root, code)
-    assert "в архів" in row(html(get(app, "/problem")), item)
+    assert "В архів" in row(html(get(app, "/problem")), item)
 
 
 @pytest.mark.parametrize("code", FINAL)
@@ -446,7 +448,7 @@ def test_core017_archived_stays_after_scan_and_purge(conn, root, app, code):
     from shafa import review, scan
 
     item = problem(conn, root, code)
-    post(app, f"/item/{item}", action="to_archive")
+    post(app, f"/item/{item}", action="to_archive", sure="1")
     review.purge_archive(conn, datetime.fromisoformat(review.now()) + timedelta(days=8))
     assert status_of(conn, item) == (Status.ARCHIVED, code)
     assert scan.touchable(Status.ARCHIVED, code) is False
@@ -455,7 +457,7 @@ def test_core017_archived_stays_after_scan_and_purge(conn, root, app, code):
 @pytest.mark.parametrize("code", FINAL)
 def test_core017_restore_refused_and_hidden(conn, root, app, code):
     item = problem(conn, root, code)
-    post(app, f"/item/{item}", action="to_archive")
+    post(app, f"/item/{item}", action="to_archive", sure="1")
     assert 'value="restore"' not in html(get(app, "/archived"))
     assert 'value="restore"' not in html(get(app, f"/item/{item}"))
     where = location(post(app, f"/item/{item}", action="restore"))
@@ -468,5 +470,5 @@ def test_core017_restore_refused_and_hidden(conn, root, app, code):
 def test_core017_archive_shows_reason(conn, root, app, code):
     problem(conn, root, code, "Причина X")
     item = conn.execute("SELECT id FROM items").fetchone()[0]
-    post(app, f"/item/{item}", action="to_archive")
+    post(app, f"/item/{item}", action="to_archive", sure="1")
     assert "Причина X" in html(get(app, "/archived"))

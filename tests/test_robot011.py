@@ -441,7 +441,7 @@ def test_card_page_offers_only_open_on_shafa_and_archive(env, app):
 
     page = get(app, f"/item/{item}").body.decode("utf-8")
 
-    assert "Шафа відхилила оголошення після публікації" in page
+    assert "Шафа відхилила оголошення" in page
     assert "Ціна вище ринкової" in page
     assert "Відкрити на Шафі" in page and "https://shafa.ua/uk/item/900-x" in page
     assert 'value="to_archive"' in page

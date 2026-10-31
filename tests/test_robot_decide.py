@@ -77,9 +77,9 @@ def test_on_shafa_refuses_bad_link_and_other_codes(env):
         publish.on_shafa(env.conn, env.root, item, "https://evil.com/1/221913242-x") == "bad_link"
     )
     assert row(env, item)["status"] == Status.PROBLEM
-    dup = problem(env, "possible_duplicate", "1400", 1400)
-    assert publish.on_shafa(env.conn, env.root, dup, "221913242") == "stale"
-    assert row(env, dup)["status"] == Status.PROBLEM
+    other = problem(env, "no_price", "1400", 1400)  # UX-004: «вручну» — лише для своїх кодів
+    assert publish.on_shafa(env.conn, env.root, other, "221913242") == "stale"
+    assert row(env, other)["status"] == Status.PROBLEM
 
 
 @pytest.mark.parametrize("code", ["publish_uncertain", "publish_error"])

@@ -300,7 +300,7 @@ def test_already_published_only_archive(conn, root, app):
 def test_robot_problem_keeps_recheck(conn, root, app):
     item = problem(conn, root, "robot_field_missing")
     page = html(get(app, f"/item/{item}"))
-    assert 'value="recheck"' in page and 'value="on_shafa"' not in page
+    assert 'value="recheck"' in page and "Опублікувала вручну" in page  # UX-004 (B5)
 
 
 def test_duplicate_shows_name_and_photo_of_similar(conn, root, app, tmp_path):
@@ -344,7 +344,7 @@ def test_deleted_post_reason_shown_in_archive(conn, root, app):
             "WHERE id = ?",
             (now(), item),  # свіжа дата: через 7 днів Архів прибирає запис
         )
-    assert "Пост видалено з каналу — продано" in html(get(app, "/archived"))
+    assert "пост видалено з каналу — пару, мабуть, продано" in html(get(app, "/archived"))
 
 
 def test_site_line_on_panel_only_when_site_on(conn, root, app, monkeypatch):
