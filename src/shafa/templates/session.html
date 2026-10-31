@@ -28,7 +28,7 @@
         <span class="mark mark-{{ 'bad' if row else 'ok' }}">{{ row.label if row else tabs.get(card.status, card.status) }}</span>
       </span>
       <span class="body">
-        <span class="name">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</span>
+        <span class="name">{{ card | card_name }}</span>
         {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
         {% if row and row.why %}<span class="problem">{{ row.why }}</span>{% endif %}
         <span class="meta">{{ ("Пост " ~ card.post_id) if card.post_id }}</span>

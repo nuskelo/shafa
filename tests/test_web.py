@@ -158,7 +158,7 @@ def test_card_page_shows_yellow_with_reason_and_confirm(app, item_id):
     assert 'class="field yellow"' in page
     assert "розділ не звірено з довідником" in page
     assert 'value="confirm:section"' in page
-    assert "Схвалити не можна: розділ жовтий" in page
+    assert "Щоб схвалити: перевірте розділ" in page
     assert page.count(f'src="/thumb/{item_id}/') == 2
     assert "Шкіряні кеди Ecco 38 розміру. Устілка" in page  # текст поста для звірки
     assert f'name="token" value="{TOKEN}"' in page
@@ -185,14 +185,14 @@ def test_save_edit(conn, app, item_id):
     response = post(app, f"/item/{item_id}", action="save", brand="ECCO", season="Зима")
     assert location(response) == f"/item/{item_id}?msg=saved"
     assert edits(conn, item_id) == {"brand": "ECCO", "season": ["Зима"]}
-    assert "змінено вручну" in html(get(app, f"/item/{item_id}?msg=saved"))
+    assert "змінено вами" in html(get(app, f"/item/{item_id}?msg=saved"))
 
 
 def test_bad_value_shown(conn, app, item_id):
     response = post(app, f"/item/{item_id}", action="save", price="дорого", brand="ECCO")
-    assert location(response) == f"/item/{item_id}?msg=bad&bad=price"
+    assert location(response).startswith(f"/item/{item_id}?msg=bad&bad=price&v_price=")
     page = html(get(app, location(response)))
-    assert "ціна — ціле число гривень" in page
+    assert "Ціна — лише цифри, напр. 1960" in page and 'value="дорого"' in page
     assert 'class="field bad"' in page
     assert edits(conn, item_id) == {"brand": "ECCO"}
 

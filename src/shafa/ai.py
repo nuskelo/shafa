@@ -753,6 +753,7 @@ def check_photo_order(value: Any, names: list[str]) -> Field:
 
 # Сумнів ШІ про стать / групу — коли групу вирішив код, він не рахується.
 _GENDER_DOUBT = re.compile(r"жіноч|чоловіч|стат|унісекс|дитяч|дівч|хлопч|доросл", re.IGNORECASE)
+GENDER_DOUBT = _GENDER_DOUBT  # UX-003: екран Картки показує кнопки «жіночі / чоловічі», коли жовтий розділ саме про це
 # Поля, де сумнів ШІ не робить жовтим (CORE-007): сезон і підкладку вирішує текст, колір —
 # найближчий з довідника.
 NO_DOUBT = frozenset({"season", "material_lining", "colors"})

@@ -7,7 +7,7 @@
 import json
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -59,11 +59,14 @@ LIST_WIDGETS = {"sizes", "colors", "list", "numbers", "order"}
 # Що не так із введеним значенням — за видом поля (текст для Продавчині).
 BAD_INPUT = {
     "colors": "оберіть колір зі списку",
-    "price": "ціна — ціле число гривень",
+    "price": "Ціна — лише цифри, напр. 1960",
     "condition": "оберіть стан",
 }
 
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+_PRICE_UNIT = re.compile(r"\s*(?:грн|гривень|гривні|₴)\.?$", re.IGNORECASE)
+_SPACES = re.compile(r"[\s\u00a0\u202f]")
+PRICE_SPREAD = 0.30  # UX-003: ціна далі за 30 % від «ціна поста +15 %» — жовта
 
 
 def _number(value: float) -> str:
@@ -107,9 +110,10 @@ def parse(spec: Spec, inputs: list[str]) -> Any:
     if spec.widget == "price":
         if not first:
             return None
-        if not first.isdigit() or int(first) == 0:
+        digits = _SPACES.sub("", _PRICE_UNIT.sub("", first))  # «1 960», «1960 грн»
+        if not re.fullmatch(r"[0-9]+", digits) or int(digits) == 0:
             raise ValueError(spec.widget)
-        return int(first)
+        return int(digits)
     if not first:
         if spec.widget == "condition":
             raise ValueError(spec.widget)
@@ -133,6 +137,7 @@ class FieldView:
     reason: str | None
     edited: bool
     options: tuple[str, ...] = ()  # варіанти саме цього розділу (зі знімка Шафи)
+    confirmed: bool = False  # «Так, вірно»: правка збігається зі значенням ШІ чи коду (UX-003)
 
 
 @dataclass(frozen=True)
@@ -228,6 +233,53 @@ class Card:
 BABIES_MAX = 22
 
 
+class GenderChoice(NamedTuple):
+    """Кнопка жовтого розділу «Це жіночі / Це чоловічі» (UX-003): `key` іде в `gender:<key>`."""
+
+    key: str
+    label: str
+    path: str  # розділ, який стане після натискання (є у знімку Шафи)
+
+
+# Пара груп, між якими перемикають кнопки: (ключ, група, підпис кнопки), питання
+GENDER_PAIRS = (
+    (
+        (("women", catalog.WOMEN, "Це жіночі"), ("men", catalog.MEN, "Це чоловічі")),
+        "Перевір: жіночі чи чоловічі?",
+    ),
+    (
+        (("girls", catalog.GIRLS, "Для дівчаток"), ("boys", catalog.BOYS, "Для хлопчиків")),
+        "Перевір: для дівчаток чи для хлопчиків?",
+    ),
+)
+
+
+def gender_choices(path: str | None) -> tuple[str, list[GenderChoice]] | None:
+    """Питання й кнопки, якщо розділ можна перемкнути між групами; None — пари в знімку немає.
+
+    Змінюється лише верхня група (`Жіночий одяг / Взуття` ↔ `Чоловічий одяг / Взуття`), решту шляху
+    лишаємо; розділів не вигадуємо — немає пари в каталозі, кнопок немає."""
+    if not path:
+        return None
+    for groups, question in GENDER_PAIRS:
+        own = next((g for g in groups if catalog.swap_group(path, g[1], g[1])), None)
+        if own is None:
+            continue
+        choices = [
+            GenderChoice(key, label, target)
+            for key, group, label in groups
+            if (target := catalog.swap_group(path, own[1], group))
+        ]
+        return (question, choices) if len(choices) == len(groups) else None
+    return None
+
+
+def gender_target(path: str | None, key: str) -> str | None:
+    """Розділ після кнопки `key` («women», «men», «girls», «boys») або None."""
+    found = gender_choices(path)
+    return next((c.path for c in found[1] if c.key == key), None) if found else None
+
+
 def _size(text: str) -> float:
     try:
         return float(str(text).replace(",", "."))
@@ -306,7 +358,16 @@ def _merge(field: FieldView, check: Any, options: tuple[str, ...]) -> FieldView:
     reasons = [r for r in (field.reason, check.reason if check.yellow else None) if r]
     yellow = field.yellow or check.yellow
     reason = "; ".join(dict.fromkeys(reasons)) if yellow else None
-    return FieldView(field.spec, field.value, field.inputs, yellow, reason, field.edited, options)
+    return FieldView(
+        field.spec,
+        field.value,
+        field.inputs,
+        yellow,
+        reason,
+        field.edited,
+        options,
+        field.confirmed,
+    )
 
 
 def _check_against_shafa(fields: dict[str, FieldView], post_text: str) -> None:
@@ -316,7 +377,7 @@ def _check_against_shafa(fields: dict[str, FieldView], post_text: str) -> None:
     if section.value and path is None and not section.yellow:
         fields["section"] = FieldView(
             section.spec, section.value, section.inputs, True,
-            "розділу немає в довіднику Шафи", section.edited,
+            "розділу немає в довіднику Шафи", section.edited, (), section.confirmed,
         )  # fmt: skip
     fields["section"] = _merge(fields["section"], _OK, catalog.sections())
     sizes = fields["sizes"]
@@ -352,6 +413,24 @@ def _apply_edited_text(fields: dict[str, FieldView], edits: dict[str, Any], post
     )  # fmt: skip
 
 
+def _check_price(fields: dict[str, FieldView], edits: dict[str, Any], post_text: str) -> None:
+    """Ціна далеко від «ціна поста +15 %» — жовта (UX-003), доки вона не натисне «Так, вірно».
+
+    Формулу ціни не чіпаємо: тут лише перевірка введеного (її правка чи дивний пост)."""
+    field = fields["price"]
+    posted = rules.price_from_text(post_text)
+    if not isinstance(field.value, int) or not posted or edits.get(PRICE_OK) == field.value:
+        return
+    expected = rules.shafa_price(posted)
+    if abs(field.value - expected) <= expected * PRICE_SPREAD:
+        return
+    reason = (
+        f"Ціна {field.value} грн дуже відрізняється від поста "
+        f"({posted} грн → на Шафі {expected}). Перевір."
+    )
+    fields["price"] = replace(field, yellow=True, reason=reason)
+
+
 def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
     """Картка з усіма полями або None (немає або архів уже очищено)."""
     row = conn.execute(
@@ -384,15 +463,18 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         if spec.code:
             value = code.get(spec.name)
         edited = spec.name in edits
+        original = value
         if edited:
             value, yellow = edits[spec.name], False
         if value is None and spec.widget in LIST_WIDGETS:
             value = []
         if isinstance(value, str) and spec.widget in LIST_WIDGETS:  # бланк до ROBOT-001: рядок
             value = [value]
+        confirmed = edited and as_form(spec, value) == as_form(spec, original)
         fields[spec.name] = FieldView(
-            spec, value, as_form(spec, value), yellow, reason if yellow else None, edited
-        )
+            spec, value, as_form(spec, value), yellow, reason if yellow else None, edited,
+            (), confirmed,
+        )  # fmt: skip
 
     keywords = fields["keywords"]
     if not keywords.edited:  # ручну правку не чіпаємо
@@ -408,6 +490,7 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
 
     _check_against_shafa(fields, row["post_text"] or "")
     _apply_edited_text(fields, edits, row["post_text"] or "")
+    _check_price(fields, edits, row["post_text"] or "")
 
     photos = [
         Photo(r["position"], r["file_name"])
@@ -435,6 +518,9 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         bool(blanks) and bool(row["needs_ai"]),
         variants.place(conn, row["folder_name"], row["post_id"]),
     )
+
+
+PRICE_OK = "price_ok"  # рядок `edits`: ціну, яку вона підтвердила попри відхилення від поста
 
 
 def _current(field: FieldView) -> Any:
@@ -470,6 +556,8 @@ def save(
             continue
         if name == confirm or value != _current(field):
             changed[name] = value
+    if confirm == "price" and "price" in changed:
+        changed[PRICE_OK] = changed["price"]  # «Так, вірно» для дивної ціни — не питати вдруге
     with conn:
         stamp = now()
         conn.executemany(

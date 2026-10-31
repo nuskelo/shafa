@@ -1,4 +1,4 @@
-"""UI-008: «На перевірку» і «Схвалені» — фільтр «Нові (бот) / Старі»."""
+"""UI-008: «На перевірку» і «Схвалені» — фільтр «З бота / Старі»."""
 
 import pytest
 
@@ -6,7 +6,7 @@ from shafa import web
 from shafa.db import Status
 from test_review import status
 from test_ui004 import ready
-from test_ui005 import hidden_value, page_of, send_form
+from test_ui005 import fetch, hidden_value, page_of, send_form
 from test_web import HOST, PORT, TOKEN, get, html, location
 
 
@@ -39,7 +39,7 @@ def test_kind_filters_cards(conn, root, app):
 def test_kind_counts_and_current_pill(conn, root, app):
     build(conn, root)
     page = html(get(app, "/review?k=new"))
-    assert "Усі · 3" in page and "Нові (бот) · 2" in page and "Старі · 1" in page
+    assert "Усі · 3" in page and "З бота · 2" in page and "Старі пости · 1" in page
     assert 'class="pill on" href="/review?k=new" aria-current="true"' in page
     assert 'name="k" value="new"' in page  # пошук не губить групу
 
@@ -51,30 +51,30 @@ def test_kind_combines_with_f_and_q_and_counts_follow(conn, root, app):
         conn.execute("UPDATE posts SET text = 'без ціни' WHERE post_id = 1344")
     page = html(get(app, "/review?k=new&f=ok"))
     assert links(page, new1, old, new2) == [True, False, False]
-    assert "Усі · 1" in page and "Нові (бот) · 1" in page and "Старі · 0" in page
-    assert "Готові · 1" in page and "Треба глянути · 1" in page  # f-числа — у межах k=new
+    assert "Усі · 1" in page and "З бота · 1" in page and "Старі пости · 0" in page
+    assert "Без жовтого · 1" in page and "Треба глянути · 1" in page  # f-числа — у межах k=new
     assert "f=ok&amp;k=old" in page or "f=ok&k=old" in page  # пілюля несе решту параметрів
     # пошук
     page = html(get(app, "/review?k=new&q=1342"))
-    assert links(page, new1, new2) == [True, False] and "Нові (бот) · 1" in page
+    assert links(page, new1, new2) == [True, False] and "З бота · 1" in page
 
 
 def test_approved_tab_has_kind_group_without_warn(conn, root, app):
     new1, old, _ = build(conn, root, Status.APPROVED)
     page = html(get(app, "/approved?k=old"))
     assert links(page, new1, old) == [False, True]
-    assert "Старі · 1" in page and "Треба глянути" not in page
+    assert "Старі пости · 1" in page and "Треба глянути" not in page
 
 
 def test_other_tabs_have_no_kind_group(conn, root, app):
     ready(conn, root, "1342", 1342, Status.PROBLEM)
-    assert "Нові (бот)" not in html(get(app, "/problem"))
+    assert "З бота" not in html(get(app, "/problem"))
 
 
 def test_new_badge_only_on_new_cards(conn, root, app):
     build(conn, root)
     page = html(get(app, "/review"))
-    assert page.count("Нова · 2 фото") == 2
+    assert page.count("З бота · 2 фото") == 2
 
 
 def test_navigation_and_approve_next_stay_inside_kind(conn, root, app):
@@ -89,4 +89,6 @@ def test_navigation_and_approve_next_stay_inside_kind(conn, root, app):
     assert status(conn, new1) == Status.APPROVED and status(conn, old) == Status.REVIEW
     page = page_of(app, new2, f"/item/{new2}?from=%2Freview%3Fk%3Dnew")
     response = send_form(app, page, new2, action="approve")
-    assert location(response) == "/review?k=new&msg=approved_done"
+    assert location(response) == "/review?k=new&msg=approved"  # «Старий» ще на перевірці
+    page = html(fetch(app, location(response)))
+    assert "У цьому списку більше нічого немає. Ще 1 Картка на перевірці." in page

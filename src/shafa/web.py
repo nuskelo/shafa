@@ -17,7 +17,7 @@ import threading
 import time
 import traceback
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -91,10 +91,16 @@ MESSAGES = {
     "saved": "Збережено",
     "approved": "Схвалено",
     "rejected": f"Відхилено — Картка в Архіві {review.ARCHIVE_DAYS} днів",
-    "approved_done": "Схвалено. Усе переглянуто — більше Карток у цьому списку немає",
+    "approved_next": "Схвалено «{name}» → у «Схвалених». Це наступна Картка.",
+    "approved_left": "Схвалено. Лишилось {n} пропущених — ось перша з них.",
+    "approved_done": "Схвалено. На перевірці більше нічого немає — можна натискати «Старт» угорі.",
+    "rejected_left": f"Відхилено — Картка в Архіві {review.ARCHIVE_DAYS} днів. "
+    "Лишилось {n} пропущених — ось перша з них.",
     "rejected_done": f"Відхилено — Картка в Архіві {review.ARCHIVE_DAYS} днів. "
-    "Усе переглянуто — більше Карток у цьому списку немає",
-    "unapproved": "Схвалення скасовано — Картка знову на перевірці",
+    "На перевірці більше нічого немає — можна натискати «Старт» угорі.",
+    "saved_no_price": "Збережено, але без ціни Картку не схвалити.",
+    "no_price": "Схвалити не можна: немає ціни",
+    "unapproved": "Схвалення скасовано — можна правити. Потім знову «Схвалити».",
     "restored": "Повернуто на перевірку",
     "section_yellow": "Схвалити не можна: розділ жовтий — змініть його або натисніть «Так, вірно»",
     "no_section": "Схвалити не можна: немає розділу",
@@ -421,6 +427,7 @@ class App:
             lstrip_blocks=True,
         )
         self.env.filters["dmy"] = dmy
+        self.env.filters["card_name"] = card_name
 
     # --- Захист ---
 
@@ -1076,7 +1083,13 @@ class App:
             marks = {c.id: card_mark(c, checks[c.id]) for c in cards}
             chosen = self._chosen(status, request.arg("f"))
             kind = self._kind(status, request.arg("k"))
+            everything = cards
             filters, kinds, cards = self._groups(status, cards, marks, chosen, kind, query)
+            empty_note = (
+                self._empty_note(status, everything, marks, chosen, kind, query)
+                if not cards
+                else None
+            )
             on_shafa = {  # Картка з `shafa_id` з Архіву не повертається (як на самій Картці)
                 r[0]
                 for r in conn.execute(
@@ -1110,17 +1123,77 @@ class App:
                 ),
                 chosen=chosen,
                 query=query,
-                message=MESSAGES.get(request.arg("msg")),
+                message=self._message(conn, request),
                 deletion_date=review.deletion_date,
+                start_hint=self.start_hint(conn) if status == Status.APPROVED else "",
+                empty_note=empty_note,
             )
         finally:
             conn.close()
+
+    def _message(self, conn, request: Request) -> str | None:
+        """Повідомлення зверху за `msg`; `n` — скільки пропущених, `ok` — яку Картку схвалено (UX-003).
+
+        Кінець черги додає, що робити далі: «Натисніть «Старт» — сьогодні робот опублікує до N із M»."""
+        key = request.arg("msg")
+        text_ = MESSAGES.get(key)
+        if text_ is None:
+            return None
+        if "{n}" in text_:
+            count = request.arg("n")
+            text_ = text_.replace("{n}", count if count.isdigit() else "кілька")
+        if "{name}" in text_:
+            approved = request.arg("ok")
+            card = review.load_card(conn, int(approved)) if approved.isdigit() else None
+            text_ = text_.replace("{name}", card_name(card) if card else "Картку")
+        if key in ("approved_done", "rejected_done") and (hint := self.start_hint(conn)):
+            text_ = f"{text_} {hint}"
+        return text_
+
+    def start_hint(self, conn) -> str:
+        """«Натисніть «Старт» — сьогодні робот опублікує до N із M Схвалених.» (те саме N, що в панелі
+        робота), порожньо, коли робота зараз не запустити чи публікувати нічого."""
+        state = self.robot_state(conn)
+        if not state.can_start or not state.queue_today:
+            return ""
+        return (
+            f"Натисніть «Старт» — сьогодні робот опублікує до {state.queue_today} "
+            f"із {state.approved} Схвалених."
+        )
 
     def _precheck(self, card: review.Card) -> Precheck:
         """Що скаже робот про Картку (QA-002) — лише «На перевірку» і «Схвалені»."""
         if card.status not in (Status.REVIEW, Status.APPROVED):
             return Precheck(None, [])
         return precheck(card, self.root)
+
+    def _empty_note(self, status, cards, marks, chosen, kind, query):
+        """Порожній відфільтрований список, а в «На перевірку» ще є Картки (B2, UX-003): що лишилось і
+        куди йти. `(текст, посилання, підпис посилання)` або None."""
+        if status != Status.REVIEW or query or not (chosen or kind) or not cards:
+            return None
+
+        def href(f: str, k: str) -> str:
+            args = {n: v for n, v in (("f", f), ("k", k)) if v}
+            return f"/{status}" + (f"?{urlencode(args)}" if args else "")
+
+        if chosen:
+            other = "ok" if chosen == "warn" else "warn"
+            left = len(self._filtered(cards, marks, other, kind))
+            if left:
+                waits = "чекає" if left % 10 == 1 and left % 100 != 11 else "чекають"
+                if chosen == "warn":
+                    lead, what = "Жовтих більше немає.", f"без жовтого {waits} на «Схвалити»"
+                else:
+                    lead, what = "Карток без жовтого немає.", f"з жовтим {waits}"
+                note = f"{lead} Ще {plural(left, 'Картка', 'Картки', 'Карток')} {what}."
+                return note, href(other, kind), "Переглянути їх"
+        left = len(cards)
+        return (
+            f"У цьому списку більше нічого немає. Ще {plural(left, 'Картка', 'Картки', 'Карток')} на перевірці.",
+            href("", ""),
+            "Показати всі",
+        )
 
     @staticmethod
     def _chosen(status: str, value: str) -> str:
@@ -1158,7 +1231,7 @@ class App:
             for key, label, count in (
                 ("", "Усі", len(base)),
                 ("warn", "Треба глянути", warn),
-                ("ok", "Готові", len(base) - warn),
+                ("ok", "Без жовтого", len(base) - warn),
             ):
                 filters.append((key, label, count, href(key, kind)))
         if status in KIND_TABS:
@@ -1166,8 +1239,8 @@ class App:
             old = sum(1 for c in base if is_old(c.folder_name))
             for key, label, count in (
                 ("", "Усі", len(base)),
-                ("new", "Нові (бот)", len(base) - old),
-                ("old", "Старі", old),
+                ("new", "З бота", len(base) - old),
+                ("old", "Старі пости", old),
             ):
                 kinds.append((key, label, count, href(chosen, key)))
         return filters, kinds, self._filtered(cards, marks, chosen, kind)
@@ -1183,14 +1256,9 @@ class App:
                 return found
         return f"/{card.status}" if card.status in LIST_TABS else "/" + Status.REVIEW
 
-    def _nav(self, conn, card: review.Card, from_: str) -> "Nav":
-        """Верх Картки: куди «назад», «3 з 8» і яка Картка наступна — у тому ж списку (фільтр, пошук)."""
-        url = urlsplit(from_)
-        status = Status(url.path.strip("/"))
-        nav = Nav(from_, TAB_TITLES[status])
-        if status not in CARD_TABS:  # «Опубліковані» без порядку й фільтрів
-            return nav
-        query = parse_qs(url.query)
+    def _list_ids(self, conn, status: Status, from_: str) -> list[int]:
+        """Картки списку `from_` у порядку списку: з тим самим фільтром і пошуком, що бачить вона."""
+        query = parse_qs(urlsplit(from_).query)
         text_, chosen, kind = (
             (query.get("q") or [""])[0],
             self._chosen(status, (query.get("f") or [""])[0]),
@@ -1200,7 +1268,15 @@ class App:
         if chosen or kind:
             marks = {c.id: card_mark(c, self._precheck(c)) for c in cards} if chosen else {}
             cards = self._filtered(cards, marks, chosen, kind)
-        ids = [c.id for c in cards]
+        return [c.id for c in cards]
+
+    def _nav(self, conn, card: review.Card, from_: str) -> "Nav":
+        """Верх Картки: куди «назад», «3 з 8» і яка Картка наступна — у тому ж списку (фільтр, пошук)."""
+        status = Status(urlsplit(from_).path.strip("/"))
+        nav = Nav(from_, TAB_TITLES[status])
+        if status not in CARD_TABS:  # «Опубліковані» без порядку й фільтрів
+            return nav
+        ids = self._list_ids(conn, status, from_)
         if card.id in ids:
             at = ids.index(card.id)
             nav.index, nav.total = at + 1, len(ids)
@@ -1224,9 +1300,17 @@ class App:
                 "SELECT duplicate_url, duplicate_name, shafa_url, shafa_id, problem_code FROM items WHERE id = ?",
                 (item_id,),
             ).fetchone()
+            for name in bad:  # помилкове значення лишається в полі, як вона його ввела
+                typed = request.query.get(f"v_{name}")
+                if typed:
+                    shown = [t[:200] for t in typed][: len(card.fields[name].inputs)]
+                    card.fields[name] = replace(
+                        card.fields[name], inputs=[*shown, *card.fields[name].inputs[len(shown) :]]
+                    )
             check = self._precheck(card)
             from_ = self._from(request, card)
             block = card.approve_block() if card.status == Status.REVIEW else None
+            todo = approve_todo(card, block, check.error) if card.status == Status.REVIEW else None
             return self.page(
                 "card.html",
                 **self._chrome(conn, request),
@@ -1246,8 +1330,8 @@ class App:
                 card=card,
                 bad=bad,
                 bad_input=review.BAD_INPUT,
-                message=MESSAGES.get(request.arg("msg")),
-                block=MESSAGES.get(block or ""),
+                message=self._message(conn, request),
+                todo=todo,
                 sections=catalog.sections(),
                 hint=PROBLEM_HINTS.get(card.problem_code or ""),
                 problem_archive=problem_actions(card.problem_code)[0],
@@ -1258,6 +1342,9 @@ class App:
                 layout=card_layout(card, bad, block),
                 attention=attention(card),
                 post_price=rules.price_from_text(card.post_text) if card.post_text else None,
+                price_hint=price_hint(card),
+                insole_hint=insole_hint(card),
+                gender=gender_buttons(card),
                 was=was_values(card),
             )
         finally:
@@ -1284,27 +1371,47 @@ class App:
                     return with_msg(from_, params["msg"])
                 return card_url(item_id, from_, **params)
 
-            if action in ("save", "approve", "folder_order") or action.startswith("confirm:"):
+            if action in ("save", "approve", "folder_order") or action.startswith(
+                ("confirm:", "gender:")
+            ):
                 form, confirm = dict(request.form), action.removeprefix("confirm:")
                 if action == "folder_order":  # порядок фото як у папці — і це підтвердження
                     by_position = sorted(card.photos, key=lambda p: p.position)
                     form["photo_order"] = ["\n".join(p.file_name for p in by_position)]
                     confirm = "photo_order"
+                if action.startswith(
+                    "gender:"
+                ):  # «Це жіночі / Це чоловічі» — правка розділу людиною
+                    target = review.gender_target(card.path, action.removeprefix("gender:"))
+                    if target is None or card.status != Status.REVIEW:
+                        return redirect(back(msg="stale"))
+                    form["section"], confirm = [target], "section"
                 bad = review.save(conn, card, form, confirm or None)
                 if bad:
-                    return redirect(back(msg="bad", bad=bad))
+                    typed = {f"v_{n}": form[n] for n in bad if n in form}
+                    return redirect(back(msg="bad", bad=bad, **typed))
                 if action != "approve":
-                    return redirect(back(msg="saved"))
+                    fresh = review.load_card(conn, item_id)
+                    empty = fresh is not None and not fresh.fields["price"].value
+                    return redirect(back(msg="saved_no_price" if empty else "saved"))
             if action in review.ACTIONS:
                 message = review.act(conn, item_id, action, self.root)
-                if message in review.APPROVE_BLOCKS or message in ("stale", review.ON_SHAFA):
+                if message == review.PRECHECK:
+                    fresh = review.load_card(conn, item_id)
+                    if fresh is not None and not fresh.fields["price"].value:
+                        message = "no_price"
+                if message in (*review.APPROVE_BLOCKS, "no_price", "stale", review.ON_SHAFA):
                     return redirect(back(msg=message))
                 if from_ is None:  # старий виклик без списку
                     return redirect(f"/{card.status}?msg={message}")
+                if message == "unapproved":  # лишаємось на Картці — поля знову активні
+                    return redirect(back(msg=message))
                 if message in ("approved", "rejected"):  # «Схвалити і далі» / «Відхилити»
+                    if following and message == "approved":
+                        return redirect(with_params(following, msg="approved_next", ok=item_id))
                     if following:
                         return redirect(with_msg(following, message))
-                    message += "_done"
+                    return redirect(self._queue_end(conn, from_, message))
                 return redirect(with_msg(from_, message))
             decisions = {
                 "on_shafa": lambda: publish.on_shafa(
@@ -1339,6 +1446,19 @@ class App:
             return text(400, "Невідома дія")
         finally:
             conn.close()
+
+    def _queue_end(self, conn, from_: str, message: str) -> str:
+        """Далі не було: чесно сказати, що лишилось (B1, UX-003). Пропущені Картки цього ж списку →
+        перша з них (по колу); немає — «більше нічого немає» і що робити далі."""
+        review_list = from_ if urlsplit(from_).path == f"/{Status.REVIEW}" else f"/{Status.REVIEW}"
+        left = self._list_ids(conn, Status.REVIEW, review_list)
+        if left:
+            return with_params(item_url(left[0], review_list), msg=f"{message}_left", n=len(left))
+        if review.list_tab(
+            conn, Status.REVIEW
+        ):  # у списку з фільтром порожньо, а на перевірці ще є
+            return with_msg(review_list, message)
+        return with_msg(review_list, f"{message}_done")
 
     def published_page(self, request: Request) -> Response:
         conn = self.connect()
@@ -1491,7 +1611,11 @@ def card_url(item_id: int, from_: str | None = None, **params) -> str:
 
 
 def with_msg(url: str, message: str) -> str:
-    return f"{url}{'&' if '?' in url else '?'}{urlencode({'msg': message})}"
+    return with_params(url, msg=message)
+
+
+def with_params(url: str, **params) -> str:
+    return f"{url}{'&' if '?' in url else '?'}{urlencode(params)}"
 
 
 def safe_list(value: str, hosts: set[str] | None = None) -> str | None:
@@ -1548,10 +1672,98 @@ MAIN_ROWS = (  # поля, які правлять найчастіше: у ря
     ("season",), ("material_upper",),
 )  # fmt: skip
 MAIN_FIELDS = {name for row in MAIN_ROWS for name in row}
-MISSING = {  # чому не можна схвалити → яке поле порожнє
-    "no_section": "section", "section_unknown": "section", "section_yellow": "section",
-    "no_sizes": "sizes", "babies_size": "sizes", "no_colors": "colors", "no_gender": "gender",
+MISSING = {  # чому не можна схвалити → яке поле порожнє (UX-003: жовтий чи чужий розділ — не порожнє)
+    "no_section": "section", "no_sizes": "sizes", "no_colors": "colors", "no_gender": "gender",
 }  # fmt: skip
+BLOCK_TODO = {  # чому не можна схвалити → що зробити, одним пунктом
+    "no_section": "вкажіть розділ",
+    "section_unknown": "оберіть розділ зі списку Шафи",
+    "section_yellow": "перевірте розділ",
+    "no_sizes": "вкажіть розмір",
+    "babies_size": "оберіть «Для дівчаток» чи «Для хлопчиків» (малюки — лише до 22 розміру)",
+    "no_colors": "вкажіть колір",
+    "no_gender": "вкажіть стать",
+}
+NO_PRICE_ERROR = "Немає ціни"  # `robot.plan`: те саме, що «вкажіть ціну»
+
+
+def approve_todo(card: review.Card, block: str | None, robot_error: str | None) -> str | None:
+    """Усе, що заважає схвалити, одним блоком: «Щоб схвалити: 1) вкажіть ціну; 2) перевірте розділ»."""
+    items = []
+    if not card.fields["price"].value:
+        items.append("вкажіть ціну")
+    if block in BLOCK_TODO:
+        items.append(BLOCK_TODO[block])
+    if robot_error and robot_error != NO_PRICE_ERROR:
+        items.append(f"робот не зможе опублікувати — {robot_error[:1].lower()}{robot_error[1:]}")
+    if not items:
+        return None
+    if len(items) == 1:
+        return f"Щоб схвалити: {items[0]}"
+    return "Щоб схвалити: " + "; ".join(f"{i}) {item}" for i, item in enumerate(items, 1))
+
+
+def card_name(card: review.Card | None) -> str:
+    """Назва Картки для екрана: без слів «папка» і «borh» (UX-003)."""
+    title = card.fields["title"].value if card else None
+    if title:
+        return title
+    if card is not None and card.post_id:
+        return f"Пост {card.post_id} (назви ще немає)"
+    return "Картка без назви"
+
+
+def price_hint(card: review.Card) -> str | None:
+    """«У пості 1700 грн → на Шафі +15 % = 1960»."""
+    posted = rules.price_from_text(card.post_text) if card.post_text else None
+    if not posted:
+        return None
+    return f"У пості {posted} грн → на Шафі +15 % = {rules.shafa_price(posted)}"
+
+
+def insole_hint(card: review.Card) -> str | None:
+    """«Устілка: у пості 25,3 см (на Шафі: 25 і 25,5)»."""
+    measured = rules.insole_measured(card.post_text or "")
+    values = card.fields["insole"].value
+    if not measured:
+        return None
+    shown = measured.replace(".", ",")
+    on_shafa = " і ".join(f"{v:g}".replace(".", ",") for v in values or [])
+    return f"Устілка: у пості {shown} см" + (f" (на Шафі: {on_shafa})" if on_shafa else "")
+
+
+@dataclass
+class GenderButtons:
+    """Жовтий розділ про стать (UX-003): питання, коротка причина, повна причина, кнопки."""
+
+    question: str
+    short: str
+    full: str | None  # показуємо під «Чому?», лише коли довша за перше речення
+    choices: list[review.GenderChoice]
+
+
+FIRST_SENTENCE = re.compile(r"^.+?[.!?](?=\s|$)", re.DOTALL)
+
+
+def first_sentence(text_: str) -> str:
+    found = FIRST_SENTENCE.match(text_.strip())
+    return found[0] if found else text_.strip()
+
+
+def gender_buttons(card: review.Card) -> GenderButtons | None:
+    """Кнопки «Це жіночі / Це чоловічі» біля жовтого розділу, якщо сумнів саме про це і пара є в каталозі."""
+    section = card.fields["section"]
+    if card.status != Status.REVIEW or not section.yellow or not section.reason:
+        return None
+    if not ai.GENDER_DOUBT.search(section.reason):
+        return None
+    found = review.gender_choices(card.path)
+    if found is None:
+        return None
+    short = first_sentence(section.reason)
+    return GenderButtons(
+        found[0], short, section.reason if short != section.reason.strip() else None, found[1]
+    )
 
 
 @dataclass
@@ -1572,6 +1784,8 @@ def card_layout(card: review.Card, bad: set[str], block: str | None) -> Layout:
     rows = [[visible[n] for n in row if n in visible and n not in taken] for row in MAIN_ROWS]
     rare = [f for name, f in visible.items() if name not in MAIN_FIELDS]
     missing = {MISSING[block]} if block in MISSING else set()
+    if card.status == Status.REVIEW and not card.fields["price"].value:
+        missing.add("price")
     opened = any(f.yellow or f.spec.name in bad or f.spec.name in missing for f in rare)
     return Layout(yellow, [r for r in rows if r], rare, opened, missing)
 
@@ -1609,16 +1823,20 @@ def attention(card: review.Card) -> Attention | None:
         return None
     if not yellow:  # лише примітка «Пост змінено…» / «Сезон змінено правилом…»
         return Attention(note, [], None)
-    lines = [
-        f"{short_label(f)}: {f.reason or 'перевірте'}"
-        if len(yellow) > 1
-        else f.reason or "перевірте"
-        for f in yellow[:2]
-    ]
+    gender = gender_buttons(card)
+
+    def reason(f: review.FieldView) -> str:
+        if gender and f.spec.name == "section":  # довга причина ШІ — під «Чому?» біля поля
+            return gender.short
+        return f.reason or "перевірте"
+
+    lines = [f"{short_label(f)}: {reason(f)}" if len(yellow) > 1 else reason(f) for f in yellow[:2]]
     if len(yellow) > 2:
         lines.append(f"Ще {len(yellow) - 2} — у полях нижче")
     names = ", ".join(short_label(f) for f in yellow)
     title = f"Перевір {plural(len(yellow), 'поле', 'поля', 'полів')}: {names}"
+    if gender and len(yellow) == 1:
+        title = gender.question
     return Attention(title, lines, note)
 
 

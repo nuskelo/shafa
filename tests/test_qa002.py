@@ -89,7 +89,10 @@ def test_card_page_red_block_and_disabled_approve(conn, app, root):
     make_required(BOOTS, "Сезон")
     item_id = add_card(conn, root, blank=NO_SEASON, text=TEXT)
     page = html(get(app, f"/item/{item_id}"))
-    assert "Робот не зможе опублікувати: Обов&#39;язкові поля Шафи без значення: Сезон" in page
+    assert (
+        "Щоб схвалити: робот не зможе опублікувати — обов&#39;язкові поля Шафи без значення: Сезон"
+        in page
+    )
     assert 'value="approve" class="approve" disabled' in page
 
 
