@@ -183,7 +183,7 @@ def build_review(conn, root):
 def test_filter_counts_and_cards(conn, root, app):
     first, second, yellow = build_review(conn, root)
     page = html(get(app, "/review"))
-    assert "Усі · 3" in page and "Треба глянути · 1" in page and "Готові · 2" in page
+    assert "Усі · 3" in page and "Треба глянути · 1" in page and "Без жовтого · 2" in page
     for item in (first, second, yellow):
         assert f'href="/item/{item}"' in page
 
@@ -211,7 +211,7 @@ def test_filter_and_search_work_together(conn, root, app):
     page = html(get(app, "/review?f=ok&q=1343"))
     assert 'name="f" value="ok"' in page  # пошук не губить фільтр
     assert f'href="/item/{first}"' not in page  # лише пост 1343
-    assert "Готові · 1" in page  # числа — за пошуком
+    assert "Без жовтого · 1" in page  # числа — за пошуком
 
 
 def test_filters_only_on_review_tab(conn, root, app):

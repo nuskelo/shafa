@@ -201,7 +201,7 @@ def test_confirm_records_same_value(conn, root):
     [
         ("price", "дорого"),
         ("price", "0"),
-        ("price", "1 400"),
+        ("price", "1,5"),
         ("colors", ["Фіолетовенький", ""]),
         ("condition", ""),
     ],

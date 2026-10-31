@@ -122,7 +122,8 @@ def test_mini_panel_endpoint_has_dots_and_no_forms(conn, app):
 def test_title_and_meta(conn, root, app):
     item = ready(conn, root)
     page = page_of(app, item)
-    assert "Пост 1342 від 2025-03-01 · папка 1342" in re.sub(r"\s+", " ", page)
+    assert "Пост 1342 · 01.03.2025" in re.sub(r"\s+", " ", page)
+    assert "папка" not in page.lower()
 
 
 # --- Що перевірити ---
@@ -171,7 +172,7 @@ def test_season_was_is_shown_on_yellow_season(conn, root, app):
 def test_missing_required_field_is_red(conn, root, app):
     item = add_card(conn, root, text=TEXT, blank=blank_with(ai.Field("sizes", [])))
     page = page_of(app, item)
-    assert 'class="block alert"' in page and "немає розміру" in page
+    assert 'class="robot-error"' in page and "Щоб схвалити: вкажіть розмір" in page
     assert re.search(r'class="field[^"]*\bmissing[^"]*" data-field="sizes"', page)
 
 
@@ -209,8 +210,8 @@ def test_plain_fields_keep_main_order(conn, root, app):
     ]
     positions = order_of(page, *[f'data-field="{n}"' for n in names])
     assert positions == sorted(positions)
-    assert "у пості 1200 · +15%" in page
-    assert "устілка 24; 24,5 см" in page
+    assert "У пості 1200 грн → на Шафі +15 % = 1380" in page
+    assert "Устілка: у пості 24,5 см (на Шафі: 24 і 24,5)" in page
 
 
 def test_rare_fields_are_folded_and_open_when_yellow(conn, root, app):
@@ -262,8 +263,8 @@ def test_review_card_has_all_actions(conn, root, app):
                   "confirm:photo_order", "folder_order"):  # fmt: skip
         assert f'name="action" value="{value}"' in page, value
     assert page.count('value="save"') >= 2  # прихована (Enter) і видима
-    assert "Схвалити і далі" in page and "ШІ, спробуй ще раз · ≈ 5 ¢" in page
-    assert "Перезаповнити пакетом · ≈ 1,5 ¢" in page
+    assert "Схвалити і далі" in page and "Попросити ШІ заповнити заново" in page
+    assert "¢" not in page
     # кнопки панелі належать формі полів, а «ШІ, спробуй ще раз» — окрема форма
     assert re.search(r'<button form="fields" name="action" value="approve"', page)
     assert re.search(r'<form method="post" action="/item/\d+" class="ai-retry">', page)
@@ -309,8 +310,11 @@ def test_robot_error_disables_approve_with_explanation(conn, root, app):
     item = add_card(conn, root, blank=NO_SEASON, text=TEXT)
     page = page_of(app, item)
     assert 'value="approve" class="approve" disabled' in page
-    assert "Схвалити не можна: робот не зможе опублікувати." in page
-    assert "Робот не зможе опублікувати: Обов&#39;язкові поля Шафи без значення: Сезон" in page
+    assert (
+        "Щоб схвалити: робот не зможе опублікувати — обов&#39;язкові поля Шафи без значення: Сезон"
+        in page
+    )
+    assert page.count('class="robot-error"') == 1
 
 
 # --- «Схвалити і далі» ---
@@ -326,14 +330,18 @@ def test_approve_goes_to_next_card_of_same_filter(conn, root, app):
     assert hidden_value(page, "next") == f"/item/{other}?from=%2Freview%3Ff%3Dwarn"
     assert "1 з 2" in page
     response = send_form(app, page, yellow, action="approve")
-    assert location(response) == f"/item/{other}?from=%2Freview%3Ff%3Dwarn&msg=approved"
+    assert location(response) == (
+        f"/item/{other}?from=%2Freview%3Ff%3Dwarn&msg=approved_next&ok={yellow}"
+    )
     assert status(conn, yellow) == Status.APPROVED
-    # і далі, останню: списку нема куди йти — «Усе переглянуто»
+    # останню жовту схвалили: у фільтрі порожньо, але «Готові» ще чекають — кажемо про них
     page = page_of(app, other, f"/item/{other}?from=%2Freview%3Ff%3Dwarn")
     assert hidden_value(page, "next") is None
     response = send_form(app, page, other, action="approve")
-    assert location(response) == "/review?f=warn&msg=approved_done"
-    assert "Усе переглянуто" in html(fetch(app, location(response)))
+    assert location(response) == "/review?f=warn&msg=approved"
+    page = html(fetch(app, location(response)))
+    assert "Жовтих більше немає. Ще 2 Картки без жовтого чекають на «Схвалити»" in page
+    assert "Усе переглянуто" not in page
     assert status(conn, other) == Status.APPROVED and status(conn, first) == Status.REVIEW
 
 
@@ -354,7 +362,7 @@ def test_reject_also_goes_next_and_last_says_all_done(conn, root, app):
     last = page_of(app, second, f"/item/{second}?from=%2Freview%3Ff%3Dok")
     assert hidden_value(last, "next") is None  # у «Готових» 1343 — остання (1342 вже в архіві)
     response = send_form(app, last, second, action="reject")
-    assert location(response) == "/review?f=ok&msg=rejected_done"
+    assert location(response) == "/review?f=ok&msg=rejected"  # жовта ще на перевірці
 
 
 @pytest.mark.parametrize(
@@ -365,7 +373,9 @@ def test_reject_also_goes_next_and_last_says_all_done(conn, root, app):
 def test_foreign_next_is_ignored(conn, root, app, target):
     first, *_ = build_review(conn, root)
     response = post(app, f"/item/{first}", action="approve", **{"from": "/review", "next": target})
-    assert location(response) == "/review?msg=approved_done"
+    target = location(response)  # чужий next не береться: ідемо до пропущених цього ж списку
+    assert target.startswith("/item/") and "msg=approved_left&n=2" in target
+    assert "evil" not in target
 
 
 def test_old_post_without_list_keeps_old_redirect(conn, root, app):
@@ -473,7 +483,10 @@ def test_browser_without_js_card_can_be_saved_and_approved(conn, root, live, chr
         page.click('button[form="fields"][value="approve"]')
         page.wait_for_load_state("networkidle")
         assert status(conn, item) == Status.APPROVED
-        assert page.url.endswith(f"/item/{other}?from=%2Freview&msg=approved")
+        assert page.url.endswith(
+            f"/item/{other}?from=%2Freview&msg=approved_next&ok={item}"
+        )  # без JS
+        assert "Схвалено «" in page.inner_text(".message")
     finally:
         context.close()
 
@@ -494,7 +507,7 @@ def test_browser_approve_and_next_and_last(conn, root, live, chromium):
         page.click('button[value="approve"]')
         page.wait_for_load_state("networkidle")
         assert page.url.endswith("/review")  # A23: `?msg=` прибрано з адреси після показу
-        assert "Усе переглянуто" in page.inner_text(".message")
+        assert "На перевірці більше нічого немає" in page.inner_text(".message")
         assert {status(conn, i) for i in (first, second, yellow)} == {Status.APPROVED}
     finally:
         page.close()
