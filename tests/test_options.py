@@ -2,7 +2,7 @@ import pytest
 
 from shafa import batch, config, options, site, web
 from shafa.robot import listings, publish
-from test_web import PORT, TOKEN, get, html, post
+from test_web import PORT, TOKEN, get, html, location, post
 
 
 @pytest.fixture
@@ -34,7 +34,7 @@ def test_page_shows_defaults_and_no_secrets(app, monkeypatch):
 
 
 def test_save_is_used_by_robot_and_ai(app, root):
-    page = html(post(app, "/settings", **form(root)))
+    page = html(get(app, location(post(app, "/settings", **form(root)))))
     assert "Збережено" in page
     assert publish.daily_limit() == 25
     assert publish.delete_enabled()
@@ -71,7 +71,7 @@ def test_onedrive_root_warns_but_saves(app, tmp_path, monkeypatch):
     cloud = tmp_path / "OneDrive"
     (cloud / "Шафа").mkdir(parents=True)
     monkeypatch.setenv("OneDrive", str(cloud))
-    page = html(post(app, "/settings", **form(cloud / "Шафа")))
+    page = html(get(app, location(post(app, "/settings", **form(cloud / "Шафа")))))
     assert "Головна папка в OneDrive" in page
     assert config.setting("SHAFA_ROOT_DIR") == str(cloud / "Шафа")
 

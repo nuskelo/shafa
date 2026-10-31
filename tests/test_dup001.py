@@ -159,7 +159,10 @@ def test_network_error_is_possible_duplicate_and_request_is_logged(env):
     error = anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x"))
     run(env, Client(error))
     assert state(env.conn, item) == (Status.PROBLEM, "possible_duplicate")
-    assert "ШІ не порівняв: Немає з'єднання з Claude API" in row(env.conn, item)["problem_text"]
+    assert (
+        "ШІ не порівняв: Немає зв'язку з ШІ — перевірте інтернет"
+        in row(env.conn, item)["problem_text"]
+    )
 
 
 def test_refusal_logs_tokens_that_were_paid_for(env):

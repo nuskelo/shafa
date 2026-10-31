@@ -7,7 +7,7 @@ import threading
 import pytest
 
 from shafa import web
-from test_web import HOST, PORT, TOKEN, html
+from test_web import HOST, PORT, TOKEN, get, html, location
 
 
 def export_json(n=3, pad=0):
@@ -45,6 +45,11 @@ def app(conn, tmp_path, root):
     return web.App(tmp_path / "база.sqlite", root, tmp_path / "thumbs", PORT, token=TOKEN)
 
 
+def followed(app, response):
+    """Після успіху чи відмови — redirect на «Налаштування» (F5 не надсилає файл удруге)."""
+    return html(get(app, location(response)))
+
+
 def upload(app, data, token=TOKEN):
     kind, body = multipart(token, data)
     form, files = web.parse_multipart(kind, body)
@@ -55,19 +60,19 @@ def test_upload_saves_posts_and_makes_cards(app, conn, root):
     (root / "1341").mkdir()
     (root / "1341" / "1.jpg").write_bytes(b"\xff\xd8")
 
-    page = html(upload(app, export_json()))
+    page = followed(app, upload(app, export_json()))
 
     assert "Експорт завантажено: постів 3, нових 3. Папок 1, у «Проблемах» 0." in page
     assert conn.execute("SELECT count(*) FROM posts").fetchone()[0] == 3
     assert (
         conn.execute("SELECT status FROM items WHERE folder_name = '1341'").fetchone()[0] == "new"
     )
-    assert "нових 0" in html(upload(app, export_json()))  # удруге — нічого нового
+    assert "нових 0" in followed(app, upload(app, export_json()))  # удруге — нічого нового
 
 
 @pytest.mark.parametrize("data", [b"not json", b"[]", b'{"name": "x"}', "Кеди".encode("cp1251")])
 def test_not_an_export_explained(app, conn, data):
-    page = html(upload(app, data))
+    page = followed(app, upload(app, data))
     assert "Це не експорт каналу Telegram" in page
     assert conn.execute("SELECT count(*) FROM posts").fetchone()[0] == 0
 
@@ -92,8 +97,8 @@ def test_real_server_takes_big_export_only_on_export(app, conn):
     try:
         big = export_json(n=3, pad=700_000)  # ≈ 2 МБ — більше за звичайний ліміт
         kind, body = multipart(TOKEN, big)
-        status, page = _post_raw(app.port, "/export", kind, body)
-        assert status == 200 and "постів 3" in page
+        status, _ = _post_raw(app.port, "/export", kind, body)
+        assert status == 303  # redirect на «Налаштування» з підсумком (PRG)
         try:  # не дочитавши тіло, сервер відповідає 413 і закриває — клієнт може побачити розрив
             status, _ = _post_raw(app.port, "/settings", kind, body)
         except (ConnectionResetError, BrokenPipeError):

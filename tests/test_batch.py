@@ -221,7 +221,7 @@ def test_over_money_limit_sends_nothing(conn, root):
     assert sent.count == 0 and sent.plan.over_budget
     assert client.batches.calls == []
     assert conn.execute("SELECT count(*) FROM ai_batches").fetchone()[0] == 0
-    assert batch.sent_text(sent, LIMITS) == "ліміт витрат на ШІ за добу ($3,00) — решта завтра"
+    assert batch.sent_text(sent, LIMITS) == "ліміт витрат на ШІ за добу (3,00 $) — решта завтра"
 
 
 def test_broken_photo_goes_to_problems_not_to_batch(conn, root):
@@ -250,7 +250,7 @@ def test_rejected_batch_returns_cards_to_queue(conn, root):
 
     sent = batch.send(conn, client, root, TODAY, LIMITS)
 
-    assert sent.error == "Помилка Claude API (400)"
+    assert sent.error == "ШІ не відповів (код 400)"
     assert states(conn) == {ids[0]: "returned"}
     assert conn.execute("SELECT status FROM ai_batches").fetchone()[0] == "failed"
     client.batches.create_error = None
@@ -427,7 +427,7 @@ def test_api_error_while_collecting_tries_later(conn, root):
 
     report = batch.collect(conn, client, TODAY)
 
-    assert report.note == "Немає з'єднання з Claude API"
+    assert report.note == "Немає зв'язку з ШІ — перевірте інтернет"
     assert states(conn) == {ids[0]: "pending"}
     assert batch.open_batches(conn) == 1
 
@@ -502,13 +502,13 @@ def test_bad_settings(monkeypatch, name, value):
 
 def test_texts():
     plan = batch.Plan()
-    assert batch.sent_text(batch.Sent(plan, error="Помилка Claude API (400)"), LIMITS) == (
-        "Пакет не відправлено: Помилка Claude API (400). Спробуйте пізніше"
+    assert batch.sent_text(batch.Sent(plan, error="ШІ не відповів (код 400)"), LIMITS) == (
+        "Пакет не відправлено: ШІ не відповів (код 400). Спробуйте пізніше"
     )
     assert batch.collected_text(batch.Collected()) is None
     report = batch.Collected(filled=3, errors=1, lost=1, returned=2)
     assert batch.collected_text(report) == (
-        "ШІ заповнило бланків: 3; у «Проблеми»: 2; повернуто в чергу: 2"
+        "ШІ заповнив бланків: 3; у «Проблеми»: 2; повернуто в чергу: 2"
     )
     assert json.dumps(batch.cents(12345), ensure_ascii=False) == '"1,23 ¢"'
 

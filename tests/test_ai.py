@@ -230,7 +230,7 @@ def test_call_returns_answer_and_usage():
 @pytest.mark.parametrize(
     ("result", "text"),
     [
-        (message(GOOD, stop_reason="refusal"), "ШІ відмовилось обробити цю Картку"),
+        (message(GOOD, stop_reason="refusal"), "ШІ відмовився обробити цю Картку"),
         (message('{"title": "Шкіряні', stop_reason="max_tokens"), "Відповідь ШІ обрізана"),
         (message('{"title": "Шкіряні'), "Відповідь ШІ не читається"),
         (message("[1, 2]"), "Відповідь ШІ не читається"),
@@ -258,15 +258,18 @@ _REQUEST = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
 @pytest.mark.parametrize(
     ("error", "text"),
     [
-        (_status_error(anthropic.AuthenticationError, 401), "Ключ Claude API не прийнято (401)"),
+        (
+            _status_error(anthropic.AuthenticationError, 401),
+            "Ключ ШІ не приймається — скажіть Власнику",
+        ),
         (
             _status_error(anthropic.RateLimitError, 429),
-            "Забагато запитів до Claude API (429), спробуйте пізніше",
+            "Забагато запитів до ШІ — спробуйте пізніше",
         ),
-        (_status_error(anthropic.InternalServerError, 500), "Помилка Claude API (500)"),
-        (_status_error(anthropic.BadRequestError, 400), "Помилка Claude API (400)"),
-        (anthropic.APIConnectionError(request=_REQUEST), "Немає з'єднання з Claude API"),
-        (anthropic.APITimeoutError(request=_REQUEST), "Немає з'єднання з Claude API"),
+        (_status_error(anthropic.InternalServerError, 500), "ШІ не відповів (код 500)"),
+        (_status_error(anthropic.BadRequestError, 400), "ШІ не відповів (код 400)"),
+        (anthropic.APIConnectionError(request=_REQUEST), "Немає зв'язку з ШІ — перевірте інтернет"),
+        (anthropic.APITimeoutError(request=_REQUEST), "Немає зв'язку з ШІ — перевірте інтернет"),
     ],
 )
 def test_api_errors_have_plain_text_without_details(error, text):
@@ -457,7 +460,7 @@ def test_keywords(keywords, reason):
 def test_photo_order_changed_is_yellow():
     order = ["IMG_2.JPG", "IMG_1.JPG", "IMG_3.JPG"]
     field = check(photo_order=order)["photo_order"]
-    assert (field.value, field.yellow, field.reason) == (order, True, "ШІ переставило фото")
+    assert (field.value, field.yellow, field.reason) == (order, True, "ШІ переставив фото")
 
 
 @pytest.mark.parametrize("order", [["IMG_1.JPG", "IMG_2.JPG"], NAMES + ["IMG_9.JPG"], None])

@@ -93,16 +93,19 @@ def test_api_error_moves_to_problem_without_blank(conn, root):
 
     result = fill.fill(conn, FakeClient(error), planned_for(conn, root))
 
-    assert result.error == "Немає з'єднання з Claude API"
+    assert result.error == "Немає зв'язку з ШІ — перевірте інтернет"
     row = item(conn, item_id)
     assert (row["status"], row["problem_code"], row["problem_text"]) == (
         Status.PROBLEM,
         "ai_error",
-        "Немає з'єднання з Claude API",
+        "Немає зв'язку з ШІ — перевірте інтернет",
     )
     assert conn.execute("SELECT count(*) FROM blanks").fetchone()[0] == 0
     request = conn.execute("SELECT * FROM ai_requests").fetchone()
-    assert (request["cost_micro_usd"], request["error"]) == (0, "Немає з'єднання з Claude API")
+    assert (request["cost_micro_usd"], request["error"]) == (
+        0,
+        "Немає зв'язку з ШІ — перевірте інтернет",
+    )
 
 
 def test_truncated_answer_is_problem_and_cost_counted(conn, root):
@@ -248,7 +251,7 @@ def test_retry_error_keeps_old_blank_and_status(conn, root):
 
     result = fill.retry(conn, FakeClient(error), retry_planned(conn, root, item_id))
 
-    assert result.error == "Немає з'єднання з Claude API"
+    assert result.error == "Немає зв'язку з ШІ — перевірте інтернет"
     assert item(conn, item_id)["status"] == Status.REVIEW
     assert conn.execute("SELECT value FROM blanks").fetchone()[0] == '"Стара назва"'
     assert conn.execute("SELECT error FROM ai_requests").fetchone()[0] == result.error

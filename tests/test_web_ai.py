@@ -140,7 +140,7 @@ def test_update_without_key_explains(conn, app, root):
 
     update(app)
 
-    assert app.ai_note == "Немає ключа ШІ (ANTHROPIC_API_KEY) — скажіть Власнику"
+    assert app.ai_note == "ШІ не підключений — скажіть Власнику"
     assert not app.ai_lock.locked()
 
 
@@ -238,7 +238,7 @@ def test_dot_is_calm_while_ai_works_and_warns_on_real_errors(conn, app, root, cl
     update(app)
     assert app.ai_note_error
     assert app._panel_context(conn)["tones"]["ai"] == "warn"
-    assert "Немає ключа ШІ" in html(get(app, "/review"))
+    assert "ШІ не підключений" in html(get(app, "/review"))
 
 
 def test_info_note_does_not_turn_the_dot_yellow(conn, app):
@@ -386,7 +386,7 @@ def test_retry_error_keeps_card_and_explains(conn, app, review_card, client):
     client.reply = anthropic.APIConnectionError(request=httpx2.Request("POST", "https://x.test"))
 
     assert location(retry(app, review_card)).endswith("msg=ai_retry_failed")
-    assert app.ai_note == "«ШІ, спробуй ще раз» (1342): Немає з'єднання з Claude API"
+    assert app.ai_note == "ШІ не заповнив Картку 1342: Немає зв'язку з ШІ — перевірте інтернет"
     assert status(conn, review_card) == Status.REVIEW
 
 
