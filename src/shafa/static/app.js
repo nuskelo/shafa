@@ -3,6 +3,15 @@
 // Прапорець для стилів: чипи показуються лише коли JS працює (без нього — звичайні поля).
 document.documentElement.classList.add("js");
 
+// A23: повідомлення вже показане сервером; `?msg=` не лишаємо в адресі, інакше F5 покаже його знову.
+try {
+  const url = new URL(window.location.href);
+  if (url.searchParams.has("msg")) {
+    url.searchParams.delete("msg");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }
+} catch (error) { /* старий браузер — лишаємо як є */ }
+
 document.addEventListener("DOMContentLoaded", () => {
 
   const viewer = document.getElementById("viewer");
@@ -243,6 +252,20 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
 
+    // A25: лічильники вкладок оновлюються разом із панеллю (її відповідь несе `data-counts`).
+    function updateCounts(html) {
+      const found = html.match(/data-counts="([^"]*)"/);
+      if (!found) return;
+      found[1].split(";").forEach((pair) => {
+        const [key, value] = pair.split("=");
+        if (!key || value === undefined) return;
+        document.querySelectorAll(`.tabs a[href="/${key}"] .count, .tabs .menu a[href="/${key}"] .count`).forEach((count) => {
+          if (count.textContent !== value) count.textContent = value;
+          if (key === "problem") count.classList.toggle("alert", value !== "0");
+        });
+      });
+    }
+
     async function refresh() {
       if (loading || document.hidden) return;
       if (robot.querySelector("button:active")) return; // кнопку саме тиснуть
@@ -253,6 +276,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const response = await fetch(robot.dataset.panel, { cache: "no-store", signal: controller.signal });
         if (!response.ok) throw new Error("panel " + response.status);
         const html = await response.text();
+        updateCounts(html);
         if (html !== last) swap(html);
         last = html;
         markStale(false);

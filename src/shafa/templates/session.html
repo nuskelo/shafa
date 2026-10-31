@@ -9,9 +9,9 @@
   </div>
   <div class="s-stats">
     <span>Опубліковано <b>{{ session.published }}</b></span>
-    <span>У Проблемах <b>{{ session.problems }}</b></span>
+    <span>У Проблемах <b>{{ session.problems }}</b>{% if session.problems %} — <a href="/problem">подивіться</a>{% endif %}</span>
   </div>
-  <div class="s-why tone-{{ tone }}">{% if tone == "run" %}працює{% else %}{{ reasons.get(session.stop_code or "", "") or (session.stop_reason or "") or "закінчилась" }}{% endif %}</div>
+  <div class="s-why tone-{{ tone }}">{% if tone == "run" %}працює{% else %}{{ reason_of(session.stop_code, session.stop_reason) or "закінчилась" }}{% endif %}</div>
 </div>
 {% if not cards %}<p class="empty">У цій сесії робот не брався за жодну Картку.</p>{% endif %}
 <ul class="grid">
