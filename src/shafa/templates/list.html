@@ -2,10 +2,10 @@
 {% block title %}{{ tabs[current] }} · Шафа-помічник{% endblock %}
 {% block main %}
 {% set intro = {
-  "review": "Переглянь і схвали — робот опублікує після «Старт».",
+  "review": "Перегляньте й схваліть — робот опублікує після «Старт».",
   "approved": "Схвалені Картки — їх опублікує робот після «Старт».",
   "problem": "Картки, які робот не публікує. Кожна — з причиною і що зробити.",
-  "archived": "Архів: Картки видаляються через 7 днів.",
+  "archived": "Тут Картки, які не підуть на Шафу. Через 7 днів вони зникають з програми (фото в папці лишаються).",
 } %}
 <div class="page-head">
   <div>
@@ -64,7 +64,7 @@
         {% if card.fields["section"].value %}<span class="details">{{ card.fields["section"].value | replace(" / ", " · ") }}</span>{% endif %}
         <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date] | select | join(" · ") }}</span>
         {% if card.status in ("review", "approved") and not is_old(card.folder_name) %}<span class="tag new-card">З бота · {{ card.photos | length }} фото</span>{% endif %}
-        {% if card.old_rules %}<span class="tag old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто перезаповнити">заповнено старими правилами</span>{% endif %}
+        {% if card.old_rules %}<span class="tag old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто заповнити заново">можна заповнити краще</span>{% endif %}
       </span>
     </a>
   </li>

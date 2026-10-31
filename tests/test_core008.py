@@ -203,7 +203,7 @@ def test_panel_button_and_confirmation_page_show_estimate(conn, root, app):
 
     assert "Заповнити ШІ заново (2, платно)" in html(get(app, "/review"))
     page = html(get(app, "/refill"))
-    assert "≈ 2 карток" in page and "$" in page
+    assert "2 Картки він, можливо, заповнив би краще" in page and "$" in page
     assert status(conn, 1) == Status.REVIEW  # перегляд нічого не міняє
 
 
@@ -261,8 +261,8 @@ def test_old_rules_label_only_when_new_ai_instruction_may_change_card(conn, root
 def test_old_rules_label_on_list_and_card(conn, root, app):
     item_id = refill_card(conn, root)
 
-    assert "заповнено старими правилами" in html(get(app, "/review"))
-    assert "заповнено старими правилами" in html(get(app, f"/item/{item_id}"))
+    assert "можна заповнити краще" in html(get(app, "/review"))
+    assert "можна заповнити краще" in html(get(app, f"/item/{item_id}"))
 
 
 def test_refill_clears_old_rules_label(conn, root):

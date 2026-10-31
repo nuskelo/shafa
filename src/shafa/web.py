@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import jinja2
@@ -50,7 +50,7 @@ from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, list_fo
 from shafa.robot import browser, control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
-from shafa.scan import STICKY, scan
+from shafa.scan import NO_SECTION_TEXT, OLD_NO_SECTION_TEXT, STICKY, scan
 
 HEALTH_EVERY = 30  # секунд: «Перевірити ще раз» не частіше
 COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
@@ -81,22 +81,22 @@ CARD_TABS = (Status.REVIEW, Status.APPROVED, Status.PROBLEM, Status.ARCHIVED)
 MY_ITEMS = "https://shafa.ua/uk/my/clothes/active"
 STICKY_TITLES = {  # проблеми публікації — простими словами, без кодів
     "publish_uncertain": "Не впевнений, чи товар з'явився на Шафі — перевір",
-    "publish_error": "Шафа не прийняла товар",
+    "publish_error": "Шафа не прийняла при публікації",
     "possible_duplicate": "Схожий товар уже є на Шафі",
     "already_published": "Цей пост уже опубліковано з іншої папки",
-    "shafa_declined": "Шафа відхилила оголошення після публікації",
+    "shafa_declined": "Шафа відхилила оголошення",
     "photos_missing": "Фото поста не знайдено в папці",  # без запису Картка-Проблема давала 500
 }
 MESSAGES = {
     "saved": "Збережено",
     "approved": "Схвалено",
-    "rejected": f"Відхилено — Картка в Архіві {review.ARCHIVE_DAYS} днів",
+    "rejected": f"Картку «{{name}}» відкладено в Архів на {review.ARCHIVE_DAYS} днів.",
     "approved_next": "Схвалено «{name}» → у «Схвалених». Це наступна Картка.",
     "approved_left": "Схвалено. Лишилось {n} пропущених — ось перша з них.",
     "approved_done": "Схвалено. На перевірці більше нічого немає — можна натискати «Старт» угорі.",
-    "rejected_left": f"Відхилено — Картка в Архіві {review.ARCHIVE_DAYS} днів. "
+    "rejected_left": f"Картку «{{name}}» відкладено в Архів на {review.ARCHIVE_DAYS} днів. "
     "Лишилось {n} пропущених — ось перша з них.",
-    "rejected_done": f"Відхилено — Картка в Архіві {review.ARCHIVE_DAYS} днів. "
+    "rejected_done": f"Картку «{{name}}» відкладено в Архів на {review.ARCHIVE_DAYS} днів. "
     "На перевірці більше нічого немає — можна натискати «Старт» угорі.",
     "saved_no_price": "Збережено, але без ціни Картку не схвалити.",
     "no_price": "Схвалити не можна: немає ціни",
@@ -116,6 +116,11 @@ MESSAGES = {
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
     "recheck_new": "Папку перевірено: усе добре, Картка чекає на ШІ",
     "recheck_problem": "Папку перевірено: проблема лишилась",
+    "recheck_many_items": "Проблема лишилась: у пості досі кілька пар чи розмірів. Опублікуйте на "
+    "Шафі вручну («Опублікувала вручну») або «В архів».",
+    "recheck_no_section": "Проблема лишилась: робот публікує лише взуття й аксесуари. Цю річ "
+    "опублікуйте на Шафі вручну («Опублікувала вручну») або «В архів».",
+    "to_review": "Картку повернуто на перевірку — виправте поля й схваліть знову",
     "no_restore": "Такий пост робот не опублікує — повертати його на перевірку не можна",
     "on_shafa_block": "Цей товар уже є на Шафі — повертати його на перевірку й публікувати вдруге не можна",
     "sticky": "Спершу перевірте Шафу і скористайтеся кнопками нижче",
@@ -157,6 +162,7 @@ MESSAGES = {
     "ai_busy": "ШІ вже працює — зачекайте хвилину",
     "refill_started": "Картки пішли на ШІ пакетом — результати зазвичай до години, "
     "ваші правки збережуться",
+    "ai_unavailable": "ШІ зараз недоступний — Картку поставлено в чергу; скажіть Власнику.",
     "recheck_done": "Картки оновлено за новими правилами, без ШІ — ваші правки збережено",
     "ai_retry_done": "ШІ заповнило бланк заново — ваші правки збережено",
     "ai_retry_failed": "ШІ не вдалося — старий бланк лишився (подробиці на панелі)",
@@ -174,83 +180,105 @@ PROBLEM_HINTS = {
     "post_not_found": "Такого поста немає в Експорті. Перевірте номер у назві папки.",
     "no_text": "У пості немає тексту — такий товар оформлюється вручну.",
     "no_price": "У пості немає ціни — допишіть ціну в пост і зробіть новий Експорт.",
-    "many_items": "У пості кілька товарів — такий пост оформлюється вручну. Пост з кількома розмірами однієї пари розбирається сам, якщо кожен розмір — окремим пунктом «* 43 розмір. Устілка …».",
-    "size_gone": "Цей розмір прибрали з поста. Якщо його продано — «В архів». Якщо ні — поверніть пункт у пост і натисніть «Перевірити ще раз».",
+    "many_items": "У пості кілька пар чи розмірів — робот публікує лише одну пару на пост. Опублікуйте на Шафі вручну (і натисніть «Опублікувала вручну») або «В архів».",
+    "size_gone": "Розмір {size}прибрали з поста. Продано — «В архів». Не продано — поверніть розмір у пост і «Перевірити ще раз».",
     "no_photos": "Додайте в папку фото .jpg.",
     "too_many_photos": "Залиште в папці не більше 10 фото.",
     "folder_missing": "Папку перейменовано або видалено.",
-    "robot_field_missing": "Шафа, мабуть, змінила форму. Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
+    "robot_field_missing": "Шафа, мабуть, змінила форму. «Повернути на перевірку» — виправте поля й схваліть знову; «Перевірити ще раз» — робот спробує ще раз без змін. Якщо повторюється — скажіть Власнику.",
     "ai_error": "ШІ не заповнило бланк. «Перевірити ще раз» поверне Картку в чергу на ШІ.",
     "publish_uncertain": "Робот натиснув «Додати річ», але не дочекався відповіді. Перевірте на Шафі, чи товар з'явився. Робот сам не повторює.",
     "possible_duplicate": "Схожий товар уже є на Шафі або цей пост уже опубліковано. Повторне оголошення заборонене правилами Шафи.",
-    "shafa_declined": "Шафа перевірила оголошення вже після публікації й відхилила його. Відкрийте його на Шафі й виправте вручну або приберіть Картку в Архів. Робот цей товар вдруге не публікує.",
-    "publish_error": "Шафа не прийняла товар (текст помилки вище). Перевірте Шафу й скажіть Власнику.",
-    "robot_logged_out": "Робот не увійшов на Шафу. Власник: python -m shafa robot --login. «Перевірити ще раз» поверне Картку в Схвалені.",
-    "robot_brand_missing": "Бренд є у довіднику Шафи, але робот його не знайшов. Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
-    "robot_photos": "Не всі фото завантажились на Шафу. «Перевірити ще раз» поверне Картку в Схвалені.",
-    "photos_missing": "Фото поста не знайдено в папці. Додайте фото і натисніть «Перевірити ще раз».",
-    "stale_rules": "Картку схвалено за старими правилами. «Перевірити ще раз» перерахує її правилами (без ШІ) і поверне на перевірку: перегляньте й схваліть знову.",
-    "robot_not_ready": "Картку не можна передати роботу (текст вище). «Перевірити ще раз» поверне Картку в Схвалені.",
-    "robot_not_sent": "Форма на Шафі не надіслалась (товар не створено). Скажіть Власнику. «Перевірити ще раз» поверне Картку в Схвалені.",
+    "shafa_declined": "Шафа перевірила оголошення вже після публікації й відхилила його. Відкрийте його на Шафі й виправте вручну або приберіть Картку в «В архів». Робот цей товар вдруге не публікує.",
+    "publish_error": "Шафа не прийняла товар — що саме вона відповіла, написано вище. «Повернути на перевірку» — виправте Картку й схваліть знову. Якщо товар усе ж з'явився на Шафі — вставте посилання нижче.",
+    "robot_logged_out": "Робот вийшов із Шафи. Натисніть на панелі «Увійти на Шафу», увійдіть як завжди й закрийте вікно. Потім «Перевірити ще раз».",
+    "robot_brand_missing": "Бренд є у довіднику Шафи, але робот його не знайшов. «Перевірити ще раз» — робот спробує ще раз; «Повернути на перевірку» — перевірте бренд у Картці. Якщо повторюється — скажіть Власнику.",
+    "robot_photos": "Не всі фото завантажились на Шафу. «Перевірити ще раз» — робот спробує ще раз; «Повернути на перевірку» — перевірте фото в Картці.",
+    "photos_missing": "Фото поста не знайдено в папці. Додайте фото і натисніть «Перевірити ще раз». Якщо пару продано — «В архів».",
+    "stale_rules": "Програму оновлено — Картку треба переглянути ще раз. «Перевірити ще раз» поверне її в «На перевірку», правки збережуться.",
+    "robot_not_ready": "Картку не можна передати роботу (причина вище). «Перевірити ще раз» — робот спробує ще раз; «Повернути на перевірку» — виправте Картку.",
+    "robot_not_sent": "Форма на Шафі не надіслалась (товар не створено). «Перевірити ще раз» — робот спробує ще раз; «Повернути на перевірку» — перевірте Картку. Якщо повторюється — скажіть Власнику.",
     "robot_publish_blocked": "Захист робота не пропустив запит публікації — товар не створено. Скажіть Власнику.",
+    "robot_slow": "Шафа довго не відповідала. «Перевірити ще раз» — робот спробує ще раз.",
 }
 # UI-006: рядок Проблеми у списку — коротка мітка і що робити (довгий текст для Картки — `PROBLEM_HINTS`).
 PROBLEM_KINDS = {
     "bad_folder_name": (
         "Назва папки",
-        "перейменуй папку на номер поста, потім «Перевірити ще раз»",
+        "перейменуйте папку на номер поста, потім «Перевірити ще раз»",
     ),
-    "duplicate_post": ("Дві папки", "залиш одну папку для поста, потім «Перевірити ще раз»"),
-    "post_not_found": ("Поста немає", "перевір номер у назві папки, потім «Перевірити ще раз»"),
-    "no_text": ("Нема тексту", "такий товар оформлюється вручну — відкрий Картку"),
+    "duplicate_post": ("Дві папки", "залиште одну папку для поста, потім «Перевірити ще раз»"),
+    "post_not_found": ("Поста немає", "перевірте номер у назві папки, потім «Перевірити ще раз»"),
+    "no_text": ("Нема тексту", "такий товар оформлюється вручну — відкрийте Картку"),
     "no_price": (
         "Нема ціни",
-        "допиши ціну в пост, зроби новий Експорт і натисни «Перевірити ще раз»",
+        "допишіть ціну в пост, зробіть новий Експорт і натисніть «Перевірити ще раз»",
     ),
     "many_items": (
-        "Кілька товарів",
-        "опублікуй вручну на Шафі або в архів — робот такі пости не бере",
+        "Кілька пар у пості",
+        "опублікуйте на Шафі вручну («Опублікувала вручну») або «В архів» — робот бере одну пару на пост",
     ),
     "size_gone": (
         "Розмір прибрано",
-        "якщо розмір продано — нічого не роби; якщо ні — поверни пункт у пост",
+        "продано — «В архів»; не продано — поверніть розмір у пост і «Перевірити ще раз»",
     ),
     "no_section": (
-        "Нема розділу",
-        "опублікуй вручну або в архів — підходящого розділу на Шафі немає",
+        "Не взуття й не аксесуар",
+        "опублікуйте на Шафі вручну («Опублікувала вручну») або «В архів»",
     ),
-    "no_photos": ("Нема фото", "додай в папку фото .jpg, потім «Перевірити ще раз»"),
+    "no_photos": ("Нема фото", "додайте в папку фото .jpg, потім «Перевірити ще раз»"),
     "too_many_photos": (
         "Забагато фото",
-        "залиш в папці не більше 10 фото, потім «Перевірити ще раз»",
+        "залиште в папці не більше 10 фото, потім «Перевірити ще раз»",
     ),
     "folder_missing": (
         "Нема папки",
-        "папку перейменовано чи видалено — поверни її, потім «Перевірити ще раз»",
+        "папку перейменовано чи видалено — поверніть її, потім «Перевірити ще раз»",
     ),
     "ai_error": ("ШІ не заповнив", "«Перевірити ще раз» — Картка знову піде на ШІ"),
-    "stale_rules": ("Старі правила", "«Перевірити ще раз» — перерахує без ШІ, потім схвали знову"),
-    "possible_duplicate": ("Схожий є на Шафі", "відкрий Картку і порівняй"),
-    "already_published": ("Уже опубліковано", "цей пост уже на Шафі — відкрий Картку"),
-    "publish_uncertain": ("Не впевнений", "перевір «Мої речі» на Шафі, потім відкрий Картку"),
-    "publish_error": ("Шафа не прийняла", "відкрий Картку"),
-    "shafa_declined": (
-        "Шафа не прийняла",
-        "відкрий Картку: виправ оголошення на Шафі або прибери в архів",
+    "stale_rules": (
+        "Старі правила",
+        "«Перевірити ще раз» — Картка повернеться в «На перевірку», правки збережуться",
     ),
-    "photos_missing": ("Фото", "перевір папку з фото, потім «Перевірити ще раз»"),
-    "robot_photos": ("Фото", "перевір папку з фото, потім «Перевірити ще раз»"),
+    "possible_duplicate": (
+        "Схожий є на Шафі",
+        "відкрийте Картку й порівняйте; якщо пару вже опублікували самі — «Опублікувала вручну»",
+    ),
+    "already_published": ("Уже опубліковано", "цей пост уже на Шафі — відкрийте Картку"),
+    "publish_uncertain": ("Не впевнений", "перевірте «Мої речі» на Шафі, потім відкрийте Картку"),
+    "publish_error": (
+        "Шафа не прийняла при публікації",
+        "відкрийте Картку: «Повернути на перевірку» й виправте",
+    ),
+    "shafa_declined": (
+        "Шафа відхилила оголошення",
+        "відкрийте Картку: виправте оголошення на Шафі або «В архів»",
+    ),
+    "photos_missing": (
+        "Фото",
+        "перевірте папку з фото, потім «Перевірити ще раз»; продано — «В архів»",
+    ),
+    "robot_photos": (
+        "Фото",
+        "«Перевірити ще раз» — робот спробує ще раз, або перевірте фото в Картці",
+    ),
+    "robot_logged_out": (
+        "Нема входу на Шафу",
+        "натисніть на панелі «Увійти на Шафу», потім «Перевірити ще раз»",
+    ),
     "post_deleted": (
         "Пост видалено",
         "пост прибрано з каналу — схоже, продано; публікувати не треба",
     ),
 }
-ROBOT_KIND = ("Робот", "«Перевірити ще раз» — робот спробує знову")
-OTHER_KIND = ("Проблема", "відкрий Картку")
-# Кнопки в рядку Проблеми — лише ті, що працюють на сервері: `publish.to_archive` приймає тільки ці коди.
-ARCHIVE_CODES = (
-    "possible_duplicate", "already_published", "shafa_declined", *review.NO_RESTORE
-)  # fmt: skip
+ROBOT_KIND = (
+    "Робот",
+    "«Перевірити ще раз» — робот спробує знову; «Повернути на перевірку» — виправте поля",
+)
+OTHER_KIND = ("Проблема", "відкрийте Картку")
+# Кнопки в рядку Проблеми — лише ті, що працюють на сервері: `publish.to_archive` приймає тільки ці
+# коди (і всі `robot_…`, див. `publish.can_archive`).
+ARCHIVE_CODES = publish.ARCHIVABLE
 LINK_CODES = (
     "publish_uncertain",
     "publish_error",
@@ -428,6 +456,10 @@ class App:
         )
         self.env.filters["dmy"] = dmy
         self.env.filters["card_name"] = card_name
+        self.env.filters["plain"] = plain
+        self.env.filters["names"] = names
+        self.env.globals["archive_reason"] = archive_reason
+        self.env.globals["plural"] = plural
 
     # --- Захист ---
 
@@ -556,6 +588,7 @@ class App:
             "counts": counts,
             **self._panel_context(conn),
             "can_quit": self.on_quit is not None,
+            "undo": self._undo(conn, request),
             "back": safe_back(request.path),
             "fake": self.fake_shafa,
         }
@@ -942,10 +975,26 @@ class App:
                 ids = [r["id"] for r in fill.refill_candidates(conn)]
             if not ids or not fill.mark_refill(conn, ids):
                 return redirect(f"/{Status.REVIEW}?msg=stale")
+            message = self._refill_message(conn)
         finally:
             conn.close()
-        started = self._start(self._send_refill, "відправляю на ШІ…")
-        return redirect(f"/{Status.REVIEW}?msg={'refill_started' if started else 'ai_busy'}")
+        return redirect(f"/{Status.REVIEW}?msg={message}")
+
+    def ai_unavailable(self, conn) -> bool:
+        """Нема ключа ШІ чи вичерпано бюджет на добу — пакет зараз не піде (B3, UX-004)."""
+        try:
+            self.ai_client()
+            return batch.budget_left(conn, self.today(), batch.limits()) <= 0
+        except (config.ConfigError, batch.SetupError):
+            return True
+
+    def _refill_message(self, conn) -> str:
+        """Відправити на ШІ пакетом і сказати правду: недоступний ШІ — не «пішли на ШІ»."""
+        if self.ai_unavailable(conn):
+            return "ai_unavailable"
+        return (
+            "refill_started" if self._start(self._send_refill, "відправляю на ШІ…") else "ai_busy"
+        )
 
     def ai_retry(self, conn, item_id: int) -> str:
         """«ШІ, спробуй ще раз»: одразу, звичайним запитом без кешу (D2). Повертає код повідомлення."""
@@ -1091,9 +1140,9 @@ class App:
                 else None
             )
             on_shafa = {  # Картка з `shafa_id` з Архіву не повертається (як на самій Картці)
-                r[0]
+                r["id"]: no_restore_reason(r["problem_code"], r["shafa_id"])
                 for r in conn.execute(
-                    "SELECT id FROM items WHERE shafa_id IS NOT NULL "
+                    "SELECT id, problem_code, shafa_id FROM items WHERE shafa_id IS NOT NULL "
                     f"OR problem_code IN ({', '.join('?' * len(review.NO_RESTORE))})",
                     review.NO_RESTORE,
                 )
@@ -1308,6 +1357,7 @@ class App:
                         card.fields[name], inputs=[*shown, *card.fields[name].inputs[len(shown) :]]
                     )
             check = self._precheck(card)
+            acts = problem_actions(card.problem_code, card.folder_name)
             from_ = self._from(request, card)
             block = card.approve_block() if card.status == Status.REVIEW else None
             todo = approve_todo(card, block, check.error) if card.status == Status.REVIEW else None
@@ -1333,9 +1383,18 @@ class App:
                 message=self._message(conn, request),
                 todo=todo,
                 sections=catalog.sections(),
-                hint=PROBLEM_HINTS.get(card.problem_code or ""),
-                problem_archive=problem_actions(card.problem_code)[0],
-                problem_recheck=problem_actions(card.problem_code)[1],
+                hint=problem_hint(card),
+                problem_archive=acts.archive,
+                problem_recheck=acts.recheck,
+                problem_to_review=acts.to_review,
+                problem_manual=acts.manual,
+                confirm_archive=card.problem_code in review.NO_RESTORE,
+                waiting=self._waiting(conn, card),
+                no_restore_reason=(
+                    no_restore_reason(card.problem_code, row["shafa_id"])
+                    if card.status == Status.ARCHIVED
+                    else None
+                ),
                 deletion_date=review.deletion_date,
                 editable=card.status == Status.REVIEW,
                 nav=self._nav(conn, card, from_),
@@ -1394,8 +1453,21 @@ class App:
                     fresh = review.load_card(conn, item_id)
                     empty = fresh is not None and not fresh.fields["price"].value
                     return redirect(back(msg="saved_no_price" if empty else "saved"))
+            sure = (request.form.get("sure") or [""])[0] == "1"
+            if action == "to_archive" and card.problem_code in review.NO_RESTORE and not sure:
+                return self._confirm(
+                    conn, request, card, action, from_, stay,
+                    "Картку не можна буде повернути. Точно в архів?",
+                    "Так, в архів", "Ні, назад",
+                )  # fmt: skip
             if action in review.ACTIONS:
-                message = review.act(conn, item_id, action, self.root)
+                message = review.act(conn, item_id, action, self.root, confirmed=sure)
+                if message == review.CONFIRM_RESTORE:  # B10: продану пару — лише після питання
+                    return self._confirm(
+                        conn, request, card, action, from_, stay,
+                        "Цей пост видалено з каналу — пару, мабуть, продано. Повернути все одно?",
+                        "Так, повернути", "Ні, лишити в Архіві",
+                    )  # fmt: skip
                 if message == review.PRECHECK:
                     fresh = review.load_card(conn, item_id)
                     if fresh is not None and not fresh.fields["price"].value:
@@ -1410,8 +1482,8 @@ class App:
                     if following and message == "approved":
                         return redirect(with_params(following, msg="approved_next", ok=item_id))
                     if following:
-                        return redirect(with_msg(following, message))
-                    return redirect(self._queue_end(conn, from_, message))
+                        return redirect(with_params(following, msg=message, ok=item_id))
+                    return redirect(self._queue_end(conn, from_, message, item_id))
                 return redirect(with_msg(from_, message))
             decisions = {
                 "on_shafa": lambda: publish.on_shafa(
@@ -1420,19 +1492,19 @@ class App:
                 "not_on_shafa": lambda: publish.not_on_shafa(conn, item_id),
                 "other_item": lambda: publish.other_item(conn, item_id),
                 "to_archive": lambda: publish.to_archive(conn, item_id),
+                "to_review": lambda: "to_review" if review.to_review(conn, item_id) else "stale",
             }
             if action in decisions:
                 message = decisions[action]()
                 if message in ("stale", "bad_link", "listing_found"):
                     return redirect(back(msg=message))
+                if message == "to_review":
+                    return redirect(f"/{Status.REVIEW}?msg={message}")
                 return redirect(f"/{Status.PROBLEM}?msg={message}")
             if action == "refill":
                 if not fill.mark_refill(conn, [item_id]):
                     return redirect(back(msg="stale"))
-                started = self._start(self._send_refill, "відправляю на ШІ…")
-                return redirect(
-                    f"/{Status.REVIEW}?msg={'refill_started' if started else 'ai_busy'}"
-                )
+                return redirect(f"/{Status.REVIEW}?msg={self._refill_message(conn)}")
             if action == "ai_retry":
                 message = self.ai_retry(conn, item_id)
                 return redirect(back(msg=message))
@@ -1442,23 +1514,89 @@ class App:
                     return redirect(f"/{Status.REVIEW}?msg={result.code}")
                 if result.code in ("robot_retry", "recheck_new"):
                     return redirect(f"/{Status.PROBLEM}?msg={result.code}")
+                if result.code == "recheck_problem":  # текст за кодом проблеми, що лишилась (B26)
+                    left = card.problem_code if card.problem_code in review.NO_RESTORE else None
+                    return redirect(back(msg=f"recheck_{left}" if left else result.code))
                 return redirect(back(msg=result.code))
             return text(400, "Невідома дія")
         finally:
             conn.close()
 
-    def _queue_end(self, conn, from_: str, message: str) -> str:
+    def _confirm(
+        self, conn, request: Request, card, action: str, from_: str | None, stay: bool,
+        question: str, yes: str, no: str,
+    ) -> Response:  # fmt: skip
+        """Сторінка-підтвердження незворотного (B10, B5/B14): без JS, та сама форма з `sure=1`."""
+        back = from_ or item_url(card.id)
+        return self.page(
+            "confirm.html",
+            **self._chrome(conn, request),
+            current=None,
+            message=None,
+            card=card,
+            action=action,
+            question=question,
+            yes=yes,
+            no=no,
+            from_=from_ or "",
+            stay=bool(stay),
+            back_url=back,
+            reject=action == "to_archive",
+        )
+
+    def _waiting(self, conn, card: review.Card) -> str | None:
+        """Картка `new` — її немає у вкладках; чому і до коли (B3, UX-004)."""
+        if card.status != Status.NEW:
+            return None
+        row = conn.execute(
+            """
+            SELECT b.created_at FROM ai_batch_items i JOIN ai_batches b ON b.id = i.batch_id
+            WHERE i.item_id = ? AND i.state = 'pending'
+              AND b.status IN ('sending', 'uncertain', 'in_progress')
+            ORDER BY b.id DESC LIMIT 1
+            """,
+            (card.id,),
+        ).fetchone()
+        if row is not None:
+            sent = datetime.fromisoformat(row[0]).astimezone(self.today().tzinfo)
+            return (
+                f"Ця Картка чекає на ШІ (відправлено {sent:%d.%m} о {sent:%H:%M}). Зазвичай до години — "
+                "потім з'явиться в «На перевірку». Правити зараз не можна."
+            )
+        if self.ai_unavailable(conn):
+            return MESSAGES["ai_unavailable"] + " Правити зараз не можна."
+        return (
+            "Ця Картка чекає черги на ШІ — він візьме її, коли настане її день. "
+            "Правити зараз не можна."
+        )
+
+    def _undo(self, conn, request: Request) -> int | None:
+        """«Картку відкладено в Архів… [Повернути]»: id Картки, яку ще можна повернути."""
+        key, item = request.arg("msg"), request.arg("ok")
+        if not key.startswith("rejected") or not item.isdigit():
+            return None
+        row = conn.execute(
+            "SELECT status, shafa_id FROM items WHERE id = ? AND purged_at IS NULL", (int(item),)
+        ).fetchone()
+        if row is None or row["status"] != Status.ARCHIVED or row["shafa_id"] is not None:
+            return None
+        return int(item)
+
+    def _queue_end(self, conn, from_: str, message: str, item_id: int) -> str:
         """Далі не було: чесно сказати, що лишилось (B1, UX-003). Пропущені Картки цього ж списку →
         перша з них (по колу); немає — «більше нічого немає» і що робити далі."""
         review_list = from_ if urlsplit(from_).path == f"/{Status.REVIEW}" else f"/{Status.REVIEW}"
+        undo = {"ok": item_id} if message == "rejected" else {}  # для «[Повернути]» (UX-004)
         left = self._list_ids(conn, Status.REVIEW, review_list)
         if left:
-            return with_params(item_url(left[0], review_list), msg=f"{message}_left", n=len(left))
+            return with_params(
+                item_url(left[0], review_list), msg=f"{message}_left", n=len(left), **undo
+            )
         if review.list_tab(
             conn, Status.REVIEW
         ):  # у списку з фільтром порожньо, а на перевірці ще є
-            return with_msg(review_list, message)
-        return with_msg(review_list, f"{message}_done")
+            return with_params(review_list, msg=message, **undo)
+        return with_params(review_list, msg=f"{message}_done", **undo)
 
     def published_page(self, request: Request) -> Response:
         conn = self.connect()
@@ -1479,6 +1617,13 @@ class App:
                 current=Status.PUBLISHED,
                 cards=cards,
                 extra=extra,
+                dups={
+                    r["id"]: shafa_link(r["duplicate_url"])
+                    for r in conn.execute(
+                        "SELECT id, duplicate_url FROM items WHERE status = ? AND problem_code = ?",
+                        (Status.PUBLISHED, "duplicate_checked"),
+                    )
+                },
                 query=query,
                 message=MESSAGES.get(request.arg("msg")),
             )
@@ -1919,24 +2064,87 @@ class ProblemRow:
     label: str
     why: str
     todo: str
-    details: str  # повний текст причини, коли `why` — коротка фраза зі `STICKY_TITLES`
+    details: str  # повний текст причини, коли `why` — коротка фраза чи з неї прибрано службове
     archive: bool
     recheck: bool
     my_items: bool
+    to_review: bool = False  # UX-004: «Повернути на перевірку (виправити поля)»
+    manual: bool = False  # UX-004: «Опублікувала вручну» — посилання на товар
+    confirm_archive: bool = False  # «В архів» без повернення — спершу підтвердження
 
 
-def problem_actions(code: str | None) -> tuple[bool, bool]:
-    """(`to_archive`, `recheck`) — ті самі кнопки, що на Картці (`card.html`), і лише робочі на сервері:
-    `publish_uncertain`/`publish_error` вирішуються посиланням на Картці, решта STICKY — без повтору."""
+class Actions(NamedTuple):
+    archive: bool
+    recheck: bool
+    to_review: bool = False
+    manual: bool = False
+
+
+def problem_actions(code: str | None, folder_name: str | None = None) -> Actions:
+    """Кнопки Проблеми — ті самі на Картці (`card.html`) і в списку, лише робочі на сервері:
+    `publish_uncertain`/`publish_error` вирішуються посиланням на Картці, решта STICKY — без повтору.
+    Старі пости (`borh-…`): «Перевірити ще раз» немає — перевіряти нема що (папки немає, B26)."""
+    code = code or ""
+    old = bool(folder_name) and is_old(folder_name)
+    if code == "publish_error":
+        return Actions(False, False, to_review=True)  # «На Шафі є» — своя форма на Картці
     if code in LINK_CODES:
-        return False, False
+        return Actions(False, False)
+    manual = publish.can_publish_by_hand(code)
+    if code == "robot_logged_out":
+        return Actions(False, True)
+    if code.startswith("robot_"):
+        return Actions(True, True, to_review=True, manual=manual)
     if (
         code in review.NO_RESTORE
     ):  # CORE-017: і в архів, і «Перевірити ще раз» (пост могли виправити)
-        return True, True
+        return Actions(True, not old, manual=manual)
     if code in ARCHIVE_CODES:
-        return True, False
-    return False, True
+        return Actions(True, code in ("size_gone", "photos_missing") and not old, manual=manual)
+    return Actions(False, True)
+
+
+# Службове в тексті причини — не для неї: назва файла скриншота.
+_SCREEN = re.compile(r"\s*(?:Екран|Скриншот):\s*\S+\.png\.?")
+_OLD_FOLDER = re.compile(r"(?i)\b(?:папк\w*\s+)?borh-(\d+)")
+
+
+def no_restore_reason(code: str | None, shafa_id) -> str | None:
+    """Чому Картку з Архіву не можна повернути на перевірку (B11)."""
+    if shafa_id is not None:
+        return "товар уже є на Шафі — другий раз публікувати не можна"
+    if code in review.NO_RESTORE:
+        return "робот не публікує такі пости (кілька пар чи не взуття) — опублікуйте вручну"
+    return None
+
+
+def archive_reason(card: review.Card) -> str:
+    """Чому Картка в Архіві — для неї, без службових слів."""
+    if card.problem_code == review.POST_DELETED:
+        return "пост видалено з каналу — пару, мабуть, продано"
+    if card.problem_text and card.problem_code in ("duplicate", "many_items", "no_section"):
+        return plain(card.problem_text).rstrip(".")
+    return "ви вирішили не публікувати" if not card.problem_code else "Картка не піде на Шафу"
+
+
+def names(text_: str | None) -> str:
+    """«Папка borh-3659» → «Старий пост 3659» (C29)."""
+    return _OLD_FOLDER.sub(lambda m: f"Старий пост {m[1]}", text_ or "")
+
+
+def plain(text_: str | None) -> str:
+    """Текст причини для неї: без назви скриншота й без «borh»."""
+    text_ = (text_ or "").replace(OLD_NO_SECTION_TEXT, NO_SECTION_TEXT)
+    return names(_SCREEN.sub("", text_).strip())
+
+
+def problem_hint(card: review.Card) -> str | None:
+    """Довгий текст «що сталось і що робити» для Картки-Проблеми."""
+    hint = PROBLEM_HINTS.get(card.problem_code or "")
+    if hint and "{size}" in hint:
+        found = re.search(r"Розмір (\S+) прибрано", card.problem_text or "")
+        hint = hint.replace("{size}", f"{found[1]} " if found else "")
+    return hint
 
 
 def problem_row(card: review.Card) -> ProblemRow:
@@ -1945,16 +2153,20 @@ def problem_row(card: review.Card) -> ProblemRow:
         ROBOT_KIND if code.startswith("robot_") else OTHER_KIND
     )
     short = STICKY_TITLES.get(code)
-    text_ = card.problem_text or ""
-    archive, recheck = problem_actions(code)
+    full = names(card.problem_text)
+    text_ = plain(card.problem_text)
+    acts = problem_actions(code, card.folder_name)
     return ProblemRow(
         label=label,
         why=short or text_,
         todo=todo,
-        details=text_ if short and text_ and text_ != short else "",
-        archive=archive,
-        recheck=recheck,
+        details=full if text_ and ((short and text_ != short) or text_ != full) else "",
+        archive=acts.archive,
+        recheck=acts.recheck,
         my_items=code in LINK_CODES,
+        to_review=acts.to_review,
+        manual=acts.manual,
+        confirm_archive=code in review.NO_RESTORE,
     )
 
 

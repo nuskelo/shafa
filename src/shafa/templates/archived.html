@@ -14,9 +14,10 @@
     <span class="body">
       <a class="name" href="{{ open_url }}">{{ card | card_name }}</a>
       {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
-      {% if card.problem_code in ("post_deleted", "duplicate", "many_items", "no_section") and card.problem_text %}<span class="problem">{{ card.problem_text }}</span>{% endif %}
+      <span class="problem">В Архіві: {{ archive_reason(card) }}</span>
       {% if card.fields["section"].value %}<span class="details">{{ card.fields["section"].value | replace(" / ", " · ") }}</span>{% endif %}
-      <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date, ("видалиться " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if card.archived_at] | select | join(" · ") }}</span>
+      <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date, ("видалиться з програми " ~ deletion_date(card.archived_at).strftime("%d.%m.%Y")) if card.archived_at] | select | join(" · ") }}</span>
+      {% if card.id in on_shafa %}<span class="meta">Повернути не можна: {{ on_shafa[card.id] }}</span>{% endif %}
       {% if card.id not in on_shafa %}
       <form method="post" action="/item/{{ card.id }}" class="restore">
         <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}">

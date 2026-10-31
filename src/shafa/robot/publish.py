@@ -80,8 +80,8 @@ NOW_NAME = "robot-now.json"  # UX-002: що робить сесія зараз �
 ITEM_URL = "https://shafa.ua/uk/item/{id}-shafa"  # Шафа переводить на справжню адресу (301)
 
 STALE_TEXT = (
-    "Картку схвалено за старими правилами — робот її не бере. Натисніть «Перерахувати правилами» "
-    "(вкладка ШІ) або «Перевірити ще раз», перевірте Картку й схваліть знову"
+    "Програму оновлено — Картку треба переглянути ще раз. «Перевірити ще раз» поверне її "
+    "в «На перевірку», правки збережуться"
 )
 UNCERTAIN = (
     "Перевірте на Шафі, чи опубліковано: робот натиснув «Додати річ», але певної відповіді немає"
@@ -1191,14 +1191,28 @@ def _decide(
     return cursor.rowcount == 1
 
 
+# UX-004 (B5): «Опублікувала вручну» — коди Проблем, які робот не розв'яже сам, а людина може
+# опублікувати товар на Шафі руками й вставити посилання (як «На Шафі є» для `UNSURE`).
+HAND_CODES = (*UNSURE, "many_items", "no_section", "possible_duplicate")
+
+
+def can_publish_by_hand(code: str | None) -> bool:
+    return bool(code) and (code in HAND_CODES or code.startswith("robot_"))
+
+
 def on_shafa(conn: sqlite3.Connection, root: Path, item_id: int, link: str) -> str:
-    """«На Шафі є → в Опубліковані». Повертає код повідомлення екрана."""
+    """«На Шафі є / Опублікувала вручну → в Опубліковані». Повертає код повідомлення екрана."""
     parsed = parse_shafa_link(link)
     if parsed is None:
         return "bad_link"
     shafa_id, url = parsed
+    row = conn.execute(
+        "SELECT problem_code FROM items WHERE id = ? AND status = ?", (item_id, Status.PROBLEM)
+    ).fetchone()
+    if row is None or not can_publish_by_hand(row[0]):
+        return "stale"
     done = _decide(
-        conn, item_id, UNSURE,
+        conn, item_id, (row[0],),
         "status = ?, shafa_id = ?, shafa_url = ?, published_at = ?, problem_code = NULL, "
         "problem_text = NULL",
         (Status.PUBLISHED, shafa_id, url, now()),
@@ -1265,12 +1279,29 @@ def other_item(conn: sqlite3.Connection, item_id: int) -> str:
     return "other_item" if done else "stale"
 
 
+# UX-004: «В архів» з Проблем — ці коди й усі `robot_…` (B20 `size_gone`, B21 `photos_missing`, B22)
+ARCHIVABLE = (
+    "possible_duplicate", "already_published", listings_mod.DECLINED_CODE, *review.NO_RESTORE,
+    "size_gone", "photos_missing",
+)  # fmt: skip
+
+
+def can_archive(code: str | None) -> bool:
+    if code == "robot_logged_out":  # виходить входом на Шафу, не архівом
+        return False
+    return bool(code) and (code in ARCHIVABLE or code.startswith("robot_"))
+
+
 def to_archive(conn: sqlite3.Connection, item_id: int) -> str:
     """«Справді дубль → в Архів» (і для «пост уже опубліковано», і для відхилених Шафою, ROBOT-011,
-    і для «кілька товарів» / «нема розділу», CORE-017): прибирається через 7 днів."""
+    і для «кілька товарів» / «нема розділу», CORE-017, і для UX-004: розмір прибрано, фото зникли,
+    проблеми робота): прибирається через 7 днів."""
+    row = conn.execute(
+        "SELECT problem_code FROM items WHERE id = ? AND status = ?", (item_id, Status.PROBLEM)
+    ).fetchone()
+    if row is None or not can_archive(row[0]):
+        return "stale"
     done = _decide(
-        conn, item_id, ("possible_duplicate", "already_published", listings_mod.DECLINED_CODE,
-                        *review.NO_RESTORE),
-        "status = ?, archived_at = ?", (Status.ARCHIVED, now()),
+        conn, item_id, (row[0],), "status = ?, archived_at = ?", (Status.ARCHIVED, now()),
     )  # fmt: skip
     return "duplicate_archived" if done else "stale"

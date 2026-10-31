@@ -318,7 +318,8 @@ def test_screen_published_card_shows_ai_note(env, app):
     item = card_of(env)
     run(env, Client(reply("no", "інша підошва")))
     assert f"Схоже: {URL} — ШІ: інша пара (інша підошва)" in html(get(app, f"/item/{item}"))
-    assert f"Схоже: {URL} — ШІ: інша пара (інша підошва)" in html(get(app, "/published"))
+    shown = html(get(app, "/published"))  # UX-004: у списку — просто, слова ШІ — на Картці
+    assert "Перевірено: на Шафі є схоже оголошення — це інша пара" in shown
 
 
 def test_screen_archived_card_shows_ai_reason_and_can_be_restored(env, app):

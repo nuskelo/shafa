@@ -72,7 +72,10 @@ def _join(names: list[str]) -> str:
     return ", ".join(names[:-1]) + " і " + names[-1]
 
 
-NO_SECTION_TEXT = "Немає підходящого розділу на Шафі (окуляри, парасольки, шкарпетки тощо)"
+NO_SECTION_TEXT = (
+    "Робот публікує лише взуття й аксесуари. Цю річ опублікуйте на Шафі вручну або «В архів»."
+)
+OLD_NO_SECTION_TEXT = "Немає підходящого розділу на Шафі (окуляри, парасольки, шкарпетки тощо)"
 
 
 def text_problem(text: str) -> tuple[str, str] | None:
