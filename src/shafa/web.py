@@ -18,7 +18,7 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -35,6 +35,7 @@ from shafa import (
     config,
     db,
     dup,
+    events,
     fill,
     health,
     options,
@@ -53,6 +54,7 @@ from shafa.scan import STICKY, scan
 
 HEALTH_EVERY = 30  # секунд: «Перевірити ще раз» не частіше
 COLLECT_EVERY = 180  # секунд між перевірками готових пакетів, поки є незібрані
+FINISHED_SHOWN = timedelta(days=2)  # так довго панель пам'ятає «Готово о …» (UX-001)
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
@@ -137,11 +139,11 @@ MESSAGES = {
     "health_started": "Перевіряю — результат з'явиться на панелі за кілька секунд",
     "health_running": "Перевірка вже йде",
     "health_wait": "Щойно перевіряли — зачекайте пів хвилини",
-    "ai_started": "Оновлюю: шукаю нові папки й відправляю на ШІ — результат з'явиться на панелі",
+    "ai_started": "Шукаю нові пости й відправляю на ШІ — результат з'явиться на панелі",
     "ai_busy": "ШІ вже працює — зачекайте хвилину",
-    "refill_started": "Перезаповнюю: картки пішли на ШІ пакетом — результати зазвичай до години, "
+    "refill_started": "Картки пішли на ШІ пакетом — результати зазвичай до години, "
     "ваші правки збережуться",
-    "recheck_done": "Перераховано за новими правилами, без ШІ — ваші правки збережено",
+    "recheck_done": "Картки оновлено за новими правилами, без ШІ — ваші правки збережено",
     "ai_retry_done": "ШІ заповнило бланк заново — ваші правки збережено",
     "ai_retry_failed": "ШІ не вдалося — старий бланк лишився (подробиці на панелі)",
     "ai_budget": "Ліміт витрат на ШІ за добу вичерпано — спробуйте завтра",
@@ -293,14 +295,33 @@ def redirect(location: str) -> Response:
 class AiState:
     """Панель ШІ: черга й що зараз робиться."""
 
-    ready: int = 0  # готові до відправки
+    ready: int = 0  # пройшли очікування, але ще НЕ відправлені на ШІ
     young: int = 0  # пост молодший за 7 днів
-    pending: int = 0  # чекають відповіді ШІ
+    pending: int = 0  # ШІ зараз заповнює
     wait_days: int = batch.WAIT_DAYS
     busy: str | None = None
     note: str | None = None
     refillable: int = 0  # Карток, які можна перезаповнити (CORE-008)
     recheckable: int = 0  # Карток за старшими правилами коду — перерахувати без ШІ (CORE-009)
+    # UX-001: усе, що про пакет, — з бази, тож переживає перезапуск програми
+    counters: list[tuple[str, str | None]] = field(default_factory=list)  # (текст, посилання)
+    filling: str | None = None  # «ШІ заповнює 30 Карток (відправлено о 11:45)…»
+    checking: str | None = None  # «Перевіряю, чи готово, кожні 3 хв…»
+    finished: str | None = None  # «Готово о 12:21: 28 Карток у «На перевірку»…»
+    held: str | None = None  # «705 чекають своєї черги: …»
+    new_posts: int = 0  # пости бота, з яких ще немає Карток (потрібна кнопка)
+    cost: str | None = None  # «≈ 1,36 $» — лише під «Детальніше»
+    error: bool = False  # немає ключа, бюджет, збій — єдине, що фарбує кружок жовтим
+    wait_text: str = ""  # «7 днів»
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """Чим закінчилась робота ШІ у фоні: що написати на панелі."""
+
+    text: str | None = None
+    error: bool = False
+    keep: bool = False  # нічого нового — стару примітку не чіпаємо
 
 
 @dataclass
@@ -371,7 +392,10 @@ class App:
         self.ai_lock = threading.Lock()
         self.ai_busy: str | None = None
         self.ai_note: str | None = None
+        self.ai_note_error = False
+        self.ai_note_at: datetime | None = None
         self.collected_at: float | None = None
+        self.collected_wall: datetime | None = None
         self.bot_spawner = bot_spawner
         self.bot_lock = bot_lock
         self.on_quit = on_quit  # «Вийти» — лише коли програму запущено з ярлика
@@ -494,7 +518,7 @@ class App:
             "robot": robot, "ai": ai_, "bot": bot, "site": site_, "health": health_,
             "tones": {
                 "robot": ROBOT_TONES.get(robot.code, "warn"),
-                "ai": "ok" if ai_.busy else ("warn" if ai_.note else "ok"),
+                "ai": "warn" if ai_.error and not ai_.busy else "ok",
                 "bot": BOT_TONES.get(bot.code, "warn"),
                 "site": "warn" if site_ and site_[3] else "ok",
                 "health": HEALTH_TONES.get(health_.code, "idle")
@@ -701,44 +725,96 @@ class App:
 
     # --- ШІ ---
 
+    def _hm(self, stamp: str | datetime) -> str:
+        """Година:хвилина місцевого часу (з ISO UTC з бази чи з `today()`)."""
+        moment = datetime.fromisoformat(stamp) if isinstance(stamp, str) else stamp
+        return moment.astimezone(self.today().tzinfo).strftime("%H:%M")
+
+    def _note(self, text: str | None, error: bool = False) -> None:
+        self.ai_note, self.ai_note_error = text or None, error and bool(text)
+        self.ai_note_at = self.today() if text else None
+
     def ai_state(self, conn) -> AiState:
         """Стан для панелі; заодно — збір готових пакетів раз на кілька хвилин (у фоні)."""
         self._maybe_collect(conn)
+        note = f"{self._hm(self.ai_note_at)} · {self.ai_note}" if self.ai_note_at else None
         try:
-            wait_days = batch.limits().wait_days
+            lim = batch.limits()
         except batch.SetupError as error:
-            return AiState(busy=self.ai_busy, note=str(error))
-        q = batch.queue(conn, self.today(), wait_days)
-        return AiState(
-            len(q.ready), q.young, q.pending, wait_days, self.ai_busy, self.ai_note,
-            len(fill.refill_candidates(conn)), len(fill.recheck_candidates(conn)),
+            return AiState(busy=self.ai_busy, note=str(error), error=True)
+        today = self.today()
+        q = batch.queue(conn, today, lim.wait_days)
+        active, done = batch.active(conn), batch.last_finished(conn)
+        to_check = review.counts(conn)[Status.REVIEW]
+        held = batch.held_back(conn, q.ready, lim)
+        state = AiState(
+            len(q.ready), q.young, active.cards if active else 0, lim.wait_days, self.ai_busy,
+            note, len(fill.refill_candidates(conn)), len(fill.recheck_candidates(conn)),
+            held=batch.held_text(held) if held else None,
+            new_posts=conn.execute(
+                "SELECT count(*) FROM posts p WHERE p.source = 'bot' "
+                "AND NOT EXISTS (SELECT 1 FROM items i WHERE i.post_id = p.post_id)"
+            ).fetchone()[0],
+            error=self.ai_note_error,
+            wait_text=batch.days_word(lim.wait_days),
         )  # fmt: skip
+        state.counters = [
+            (text, href)
+            for text, href in (
+                (f"Чекають на ШІ: {state.ready}" if state.ready else None, None),
+                (f"ШІ зараз заповнює: {state.pending}" if state.pending else None, None),
+                (f"Готові до перевірки: {to_check}" if to_check else None, f"/{Status.REVIEW}"),
+            )
+            if text
+        ]
+        if active:
+            since = datetime.fromisoformat(active.since)
+            state.filling = (
+                f"ШІ заповнює {events.cards(active.cards)} (відправлено о {self._hm(since)}). "
+                f"Зазвичай готово до {self._hm(since + timedelta(hours=1))} — "
+                "вони самі з'являться в «На перевірку», натискати нічого не треба."
+            )
+            every = f"Перевіряю, чи готово, кожні {COLLECT_EVERY // 60} хв"
+            state.checking = (
+                f"{every} · востаннє о {self._hm(self.collected_wall)} — ще не готово."
+                if self.collected_wall
+                else f"{every}."
+            )
+            state.cost = f"{batch.approx_usd(active.estimate)} (зазвичай менше)"
+        elif done and datetime.fromisoformat(done.at) > today - FINISHED_SHOWN:
+            parts = [f"{events.cards(done.ok)} у «На перевірку»"] if done.ok else []
+            if done.problems:
+                parts.append(f"{done.problems} — у «Проблеми»")
+            if done.returned:
+                parts.append(f"{events.cards(done.returned)} ШІ не встиг обробити — знову в черзі")
+            state.finished = f"Готово о {self._hm(done.at)}: " + ", ".join(parts) + "."
+        return state
 
     def _maybe_collect(self, conn) -> None:
         if not batch.open_batches(conn):
             return
         if self.collected_at is not None and self.clock() - self.collected_at < COLLECT_EVERY:
             return
-        self._start(self._collect, "забираю результати ШІ…")
+        self._start(self._collect, "перевіряю, чи готові результати… (кілька секунд)")
 
-    def _start(self, job: Callable[[], str | None], busy: str) -> bool:
-        """Запустити роботу ШІ у фоні; зайнято — False. Результат — рядок на панель."""
+    def _start(self, job: Callable[[], Outcome | None], busy: str) -> bool:
+        """Запустити роботу ШІ у фоні; зайнято — False. Результат — примітка на панелі."""
         if not self.ai_lock.acquire(blocking=False):
             return False
         self.ai_busy = busy
 
         def work() -> None:
             try:
-                note = job()
-                if note:
-                    self.ai_note = note
+                outcome = job() or Outcome()
+                if not outcome.keep:
+                    self._note(outcome.text, outcome.error)
             except config.ConfigError:
-                self.ai_note = MESSAGES["ai_no_key"]
+                self._note(MESSAGES["ai_no_key"], True)
             except batch.SetupError as error:
-                self.ai_note = str(error)
+                self._note(str(error), True)
             except Exception:  # noqa: BLE001 — фонова робота не валить сервер
                 traceback.print_exc()
-                self.ai_note = "ШІ: щось пішло не так — скажіть Власнику"
+                self._note("ШІ: щось пішло не так — скажіть Власнику", True)
             finally:
                 self.ai_busy = None
                 self.ai_lock.release()
@@ -746,27 +822,45 @@ class App:
         self.run(work)
         return True
 
-    def _collect(self) -> str | None:
-        self.collected_at = self.clock()
+    def _checked(self) -> None:
+        self.collected_at, self.collected_wall = self.clock(), self.today()
+
+    def _collect(self) -> Outcome:
+        self._checked()
         conn = self.connect()
         try:
-            return batch.collected_text(batch.collect(conn, self.ai_client(), self.today()))
+            report = batch.collect(conn, self.ai_client(), self.today())
         finally:
             conn.close()
+        text = batch.collect_problem_text(report)
+        if text:
+            return Outcome(text, error=bool(report.note))
+        done = report.filled or report.errors or report.returned or report.lost
+        return Outcome() if done else Outcome(keep=True)  # підсумок успіху панель бере з бази
 
-    def _update(self) -> str | None:
-        """«Оновити»: нові папки (тексти постів — з бази) → забрати готове → новий пакет."""
-        self.collected_at = self.clock()
+    def _collect_and_send(self, scan_new: bool) -> Outcome:
+        """Забрати готове й відправити новий пакет (перед цим — за потреби нові папки)."""
+        self._checked()
         lim = batch.limits()
         conn = self.connect()
         try:
-            scan(conn, {}, list_folders(self.root, self.channel_id))
+            if scan_new:
+                scan(conn, {}, list_folders(self.root, self.channel_id))
             client = self.ai_client()
-            collected = batch.collected_text(batch.collect(conn, client, self.today()))
+            report = batch.collect(conn, client, self.today())
             sent = batch.send(conn, client, self.root, self.today(), lim)
-            return "; ".join(t for t in (collected, batch.sent_text(sent, lim)) if t)
         finally:
             conn.close()
+        texts = (batch.collect_problem_text(report), batch.sent_text(sent, lim, panel=True))
+        return Outcome(
+            "; ".join(t for t in texts if t),
+            error=bool(sent.error or sent.plan.over_budget or report.note),
+        )
+
+    def _update(self) -> Outcome:
+        """«Знайти нові пости і відправити на ШІ»: нові папки (тексти постів — з бази) → забрати
+        готове → новий пакет."""
+        return self._collect_and_send(scan_new=True)
 
     def ai_post(self, request: Request) -> Response:
         action = (request.form.get("action") or [""])[0]
@@ -776,7 +870,7 @@ class App:
             return redirect(f"{back}{sep}msg={self.recheck()}")
         if action != "update":
             return text(400, "Невідома дія")
-        started = self._start(self._update, "оновлюю й відправляю на ШІ…")
+        started = self._start(self._update, "шукаю нові пости й відправляю…")
         return redirect(f"{back}{sep}msg={'ai_started' if started else 'ai_busy'}")
 
     def recheck(self) -> str:
@@ -793,18 +887,9 @@ class App:
             self.ai_lock.release()
         return "recheck_done"
 
-    def _send_refill(self) -> str | None:
+    def _send_refill(self) -> Outcome:
         """Відправити позначені для перезаповнення (нові папки не шукаємо) — пакетом."""
-        self.collected_at = self.clock()
-        lim = batch.limits()
-        conn = self.connect()
-        try:
-            client = self.ai_client()
-            collected = batch.collected_text(batch.collect(conn, client, self.today()))
-            sent = batch.send(conn, client, self.root, self.today(), lim)
-            return "; ".join(t for t in (collected, batch.sent_text(sent, lim)) if t)
-        finally:
-            conn.close()
+        return self._collect_and_send(scan_new=False)
 
     def refill_page(self, request: Request) -> Response:
         """«Перезаповнити»: спершу — скільки карток і скільки це коштує."""
@@ -839,7 +924,7 @@ class App:
                 return redirect(f"/{Status.REVIEW}?msg=stale")
         finally:
             conn.close()
-        started = self._start(self._send_refill, "перезаповнюю: відправляю на ШІ…")
+        started = self._start(self._send_refill, "відправляю на ШІ…")
         return redirect(f"/{Status.REVIEW}?msg={'refill_started' if started else 'ai_busy'}")
 
     def ai_retry(self, conn, item_id: int) -> str:
@@ -857,7 +942,7 @@ class App:
                 left = batch.budget_left(conn, self.today(), batch.limits())
                 client = self.ai_client()
             except batch.SetupError as error:
-                self.ai_note = str(error)
+                self._note(str(error), True)
                 return "ai_settings"
             except config.ConfigError:
                 return "ai_no_key"
@@ -865,7 +950,7 @@ class App:
                 return "ai_budget"
             result = fill.retry(conn, client, planned)
             if result.error:
-                self.ai_note = f"«ШІ, спробуй ще раз» ({planned.folder_name}): {result.error}"
+                self._note(f"«ШІ, спробуй ще раз» ({planned.folder_name}): {result.error}", True)
                 return "ai_retry_failed"
             return "ai_retry_done"
         finally:
@@ -1217,7 +1302,7 @@ class App:
             if action == "refill":
                 if not fill.mark_refill(conn, [item_id]):
                     return redirect(back(msg="stale"))
-                started = self._start(self._send_refill, "перезаповнюю: відправляю на ШІ…")
+                started = self._start(self._send_refill, "відправляю на ШІ…")
                 return redirect(
                     f"/{Status.REVIEW}?msg={'refill_started' if started else 'ai_busy'}"
                 )

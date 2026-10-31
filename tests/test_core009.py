@@ -340,11 +340,11 @@ def test_panel_recheck_button_works_without_ai(conn, root, tmp_path):
         tmp_path / "база.sqlite", root, tmp_path / "thumbs", PORT, token=TOKEN, ai_client=no_ai,
         run=lambda job: job(), today=lambda: TODAY,
     )  # fmt: skip
-    assert "Перерахувати правилами (1)" in html(get(app, "/review"))
+    assert "Оновити Картки за новими правилами (1, безкоштовно)" in html(get(app, "/review"))
 
     assert "msg=recheck_done" in location(post_ai(app, "recheck"))
     assert blank(conn, item_id)["sizes"][0] == ["37"]
-    assert "Перерахувати правилами" not in html(get(app, "/review"))
+    assert "Оновити Картки за новими правилами" not in html(get(app, "/review"))
 
 
 def test_program_start_rechecks_by_itself(tmp_path, monkeypatch):

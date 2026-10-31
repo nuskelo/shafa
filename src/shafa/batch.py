@@ -164,6 +164,17 @@ def old_in_flight(conn: sqlite3.Connection) -> int:
     ).fetchone()[0]
 
 
+def old_room(conn: sqlite3.Connection, lim: Limits) -> int:
+    """Скільки старих Карток ШІ ще може заповнити наперед (CORE-006): `AHEAD_DAYS` днів роботи."""
+    return AHEAD_DAYS * lim.old_per_day - old_ahead(conn) - old_in_flight(conn)
+
+
+def held_back(conn: sqlite3.Connection, ready: list[sqlite3.Row], lim: Limits) -> int:
+    """Старі готові Картки, які `prepare` не візьме, поки не звільниться місце «наперед»."""
+    old = sum(1 for r in ready if is_old(r["folder_name"]) and not r["refill_at"])
+    return max(0, old - max(old_room(conn, lim), 0))
+
+
 def refill_estimate(
     conn: sqlite3.Connection, root: Path, item_ids: list[int] | None = None
 ) -> tuple[int, int, int]:
@@ -226,6 +237,7 @@ class Plan:
     planned: list[fill.Planned] = field(default_factory=list)
     skipped: list[fill.Skipped] = field(default_factory=list)
     left: int = 0  # готових Карток лишилось у черзі (ліміт пакета чи грошей)
+    held: int = 0  # з них старих, що чекають місця «наперед» (`AHEAD_DAYS`), а не наступного пакета
     over_budget: bool = False  # зупинились через ліміт грошей
     young: int = 0
     pending: int = 0
@@ -248,14 +260,14 @@ def prepare(
     budget = budget_left(conn, today, lim)
     plan = Plan(young=q.young, pending=q.pending)
     # старі — лише наперед (CORE-006): бланки на ≤ AHEAD_DAYS днів публікації, щоб не платити за всі
-    old_room = AHEAD_DAYS * lim.old_per_day - old_ahead(conn) - old_in_flight(conn)
+    room = old_room(conn, lim)
     for row in q.ready:
         if len(plan.planned) >= cap:
             break
         if is_old(row["folder_name"]) and not row["refill_at"]:
-            if old_room <= 0:
+            if room <= 0:
                 continue
-            old_room -= 1
+            room -= 1
         result = fill.plan(conn, root, row, batch=True)
         if isinstance(result, fill.Skipped):
             plan.skipped.append(result)
@@ -266,6 +278,7 @@ def prepare(
         budget -= result.estimate.cost_micro_usd
         plan.planned.append(result)
     plan.left = len(q.ready) - len(plan.planned) - len(plan.skipped)
+    plan.held = held_back(conn, q.ready, lim)
     return plan
 
 
@@ -583,6 +596,62 @@ def open_batches(conn: sqlite3.Connection) -> int:
     ).fetchone()[0]
 
 
+# --- Що показати на панелі (стан береться з бази, а не з пам'яті програми) ---
+
+
+@dataclass(frozen=True)
+class Active:
+    """Пакети, що ще чекають збору."""
+
+    cards: int  # Карток, що ШІ зараз заповнює
+    since: str  # коли відправлено найдавніший (UTC, ISO)
+    estimate: int  # оцінка вартості, мікродолари (реально — не більше)
+
+
+def active(conn: sqlite3.Connection) -> Active | None:
+    row = conn.execute(
+        """
+        SELECT count(DISTINCT i.item_id), coalesce(sum(i.estimate_micro_usd), 0), min(b.created_at)
+        FROM ai_batches b LEFT JOIN ai_batch_items i ON i.batch_id = b.id AND i.state = 'pending'
+        WHERE b.status IN ('sending', 'uncertain', 'in_progress')
+        """
+    ).fetchone()
+    return Active(row[0], row[2], row[1]) if row[2] else None
+
+
+@dataclass(frozen=True)
+class Finished:
+    """Підсумок останнього забраного пакета."""
+
+    at: str  # UTC, ISO
+    ok: int  # Карток, що пішли в «На перевірку»
+    problems: int  # Карток, що пішли в «Проблеми»
+    returned: int  # не оброблено — знову в черзі
+
+
+def last_finished(conn: sqlite3.Connection) -> Finished | None:
+    batch = conn.execute(
+        "SELECT id, ended_at FROM ai_batches b WHERE status = 'ended' AND ended_at IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM ai_batch_items WHERE batch_id = b.id AND state != 'pending') "
+        "ORDER BY ended_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if batch is None:
+        return None
+    ok = problems = returned = 0
+    for state, status in conn.execute(
+        "SELECT b.state, i.status FROM ai_batch_items b JOIN items i ON i.id = b.item_id "
+        "WHERE b.batch_id = ?",
+        (batch["id"],),
+    ):
+        if state == "returned":
+            returned += 1
+        elif state == "error" or status == Status.PROBLEM:
+            problems += 1
+        else:
+            ok += 1
+    return Finished(batch["ended_at"], ok, problems, returned)
+
+
 # --- Тексти для людини ---
 
 
@@ -594,26 +663,52 @@ def dollars(micro_usd: int) -> str:
     return f"${micro_usd / 1_000_000:.2f}".replace(".", ",")
 
 
-def sent_text(sent: Sent, lim: Limits) -> str:
+def approx_usd(micro_usd: int) -> str:
+    """Для панелі: «≈ 1,36 $» (центи Вікторії нічого не кажуть)."""
+    return f"≈ {micro_usd / 1_000_000:.2f}".replace(".", ",") + " $"
+
+
+def days_word(count: int) -> str:
+    tail = count % 100
+    if tail // 10 != 1 and tail % 10 == 1:
+        return f"{count} день"
+    if tail // 10 != 1 and tail % 10 in (2, 3, 4):
+        return f"{count} дні"
+    return f"{count} днів"
+
+
+HELD_TEXT = "{n} чекають своєї черги: ШІ готує Картки лише на {days} роботи робота наперед"
+UNCERTAIN_TEXT = "ШІ не відповів вчасно — перевірю сам пізніше, нічого робити не треба"
+
+
+def held_text(held: int) -> str:
+    return HELD_TEXT.format(n=held, days=days_word(AHEAD_DAYS))
+
+
+def sent_text(sent: Sent, lim: Limits, *, panel: bool = False) -> str:
+    """Підсумок відправки. `panel` — для екрана: що пішло й коли, там уже видно з бази."""
     plan = sent.plan
     if sent.error:
         return f"Пакет не відправлено: {sent.error}. Спробуйте пізніше"
     if sent.uncertain:
-        return "Не дочекався відповіді Claude API — перевірю пакет пізніше, вдруге не відправляю"
+        return UNCERTAIN_TEXT
     parts = []
-    if sent.count:
+    if sent.count and not panel:
         parts.append(
             f"Відправлено на ШІ {sent.count} товарів, результати зазвичай до години "
             f"(≈ {cents(plan.estimate)} або менше)"
         )
-    elif not plan.over_budget:
+    elif not sent.count and not plan.over_budget:
         parts.append("Немає нових товарів для ШІ")
     if plan.skipped:
         parts.append(f"у «Проблеми» (фото не відкривається): {len(plan.skipped)}")
     if plan.over_budget:
         parts.append(f"ліміт витрат на ШІ за добу ({dollars(lim.daily_micro_usd)}) — решта завтра")
-    elif plan.left:
-        parts.append(f"ще {plan.left} — наступним пакетом")
+    else:
+        if plan.left - plan.held > 0:
+            parts.append(f"ще {plan.left - plan.held} — наступним пакетом")
+        if plan.held:
+            parts.append(held_text(plan.held))
     return "; ".join(parts)
 
 
@@ -628,3 +723,12 @@ def collected_text(report: Collected) -> str | None:
     if report.note:
         parts.append(f"результати не забрано: {report.note}")
     return "; ".join(parts) or None
+
+
+def collect_problem_text(report: Collected) -> str | None:
+    """Для панелі: лише те, що не склалося (підсумок успіху панель бере з бази)."""
+    if report.note:
+        return f"Не вдалося перевірити, чи готово ({report.note}) — спробую ще раз за кілька хвилин"
+    if report.returned:
+        return f"ШІ не встиг обробити {report.returned} Карток — вони знову в черзі"
+    return None

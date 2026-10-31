@@ -201,7 +201,7 @@ def test_panel_button_and_confirmation_page_show_estimate(conn, root, app):
     refill_card(conn, root, "1", 1)
     refill_card(conn, root, "2", 2)
 
-    assert "Перезаповнити (2)" in html(get(app, "/review"))
+    assert "Заповнити ШІ заново (2, платно)" in html(get(app, "/review"))
     page = html(get(app, "/refill"))
     assert "≈ 2 карток" in page and "$" in page
     assert status(conn, 1) == Status.REVIEW  # перегляд нічого не міняє
@@ -210,7 +210,7 @@ def test_panel_button_and_confirmation_page_show_estimate(conn, root, app):
 def test_panel_has_no_refill_button_without_candidates(conn, root, app):
     refill_card(conn, root, status=Status.APPROVED)
 
-    assert "Перезаповнити (" not in html(get(app, "/review"))
+    assert "Заповнити ШІ заново (" not in html(get(app, "/review"))
 
 
 def test_refill_post_marks_all_and_sends_batch(conn, root, app):
