@@ -132,7 +132,7 @@ def test_preview_has_queue_button_and_publish_still_works(conn, bot, tg, upd, cl
     draft_with_photos(bot, tg, upd, clock)
     markup = next(p["markup"] for m, p in tg.calls if m == "sendPhoto" and p["markup"])
     assert markup["inline_keyboard"][2] == [
-        {"text": "📦 Лише в чергу Шафи", "callback_data": "queue:1"}
+        {"text": "📦 Пост уже в каналі — лише на Шафу", "callback_data": "queue:1"}
     ]
     press(upd, bot, tg, "pub")
     assert state(conn) == "published"
