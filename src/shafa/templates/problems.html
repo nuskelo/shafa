@@ -17,7 +17,7 @@
         <span class="kind">{{ row.label }}</span>
         <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, card.post_date | dmy if card.post_date] | select | join(" · ") }}</span>
       </div>
-      <a class="name" href="{{ open_url }}">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</a>
+      <a class="name" href="{{ open_url }}">{{ card | card_name }}</a>
       {% if row.why %}<p class="reason-line">{{ row.why }}</p>{% endif %}
       {% if row.details %}<details class="more-info"><summary>Подробиці</summary><p>{{ row.details }}</p></details>{% endif %}
       <p class="todo">Що робити: {{ row.todo }}{% if row.my_items %} · <a href="{{ my_items }}" target="_blank" rel="noopener noreferrer">«Мої речі» на Шафі</a>{% endif %}</p>

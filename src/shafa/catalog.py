@@ -138,6 +138,17 @@ def moved(path: str, group: str | None = None, type_name: str | None = None) -> 
     return find_section(f"{group or parent}{SEP}{type_name or name}")
 
 
+def swap_group(path: str, old: str, new: str) -> str | None:
+    """Той самий розділ в іншій групі (`Жіночий одяг / Взуття / Кросівки` → `Чоловічий одяг / …`).
+
+    None — шлях не з групи `old` або такого розділу в знімку немає (розділів не вигадуємо)."""
+    key = _key(normalize_section(path))
+    prefix = normalize_section(old)
+    if not key.startswith(_key(prefix) + " /"):
+        return None
+    return find_section(normalize_section(new) + normalize_section(path)[len(prefix) :])
+
+
 def section_kind(path: str) -> Kind | None:
     """Група розділу за початком шляху або None, якщо шлях не з нашої частини дерева."""
     key = _key(normalize_section(path))

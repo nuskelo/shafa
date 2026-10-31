@@ -11,17 +11,20 @@
   <div>
     <h1>{{ tabs[current] }}</h1>
     {% if intro[current] %}<p class="intro">{{ intro[current] }}</p>{% endif %}
+    {% if start_hint and cards %}<p class="intro">{{ start_hint }}</p>{% endif %}
   </div>
   <div class="page-tools">
     {% if filters %}
-    <div class="filters" role="group" aria-label="Фільтр">
+    <div class="filters" role="group" aria-label="Що треба">
+      <span class="hint">Що треба:</span>
       {% for key, label, n, href in filters %}
       <a class="pill{% if chosen == key %} on{% endif %}" href="{{ href }}"{% if chosen == key %} aria-current="true"{% endif %}>{{ label }} · {{ n }}</a>
       {% endfor %}
     </div>
     {% endif %}
     {% if kinds %}
-    <div class="filters" role="group" aria-label="Нові чи старі">
+    <div class="filters" role="group" aria-label="Звідки">
+      <span class="hint">Звідки:</span>
       {% for key, label, n, href in kinds %}
       <a class="pill{% if kind == key %} on{% endif %}" href="{{ href }}"{% if kind == key %} aria-current="true"{% endif %}>{{ label }} · {{ n }}</a>
       {% endfor %}
@@ -38,7 +41,7 @@
 </div>
 
 {% if not cards %}
-<p class="empty">{% if query %}Нічого не знайдено.{% elif chosen or kind %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
+<p class="empty">{% if query %}Нічого не знайдено.{% elif empty_note %}{{ empty_note[0] }} <a href="{{ empty_note[1] }}">{{ empty_note[2] }}</a>{% elif chosen or kind %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
 {% endif %}
 
 {% block cards %}
@@ -56,11 +59,11 @@
         {% if mark %}<span class="mark mark-{{ mark.tone }}{% if mark.tone == "warn" and card.status == "review" and card.problem_code in ("post_changed", "photos_changed", "season_changed") %} changed{% endif %}" title="{{ card.problem_text if card.problem_code else mark.text }}">{{ mark.text }}</span>{% endif %}
       </span>
       <span class="body">
-        <span class="name">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</span>
+        <span class="name">{{ card | card_name }}</span>
         {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
         {% if card.fields["section"].value %}<span class="details">{{ card.fields["section"].value | replace(" / ", " · ") }}</span>{% endif %}
         <span class="meta">{{ [("Пост " ~ card.post_id) if card.post_id, ("розмір " ~ card.variant ~ " · " ~ card.place[0] ~ " з " ~ card.place[1]) if card.variant, card.post_date | dmy if card.post_date] | select | join(" · ") }}</span>
-        {% if card.status in ("review", "approved") and not is_old(card.folder_name) %}<span class="tag new-card">Нова · {{ card.photos | length }} фото</span>{% endif %}
+        {% if card.status in ("review", "approved") and not is_old(card.folder_name) %}<span class="tag new-card">З бота · {{ card.photos | length }} фото</span>{% endif %}
         {% if card.old_rules %}<span class="tag old-rules" title="Нова інструкція ШІ могла б заповнити інакше — варто перезаповнити">заповнено старими правилами</span>{% endif %}
       </span>
     </a>

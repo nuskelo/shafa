@@ -27,7 +27,7 @@
       {% endif %}
     </a>
     <span class="body">
-      <a class="name" href="/item/{{ card.id }}">{{ card.fields["title"].value or "Папка " ~ card.folder_name }}</a>
+      <a class="name" href="/item/{{ card.id }}">{{ card | card_name }}</a>
       {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
       {% if when %}<span class="details">опубліковано {{ local(when) }}</span>{% endif %}
       {% if card.problem_code == "duplicate_checked" %}<span class="details">{{ card.problem_text }}</span>{% endif %}

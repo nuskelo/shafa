@@ -8,6 +8,8 @@ try {
   const url = new URL(window.location.href);
   if (url.searchParams.has("msg")) {
     url.searchParams.delete("msg");
+    url.searchParams.delete("n");  // UX-003: числа до повідомлення («Лишилось N», «Схвалено …»)
+    url.searchParams.delete("ok");
     window.history.replaceState(null, "", url.pathname + url.search + url.hash);
   }
 } catch (error) { /* старий браузер — лишаємо як є */ }
