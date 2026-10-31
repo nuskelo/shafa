@@ -19,11 +19,27 @@
       </div>
       <a class="name" href="{{ open_url }}">{{ card | card_name }}</a>
       {% if row.why %}<p class="reason-line">{{ row.why }}</p>{% endif %}
-      {% if row.details %}<details class="more-info"><summary>Подробиці</summary><p>{{ row.details }}</p></details>{% endif %}
+      {% if row.details %}<details class="more-info"><summary>Подробиці для Власника</summary><p>{{ row.details }}</p></details>{% endif %}
       <p class="todo">Що робити: {{ row.todo }}{% if row.my_items %} · <a href="{{ my_items }}" target="_blank" rel="noopener noreferrer">«Мої речі» на Шафі</a>{% endif %}</p>
+      {% if row.manual %}
+      <details class="more-info"><summary>Опублікувала вручну</summary>
+        <form method="post" action="/item/{{ card.id }}" class="decide">
+          <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}"><input type="hidden" name="stay" value="list">
+          <label for="link-{{ card.id }}">Вставте посилання на товар на Шафі (або його номер):</label>
+          <input id="link-{{ card.id }}" name="shafa_link" required placeholder="https://shafa.ua/uk/…">
+          <button name="action" value="on_shafa">Опублікувала вручну</button>
+        </form>
+      </details>
+      {% endif %}
     </div>
     <div class="row-actions">
       <a class="button" href="{{ open_url }}">Відкрити Картку</a>
+      {% if row.to_review %}
+      <form method="post" action="/item/{{ card.id }}">
+        <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}">
+        <button name="action" value="to_review">Повернути на перевірку (виправити поля)</button>
+      </form>
+      {% endif %}
       {% if row.archive %}
       <form method="post" action="/item/{{ card.id }}">
         <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}"><input type="hidden" name="stay" value="list">

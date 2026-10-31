@@ -30,7 +30,7 @@
       <a class="name" href="/item/{{ card.id }}">{{ card | card_name }}</a>
       {% if card.fields["price"].value %}<span class="price">{{ card.fields["price"].value }} грн</span>{% endif %}
       {% if when %}<span class="details">опубліковано {{ local(when) }}</span>{% endif %}
-      {% if card.problem_code == "duplicate_checked" %}<span class="details">{{ card.problem_text }}</span>{% endif %}
+      {% if card.problem_code == "duplicate_checked" %}<span class="details">Перевірено: на Шафі є схоже оголошення — це інша пара{% if dups[card.id] %} · <a href="{{ dups[card.id] }}" target="_blank" rel="noopener noreferrer">подивитись</a>{% endif %}</span>{% endif %}
       <span class="meta">{{ ("Пост " ~ card.post_id) if card.post_id }}</span>
       {% if url %}<a class="button open" href="{{ url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a>{% endif %}
     </span>

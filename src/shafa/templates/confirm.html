@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Підтвердіть · Шафа-помічник{% endblock %}
+{% block main %}
+<section class="problem-box confirm">
+  <p class="problem">{{ question }}</p>
+  <p class="meta">{{ card | card_name }}{% if card.post_id %} · Пост {{ card.post_id }}{% endif %}</p>
+  <form method="post" action="/item/{{ card.id }}" class="decide">
+    <input type="hidden" name="token" value="{{ token }}">
+    {% if from_ %}<input type="hidden" name="from" value="{{ from_ }}">{% endif %}
+    {% if stay %}<input type="hidden" name="stay" value="list">{% endif %}
+    <input type="hidden" name="sure" value="1">
+    <button name="action" value="{{ action }}" class="{{ 'reject' if reject else 'approve' }}">{{ yes }}</button>
+    <a class="button" href="{{ back_url }}">{{ no }}</a>
+  </form>
+</section>
+{% endblock %}

@@ -613,11 +613,36 @@ def _on_shafa(conn: sqlite3.Connection, item_id: int) -> bool:
     return row is not None and row[0] is not None
 
 
-def act(conn: sqlite3.Connection, item_id: int, action: str, root: Path | None = None) -> str:
+CONFIRM_RESTORE = "confirm_restore"
+
+
+def sold(conn: sqlite3.Connection, item_id: int) -> bool:
+    """UX-004 (B10): Картка в Архіві, бо пост видалено з каналу — пару, мабуть, продано."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM items WHERE id = ? AND status = ? AND problem_code = ?",
+            (item_id, Status.ARCHIVED, POST_DELETED),
+        ).fetchone()
+        is not None
+    )
+
+
+def act(
+    conn: sqlite3.Connection,
+    item_id: int,
+    action: str,
+    root: Path | None = None,
+    *,
+    confirmed: bool = False,
+) -> str:
     """Змінити статус Картки. Повертає код повідомлення (див. `web.MESSAGES`).
 
-    `root` — Головна папка: з нею «Схвалити» ще й перевіряє, що робот Картку опублікує (QA-002)."""
+    `root` — Головна папка: з нею «Схвалити» ще й перевіряє, що робот Картку опублікує (QA-002).
+    `confirmed` — підтверджено повернення проданої пари (B10): без нього `restore` такої Картки
+    нічого не робить і каже `confirm_restore`."""
     source, target, done = ACTIONS[action]
+    if action == "restore" and not confirmed and sold(conn, item_id):
+        return CONFIRM_RESTORE
     if action in ("approve", "restore") and _on_shafa(conn, item_id):
         return ON_SHAFA  # ROBOT-011: що вже опубліковано, у чергу публікації не повертається
     if (
@@ -684,6 +709,21 @@ def photos_retry(conn: sqlite3.Connection, item_id: int) -> bool:
             """
             UPDATE items SET status = ?, problem_code = NULL, problem_text = NULL, updated_at = ?
             WHERE id = ? AND status = ? AND problem_code = 'photos_missing'
+            """,
+            (Status.REVIEW, now(), item_id, Status.PROBLEM),
+        )
+    return cursor.rowcount == 1
+
+
+def to_review(conn: sqlite3.Connection, item_id: int) -> bool:
+    """UX-004 (B22, B25): проблема робота (`robot_…`) чи «Шафа не прийняла» (`publish_error`) →
+    «На перевірку»: поля можна виправити й схвалити знову. Картки з `shafa_id` не чіпає."""
+    with conn:
+        cursor = conn.execute(
+            """
+            UPDATE items SET status = ?, problem_code = NULL, problem_text = NULL, updated_at = ?
+            WHERE id = ? AND status = ? AND shafa_id IS NULL AND purged_at IS NULL
+              AND (problem_code LIKE 'robot\\_%' ESCAPE '\\' OR problem_code = 'publish_error')
             """,
             (Status.REVIEW, now(), item_id, Status.PROBLEM),
         )

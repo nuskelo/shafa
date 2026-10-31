@@ -3,6 +3,16 @@
 
 {% macro hidden() %}<input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">{% endmacro %}
 
+{# UX-004 (B5): «Опублікувала вручну» — посилання на товар; той самий POST `on_shafa`, що й «На Шафі є». #}
+{% macro manual_form(suffix="hand") %}
+<form method="post" action="/item/{{ card.id }}" class="decide">
+  {{ hidden() }}
+  <label for="shafa_link_{{ suffix }}">Опублікували самі? Вставте посилання на товар на Шафі (або його номер):</label>
+  <input id="shafa_link_{{ suffix }}" name="shafa_link" required placeholder="https://shafa.ua/uk/…">
+  <button name="action" value="on_shafa" class="approve">Опублікувала вручну</button>
+</form>
+{% endmacro %}
+
 {% macro options(values, selected, blank=True) %}
   {% if blank %}<option value="">—</option>{% endif %}
   {% for value in values %}
@@ -126,9 +136,13 @@
   <h1>{{ card | card_name }}</h1>
   <p class="meta">
     {% if card.post_id %}Пост {{ card.post_id }}{% if card.post_date %} · {{ card.post_date | dmy }}{% endif %}{% endif %}{% if card.variant %}{% if card.post_id %} · {% endif %}<strong class="variant">розмір {{ card.variant }} · {{ card.place[0] }} з {{ card.place[1] }}</strong>{% endif %}
-    {% if card.status == "archived" and card.archived_at %} · в Архіві, видалиться {{ deletion_date(card.archived_at).strftime("%d.%m.%Y") }}{% endif %}
   </p>
 </div>
+{% if card.status == "archived" %}
+<p class="note">В Архіві: {{ archive_reason(card) }}.{% if card.archived_at %} Видалиться з програми {{ deletion_date(card.archived_at).strftime("%d.%m.%Y") }} (фото в папці лишаються).{% endif %}</p>
+{% if no_restore_reason %}<p class="note yellow">Повернути не можна: {{ no_restore_reason }}</p>{% endif %}
+{% endif %}
+{% if waiting %}<p class="note yellow">{{ waiting }}</p>{% endif %}
 
 {% if attention %}
 <div class="attention" role="note">
@@ -148,12 +162,14 @@
 <div class="robot-notes">
   <p>Робот пропустить:</p>
   <ul>{% for n in robot_notes %}<li>{{ n }}</li>{% endfor %}</ul>
+  <p class="meta">Схвалити можна — ці поля на Шафі будуть порожні.</p>
 </div>
 {% endif %}
 
 {% if card.status == "problem" and card.problem_code in sticky %}
 <div class="problem-box">
   <p class="problem">{{ sticky_titles[card.problem_code] }}</p>
+  {% if card.problem_code in ("publish_error", "photos_missing") and card.problem_text %}<p class="reason-line">{{ card.problem_text | plain }}</p>{% endif %}
   {% if hint %}<p>{{ hint }}</p>{% endif %}
   {% if card.problem_code in ("publish_uncertain", "publish_error") %}
   <p><a href="{{ my_items }}" target="_blank" rel="noopener noreferrer">Відкрити «Мої речі» на Шафі</a> і пошукати цей товар.</p>
@@ -166,9 +182,10 @@
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
     <button name="action" value="not_on_shafa">На Шафі немає → у Схвалені</button>
+    {% if problem_to_review %}<button name="action" value="to_review">Повернути на перевірку (виправити)</button>{% endif %}
   </form>
   {% elif card.problem_code == "shafa_declined" %}
-  <p>{{ card.problem_text or "" }}</p>
+  <p>{{ card.problem_text | plain }}</p>
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
     {% if shafa_url %}<a href="{{ shafa_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a>{% endif %}
@@ -188,6 +205,7 @@
     <button name="action" value="other_item" class="approve">Це інший товар → у Схвалені</button>
     <button name="action" value="to_archive" class="reject">Справді дубль → в Архів</button>
   </form>
+  {{ manual_form("dup") }}
   {% else %}
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
@@ -195,24 +213,29 @@
     {% if problem_recheck %}<button name="action" value="recheck">Перевірити ще раз</button>{% endif %}
   </form>
   {% endif %}
-  <details><summary>Подробиці для Власника</summary><p>{{ card.problem_text or "" }}</p></details>
+  {% if card.problem_code not in ("publish_error", "photos_missing") %}<details><summary>Подробиці для Власника</summary><p>{{ card.problem_text | names }}</p></details>{% endif %}
 </div>
 {% elif card.status == "problem" %}
 <div class="problem-box">
-  <p class="problem">{{ card.problem_text or "" }}</p>
+  <p class="problem">{{ card.problem_text | plain }}</p>
   {% if hint %}<p>{{ hint }}</p>{% endif %}
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
+    {% if problem_to_review %}<button name="action" value="to_review">Повернути на перевірку (виправити поля)</button>{% endif %}
+    {% if problem_recheck %}<button name="action" value="recheck">Перевірити ще раз</button>{% endif %}
     {% if problem_archive %}<button name="action" value="to_archive" class="reject">В архів</button>{% endif %}
-    <button name="action" value="recheck">Перевірити ще раз</button>
   </form>
+  {% if problem_manual %}{{ manual_form() }}{% endif %}
+  {% if (card.problem_text or "") != (card.problem_text | plain) %}<details><summary>Подробиці для Власника</summary><p>{{ card.problem_text | names }}</p></details>{% endif %}
 </div>
 {% endif %}
 {% if card.problem_code in ("duplicate", "duplicate_checked") and card.status in ("archived", "published") %}
 <div class="duplicate">
   {% if duplicate_photo %}<img src="/duplicate/{{ card.id }}.jpg" alt="Фото схожого оголошення">{% endif %}
   <div>
-    <p class="note">{{ card.problem_text or "" }}</p>
+    {% if card.problem_code == "duplicate_checked" %}<p class="note">Перевірено: на Шафі є схоже оголошення — це інша пара.</p>
+    <details><summary>Подробиці для Власника</summary><p>{{ card.problem_text or "" }}</p></details>
+    {% else %}<p class="note">{{ card.problem_text or "" }}</p>{% endif %}
     {% if duplicate_name %}<p>Схоже оголошення: <b>{{ duplicate_name }}</b></p>{% endif %}
     {% if duplicate_url %}<p><a href="{{ duplicate_url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже оголошення на Шафі</a></p>{% endif %}
   </div>
@@ -282,7 +305,7 @@
     </details>
     {% endif %}
     {% if card.old_rules and card.status in ("review", "problem") %}
-    <p class="badge old-rules">заповнено старими правилами — варто перезаповнити</p>
+    <p class="badge old-rules">можна заповнити краще — варто заповнити заново</p>
     {% endif %}
   </section>
   {% endif %}
@@ -330,7 +353,7 @@
     </form>
     <span class="spacer"></span>
     <div class="bar-main">
-      <button form="fields" name="action" value="reject" class="reject">Відхилити</button>
+      <button form="fields" name="action" value="reject" class="reject" title="Картка піде в Архів на 7 днів — її можна буде повернути">Не публікувати (в Архів)</button>
       <button form="fields" name="action" value="save" class="save">Зберегти</button>
       <button form="fields" name="action" value="approve" class="approve"{% if robot_error %} disabled title="Робот не зможе опублікувати"{% endif %}><span aria-hidden="true">✓</span> Схвалити і далі</button>
     </div>

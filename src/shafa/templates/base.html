@@ -17,6 +17,7 @@
       {% for status in ("review", "approved", "problem", "published") %}
       <a{% if status == current %} aria-current="page"{% endif %} href="/{{ status }}" class="tab{% if status == current %} current{% endif %}">{{ tabs[status] }} <span class="count{% if status == "problem" and counts[status] %} alert{% endif %}">{{ counts[status] }}</span></a>
       {% endfor %}
+      {% if counts["new"] %}<span class="hint waiting-ai" title="Картки, які ще не заповнив ШІ: їх нема у вкладках, поки він не закінчить">Чекають на ШІ: {{ counts["new"] }}</span>{% endif %}
       <details class="more{% if current in ("sessions", "archived", "settings") %} current{% endif %}">
         <summary class="tab">Ще</summary>
         <div class="menu">
@@ -43,6 +44,12 @@
 {% endblock %}
   {% if message %}
   <p class="message">{{ message }}</p>
+  {% endif %}
+  {% if undo %}
+  <form method="post" action="/item/{{ undo }}" class="undo">
+    <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="/review">
+    <button name="action" value="restore">Повернути</button>
+  </form>
   {% endif %}
   <main>
 {% block main %}{% endblock %}
