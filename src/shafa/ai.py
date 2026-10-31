@@ -265,21 +265,21 @@ def call(client: Any, request: dict[str, Any]) -> tuple[dict[str, Any], Usage]:
 def error_text(error: anthropic.AnthropicError) -> str:
     """Помилка API простими словами, без тексту відповіді (там може бути що завгодно)."""
     if isinstance(error, anthropic.AuthenticationError):
-        return "Ключ Claude API не прийнято (401)"
+        return "Ключ ШІ не приймається — скажіть Власнику"
     if isinstance(error, anthropic.RateLimitError):
-        return "Забагато запитів до Claude API (429), спробуйте пізніше"
+        return "Забагато запитів до ШІ — спробуйте пізніше"
     if isinstance(error, anthropic.APIStatusError):
-        return f"Помилка Claude API ({error.status_code})"
+        return f"ШІ не відповів (код {error.status_code})"
     if isinstance(error, anthropic.APIConnectionError):
-        return "Немає з'єднання з Claude API"
-    return "Помилка Claude API"
+        return "Немає зв'язку з ШІ — перевірте інтернет"
+    return "ШІ не відповів"
 
 
 def parse(message: Any, batch: bool = False) -> tuple[dict[str, Any], Usage]:
     """Відповідь (звичайна або з пакета) → словник JSON і токени, або AiError з токенами."""
     usage = usage_from(message.usage, batch)
     if message.stop_reason == "refusal":
-        raise AiError("ШІ відмовилось обробити цю Картку", usage)
+        raise AiError("ШІ відмовився обробити цю Картку", usage)
     if message.stop_reason == "max_tokens":
         raise AiError("Відповідь ШІ обрізана", usage)
     text = "".join(block.text for block in message.content if block.type == "text")
@@ -747,7 +747,7 @@ def check_photo_order(value: Any, names: list[str]) -> Field:
     if order is None or sorted(order) != sorted(names):
         return Field("photo_order", names, True, "порядок фото від ШІ не збігається з папкою")
     if order != names:
-        return Field("photo_order", order, True, "ШІ переставило фото")
+        return Field("photo_order", order, True, "ШІ переставив фото")
     return Field("photo_order", names)
 
 

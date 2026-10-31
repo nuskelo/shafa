@@ -103,7 +103,9 @@ def check_rights(tg: Telegram, channel: int) -> tuple[str, int]:
                 "прив'яжи групу; якщо щойно прив'язала — зачекай 5 хв і запусти ще раз"
             )
         if not _is_admin(tg.get_chat_member(group, me["id"])):
-            raise SetupError("Бот не адміністратор групи коментарів — зроби його адміном групи")
+            raise SetupError(
+                "Бот не адміністратор групи коментарів — зробіть його адміністратором групи"
+            )
         permissions = tg.get_chat(group).get("permissions") or {}
         if permissions.get("can_send_messages") is not False:
             raise SetupError(
@@ -112,9 +114,17 @@ def check_rights(tg: Telegram, channel: int) -> tuple[str, int]:
             )
     except TelegramError as error:
         if error.code in (400, 403):
-            raise SetupError("Бот не бачить каналу або групи: додай бота адміністратором") from None
+            raise SetupError(
+                "Бот не бачить каналу або групи: додайте бота адміністратором"
+            ) from None
         raise SetupError(f"Не вдалося перевірити бота: {error}") from None
     return me.get("username") or "бот", group
+
+
+OFFLINE_TEXT = "Немає зв'язку з Telegram — перевірте інтернет, бот спробує сам"
+
+
+BUSY_TEXT = "Telegram тимчасово не відповідає — бот спробує сам"
 
 
 def set_status(conn: sqlite3.Connection, started: bool = False, error: str | None = None) -> None:
@@ -145,12 +155,15 @@ def poll(
         except TelegramError as error:
             if error.code == 409:
                 raise SetupError(
-                    "Інший процес уже читає цього бота (або встановлено вебхук)"
+                    "Бот зупинився: його вже запущено на іншому комп'ютері — скажіть Власнику"
                 ) from None
             if error.code == 401:
-                raise SetupError("Telegram не прийняв токен бота") from None
+                raise SetupError(
+                    "Бот зупинився: Telegram не приймає ключ бота — скажіть Власнику"
+                ) from None
             log(f"Опитування: {error}")
-            set_status(conn, error=str(error))
+            # на екран — просто слова; метод і код лишаються в журналі (рядок вище)
+            set_status(conn, error=OFFLINE_TEXT if error.code is None else BUSY_TEXT)
             sleep(error.retry_after or PAUSE)
             continue
         for update in sorted(updates or [], key=lambda u: u.get("update_id", 0)):

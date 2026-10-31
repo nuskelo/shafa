@@ -24,6 +24,9 @@ class InstallError(Exception):
     """Не встановлено. Текст — для Власника."""
 
 
+DONE = "Готово. Відкрийте програму ярликом «Шафа-помічник». Це вікно можна закрити."
+
+
 def install(source: Path, data: Path | None = None) -> Path:
     """Скопіювати теку програми `source` у `<дані>/app`. Повертає встановлену теку."""
     data = data or config.data_dir()
@@ -31,9 +34,11 @@ def install(source: Path, data: Path | None = None) -> Path:
     target = data / APP
     old = data / OLD
     if source == target.resolve():
-        raise InstallError("Запускай «Встановити» з розпакованої нової версії, не з встановленої")
+        raise InstallError(
+            "Запускайте «Встановити» з розпакованої папки нової версії, а не з уже встановленої"
+        )
     if not (source / "python").is_dir() or not (source / "lib" / "shafa").is_dir():
-        raise InstallError(f"У {source} немає програми (python, lib\\shafa)")
+        raise InstallError("Запускайте «Встановити» з розпакованої папки нової версії")
     data.mkdir(parents=True, exist_ok=True)
     if old.exists():
         shutil.rmtree(old)
@@ -42,7 +47,8 @@ def install(source: Path, data: Path | None = None) -> Path:
             target.rename(old)
         except OSError as error:
             raise InstallError(
-                "Програма ще працює — натисни «Вийти» на екрані (або закрий робота) і запусти ще раз"
+                "Програма ще працює — натисніть «Вийти» на екрані (або закрийте робота) "
+                "і запустіть ще раз"
             ) from error
     try:
         shutil.copytree(source, target)
@@ -81,9 +87,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Дані (налаштування, база, профіль робота) — у {data}, їх не чіпали")
     if first and not args.no_setup:
         print("Перше встановлення — запускаю майстер налаштування…")
-        return subprocess.run(
+        code = subprocess.run(
             [str(target / "python" / "python.exe"), "-m", "shafa", "setup"], check=False
         ).returncode
+        if code == 0:
+            print(DONE)
+        return code
+    print(DONE)
     return 0
 
 
