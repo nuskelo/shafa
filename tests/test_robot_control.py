@@ -42,7 +42,8 @@ def session(conn, **values):
 
 def test_stopped_without_approved_cannot_start(conn, lock_file):
     s = state(conn, lock_file)
-    assert (s.code, s.can_start, s.why_not) == ("stopped", False, "Немає Схвалених Карток")
+    assert (s.code, s.can_start) == ("stopped", False)
+    assert s.why_not == "Немає Схвалених — схваліть Картки у «На перевірку», потім «Старт»."
     assert s.buttons == ["start"]  # кнопка є, але неактивна — з поясненням
 
 
@@ -59,7 +60,7 @@ def test_daily_limit_exhausted_cannot_start(conn, root, lock_file):
         conn.execute("INSERT INTO items (folder_name, status, created_at, updated_at) "
                      "VALUES ('2', 'approved', 'x', 'x')")  # fmt: skip
     s = state(conn, lock_file, day_limit=1)
-    assert not s.can_start and "ліміт доби вичерпано" in s.why_not
+    assert not s.can_start and "На сьогодні все: 1 з 1" in s.why_not
     assert (s.published_today, s.day_limit) == (1, 1)
 
 
@@ -78,7 +79,7 @@ def test_running_states(conn, lock_file, command, in_work, code, buttons):
         s = state(conn, lock_file)
     assert (s.code, s.buttons, s.can_start) == (code, buttons, False)
     if in_work:  # «чекаю, поки допишеться поточний товар (~N хв)»
-        assert s.wait_minutes == 3 and "(~3 хв)" in s.text
+        assert s.wait_minutes == 3 and "дописую поточний товар, ще ≈ 3 хв" in s.text
 
 
 def test_crashed_when_session_open_but_lock_free(conn, root, lock_file):
@@ -93,7 +94,7 @@ def test_login_needed_after_logout_stop(conn, root, lock_file):
     session(conn, ended_at="2026-10-13T11:30:00+00:00", stop_code="login", stop_reason="x")
     s = state(conn, lock_file)
     assert s.code == "login_needed" and "login" in s.buttons
-    assert s.last == "Робот вийшов із Шафи"
+    assert s.last.endswith("робот вийшов із Шафи") and s.last.startswith("Сесія 1 о 11:00")
 
 
 def test_no_form_is_not_login(conn, root, lock_file):
@@ -119,9 +120,10 @@ def test_starting_and_failed(conn, root, lock_file):
     assert state(conn, lock_file, failed=True).code == "failed"
 
 
-def test_minutes_left_never_below_one():
+def test_minutes_left_never_negative_and_overdue_is_zero():
+    """Довше за звичайне — 0 («ще трохи»), а не застиглі «~1 хв» (A13)."""
     old = (NOW - timedelta(minutes=30)).isoformat()
-    assert control._minutes_left(old, NOW) == 1
+    assert control._minutes_left(old, NOW) == 0
 
 
 def test_spawn_runs_robot_as_separate_process(conn, tmp_path):
@@ -178,11 +180,11 @@ def test_done_with_problems_says_how_many(conn, root, lock_file):
     approved(conn, root)
     session(conn, ended_at="2026-10-13T11:30:00+00:00", stop_code="done", stop_reason="x",
             published=0, problems=3)  # fmt: skip
-    assert state(conn, lock_file).last == "Опубліковано 0, у Проблемах 3"
+    assert state(conn, lock_file).last.endswith("опубліковано 0, у Проблемах 3")
 
 
 def test_done_without_problems(conn, root, lock_file):
     approved(conn, root)
     session(conn, ended_at="2026-10-13T11:30:00+00:00", stop_code="done", stop_reason="x",
             published=2, problems=0)  # fmt: skip
-    assert state(conn, lock_file).last == "Усі Схвалені опубліковано"
+    assert state(conn, lock_file).last.endswith("(30 хв): опубліковано 2")

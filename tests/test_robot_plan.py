@@ -133,7 +133,7 @@ def test_missing_photo_stops_plan(conn, root):
 def test_card_not_ready_stops_plan(conn, root):
     blank = [f for f in BLANK if f.name != "colors"]
     item_id = add_card(conn, root, blank=blank, text=TEXT, status=Status.APPROVED)
-    with pytest.raises(PlanError, match="no_colors"):
+    with pytest.raises(PlanError, match="немає кольору"):
         plan(review.load_card(conn, item_id), root)
 
 

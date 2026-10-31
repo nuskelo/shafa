@@ -319,8 +319,8 @@ def test_sessions_one_card_per_session_with_tones(conn, root, app):
     for sid in (done, limit, login, running):
         assert f'href="/session/{sid}"' in page
         assert f"Сесія {sid}" in page
-    assert re.search(r'tone-ok">Усі Схвалені опубліковано', page)
-    assert re.search(r'tone-ok">Ліміт на сьогодні вичерпано', page)
+    assert re.search(r'tone-ok">Черга закінчилась', page)
+    assert re.search(r'tone-ok">Денний ліміт вичерпано', page)
     assert re.search(r'tone-warn">Робот вийшов із Шафи', page)
     assert re.search(r'tone-run">працює', page)
     assert "Опубліковано <b>0</b>" in page and "У Проблемах <b>0</b>" in page

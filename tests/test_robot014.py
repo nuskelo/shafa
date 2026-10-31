@@ -339,7 +339,7 @@ def test_publish_stops_session_when_modal_stays_card_goes_back_untouched(env, mo
     report = env.run()
 
     assert report.code == "shafa_balance"
-    assert "−193.15 грн" in report.reason and "Робот гроші не списує" in report.reason
+    assert "−193.15 грн" in report.reason and "Робот нічого не платить" in report.reason
     assert state(env.conn, item) == (Status.APPROVED, None)  # Картка не винна, не в «Проблемах»
     assert env.driver.submits == []
     session = env.conn.execute("SELECT stop_code, stop_reason FROM sessions").fetchone()

@@ -439,7 +439,7 @@ def approved(conn, root, folder="1342", post_id=1342):
 
 def test_button_starts_rehearsal_in_background(conn, root, app, spawner):
     approved(conn, root)
-    assert "Перевірити завтрашні" in html(get(app, "/review"))
+    assert "Пробно заповнити завтрашні" in html(get(app, "/review"))
 
     assert location(post(app, "/robot", action="rehearse", back="/review")).endswith(
         "msg=rehearse_started"
@@ -448,7 +448,7 @@ def test_button_starts_rehearsal_in_background(conn, root, app, spawner):
     (args,) = spawner.calls
     assert args[0] == "--rehearse" and args[-2:] == ["--count", "5"]
     assert "--publish" not in args and "--fake-shafa" not in args
-    assert "Пробний прогін запускається" in html(get(app, "/review?msg=rehearse_started"))
+    assert "Пробна перевірка запускається" in html(get(app, "/review?msg=rehearse_started"))
 
 
 def test_button_refused_while_publishing_nothing_changes(conn, root, app, spawner, lock_file):
@@ -460,8 +460,8 @@ def test_button_refused_while_publishing_nothing_changes(conn, root, app, spawne
             "msg=rehearse_busy"
         )
         page = html(get(app, "/review"))
-        assert "Перевірити завтрашні" not in page and "Робот публікує" in page
-    assert "прогін після неї" in html(get(app, "/review?msg=rehearse_busy"))
+        assert "Пробно заповнити завтрашні" not in page and "Робот публікує" in page
+    assert "перевірка після неї" in html(get(app, "/review?msg=rehearse_busy"))
 
     assert spawner.calls == []
     assert (
@@ -478,10 +478,10 @@ def test_panel_while_rehearsing_and_without_approved(conn, root, app, spawner, l
     approved(conn, root)
     with lock.hold("rehearse", lock_file):
         page = html(get(app, "/review"))
-        assert "Йде пробний прогін" in page
-        assert 'value="start"' not in page and "Перевірити завтрашні" not in page
+        assert "Йде пробна перевірка" in page
+        assert 'value="start"' not in page and "Пробно заповнити завтрашні" not in page
         assert location(post(app, "/robot", action="start", back="/review")).endswith(
-            "msg=robot_cannot_start"
+            "msg=robot_cannot_start_busy"
         )
     assert spawner.calls == []
 
@@ -514,12 +514,12 @@ def test_summary_and_problems_link_after_run(conn, root, app, env):
          rehearse.Outcome(2, 2, "error", "robot_field_missing", "x", moved=True)],
         "перевірено все", "done",
     )  # fmt: skip
-    assert "Пробний прогін: перевірено" not in html(get(app, "/review"))
+    assert "Пробна перевірка" not in html(get(app, "/review"))
 
     rehearse.save(report, datetime.now().astimezone())
 
     page = html(get(app, "/review"))
-    assert "перевірено 2, добре 1, у Проблемах 1 (robot_field_missing)" in page
+    assert "(без публікації): 2 Картки — добре 1, у Проблемах 1 (robot_field_missing)" in page
     assert 'href="/problem"' in page
 
 

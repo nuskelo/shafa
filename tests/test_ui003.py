@@ -497,7 +497,7 @@ def health_every():
 def test_recheck_button_needs_token(conn, tmp_path, root):
     app, _ = panel_app(conn, tmp_path, root, GOOD)
     assert post(app, "/health", token=None, back="/review").status == 403
-    assert "Перевірити ще раз" in html(get(app, "/review"))
+    assert "Перевірити</button>" in html(get(app, "/review"))  # до першої перевірки
 
 
 def test_failing_check_job_does_not_break_the_panel(conn, tmp_path, root, capsys):

@@ -493,7 +493,7 @@ def test_browser_approve_and_next_and_last(conn, root, live, chromium):
             assert page.url.split("?")[0].endswith(f"/item/{expected}")
         page.click('button[value="approve"]')
         page.wait_for_load_state("networkidle")
-        assert page.url.endswith("/review?msg=approved_done")
+        assert page.url.endswith("/review")  # A23: `?msg=` прибрано з адреси після показу
         assert "Усе переглянуто" in page.inner_text(".message")
         assert {status(conn, i) for i in (first, second, yellow)} == {Status.APPROVED}
     finally:
