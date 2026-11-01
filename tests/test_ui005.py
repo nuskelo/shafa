@@ -238,7 +238,8 @@ def test_chip_markup_is_there_and_plain_fields_stay(conn, root, app):
     assert 'name="season" value="Зима"' in page  # звичайне поле — його й приймає сервер
     assert page.count('name="colors"') == 2 and 'name="condition"' in page
     assert 'data-color="Чорний"' in page
-    assert "<script" not in page.replace('<script src="/static/app.js"></script>', "")
+    own = ('<script src="/static/theme.js"></script>', '<script src="/static/app.js"></script>')
+    assert "<script" not in page.replace(own[0], "").replace(own[1], "")
 
 
 @pytest.mark.parametrize("status_", [Status.APPROVED, Status.PUBLISHED])
