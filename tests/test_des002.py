@@ -358,7 +358,10 @@ def test_start_stays_disabled_when_it_cannot_start(env):
     assert re.search(r'value="start" class="approve sp-start"', page)
 
 
-@pytest.mark.parametrize("n, text", [(1, "1 Картки"), (2, "2 Карток"), (5, "5 Карток"), (11, "11 Карток"), (21, "21 Картки")])
+@pytest.mark.parametrize(
+    "n, text",
+    [(1, "1 Картки"), (2, "2 Карток"), (5, "5 Карток"), (11, "11 Карток"), (21, "21 Картки")],
+)
 def test_eta_cards_genitive_after_do(n, text):
     """«Сьогодні опублікує до 1 Картки» — після «до» родовий відмінок (DES-003 п. 7)."""
     from shafa.robot import control
