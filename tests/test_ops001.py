@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -287,7 +288,8 @@ def test_unpack_env_keeps_secrets_and_her_root(mac, tmp_path, monkeypatch):
     assert env["SHAFA_ROOT_DIR"] == str(root)  # її, не з Mac
     assert env["SHAFA_DAILY_LIMIT"] == "30" and env["SHAFA_DAILY_OLD"] == "10"
     assert env["TELEGRAM_BOT_CHANNEL_ID"] == "100500"
-    assert (data / ".env").stat().st_mode & 0o077 == 0
+    if os.name != "nt":  # на Windows chmod не діє
+        assert (data / ".env").stat().st_mode & 0o077 == 0
     changed = {key: (old, new) for key, old, new in result.changed}
     assert changed == {
         "SHAFA_DAILY_LIMIT": ("10", "30"),
