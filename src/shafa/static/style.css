@@ -839,3 +839,5 @@ html[data-theme="dark"] .sp-actions .sp-stop { color: #1f0c09; }
 .sp-li.is-bad b { color: var(--red); }
 .sp-li .health-rows { flex-basis: 100%; margin: 2px 0 4px 20px; }
 .sp .fake { margin: 0; }
+.sp.stale { padding: 8px; border-radius: var(--radius-lg); background: var(--yellow-soft); outline: 1px solid var(--yellow-line); }
+.sp > .stale-note { margin: 0; color: var(--yellow-text); }

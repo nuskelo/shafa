@@ -232,7 +232,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }, true);
 
     function markStale(stale) {
-      const bar = robot.querySelector(".status");
+      const bar = robot.querySelector(".sp, .status");
       if (!bar) return;
       bar.classList.toggle("stale", stale);
       let note = bar.querySelector(".stale-note");
