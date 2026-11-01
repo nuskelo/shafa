@@ -5,7 +5,19 @@ import re
 import pytest
 
 from shafa import web
-from test_web import HOST, PORT, TOKEN, app, get, html, item_id  # noqa: F401
+from test_review import add_card
+from test_web import PORT, TOKEN, get, html
+
+
+@pytest.fixture
+def app(conn, tmp_path, root):
+    return web.App(tmp_path / "база.sqlite", root, tmp_path / "thumbs", PORT, token=TOKEN)
+
+
+@pytest.fixture
+def item_id(conn, root):
+    return add_card(conn, root)
+
 
 PAGES = ("/review", "/approved", "/problem", "/published", "/sessions", "/archived", "/settings")
 
@@ -36,7 +48,10 @@ def test_toggle_button_on_card(app, item_id):
 
 def test_theme_script_comes_right_after_stylesheet_without_defer(app):
     page = html(get(app, "/review"))
-    assert '<link rel="stylesheet" href="/static/style.css">\n<script src="/static/theme.js"></script>' in page
+    assert (
+        '<link rel="stylesheet" href="/static/style.css">\n<script src="/static/theme.js"></script>'
+        in page
+    )
 
 
 @pytest.mark.parametrize("path", (*PAGES, "/nonexistent"))
