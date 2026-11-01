@@ -140,9 +140,10 @@ def test_archive_button_really_archives(conn, root, app, code):
     assert status_of(conn, item)[0] == Status.ARCHIVED
 
 
-@pytest.mark.parametrize("code", ["no_price", "ai_error", "robot_logged_out"])
+@pytest.mark.parametrize("code", ["robot_logged_out"])
 def test_no_archive_button_where_server_refuses(conn, root, app, code):
-    """Для цих кодів `to_archive` нічого не робить — кнопки «В архів» немає (див. handoff)."""
+    """Для цього коду `to_archive` нічого не робить — кнопки «В архів» немає (див. handoff).
+    UX-007 R-B5: `no_price`, `ai_error` та інші Проблеми про папку, текст і ШІ тепер архівуються."""
     item = problem(conn, root, code)
     assert "to_archive" not in row(html(get(app, "/problem")), item)
     post(app, f"/item/{item}", action="to_archive")

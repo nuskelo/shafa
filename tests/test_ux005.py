@@ -147,7 +147,7 @@ def test_root_change_tells_about_restart(app, root, tmp_path):
 
 def test_other_change_says_next_start(app, root):
     page = html(get(app, location(post(app, "/settings", **form(root)))))
-    assert "Збережено. Нові значення діють з наступного «Старт»." in page
+    assert "Збережено. Робот візьме нові ліміти при наступному «Старт»; решта діє одразу." in page
     assert "перезапуску програми" not in page
 
 
@@ -248,8 +248,9 @@ def test_unknown_action_is_a_page(app):
 def test_stale_page_and_crash_texts(app, monkeypatch):
     stale = post(app, "/settings", token="чужий")
     assert stale.status == 403
-    assert "Програму перезапускали, тому дію не виконано. Натисніть «На головну» і повторіть." in (
-        stale.body.decode("utf-8")
+    assert (
+        "Програму перезапускали — зміни не збережено. Натисніть «Назад» у браузері, оновіть сторінку (F5) і внесіть зміни ще раз."
+        in (stale.body.decode("utf-8"))
     )
     monkeypatch.setattr(app, "route", lambda request: 1 / 0)
     crash = get(app, "/review")

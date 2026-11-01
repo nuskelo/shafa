@@ -100,7 +100,7 @@ def test_start_refused_without_approved_or_when_running(conn, root, app, spawner
         assert location(post(app, "/robot", action="start", back="/review")).endswith(
             "msg=robot_cannot_start_busy"
         )
-        assert "Робот публікує" in html(get(app, "/review"))
+        assert "Робот запускається" in html(get(app, "/review"))  # UX-007: сесії ще нема
     assert spawner.calls == []
 
 
@@ -156,7 +156,7 @@ def test_login_button_after_logout(conn, root, app, spawner):
 def test_login_done_button_closes_login_window(conn, app, lock_file):
     flag = browser.login_done_flag()
     with lock.hold("login", lock_file):
-        assert "Я увійшов — закрити вікно" in html(get(app, "/robot/panel?back=/review"))
+        assert "Вхід виконано — закрити вікно" in html(get(app, "/robot/panel?back=/review"))
         assert location(post(app, "/robot", action="login_done", back="/review")).endswith(
             "msg=robot_login_done"
         )

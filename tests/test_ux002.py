@@ -189,8 +189,8 @@ def test_start_hint_counts_what_fits_today(conn, root, lock_file):
     for i in range(3):
         add(env, str(1342 + i), 1342 + i)
     s = state(conn, lock_file, day_limit=2)
-    assert s.queue_today == 2 and s.eta_text == "Опублікує до 2 сьогодні (≈ 6 хв)"
-    assert state(conn, lock_file).eta_text == "Опублікує до 3 сьогодні (≈ 9 хв)"
+    assert s.queue_today == 2 and s.eta_text == "Сьогодні опублікує до 2 Карток (≈ 6 хв)"
+    assert state(conn, lock_file).eta_text == "Сьогодні опублікує до 3 Карток (≈ 9 хв)"
 
 
 # --- A10 / A16: «останній запуск» з датою ---
@@ -266,7 +266,10 @@ def test_no_tomorrow_wording_and_group_text(conn, root, lock_file, monkeypatch):
         conn.execute("INSERT INTO items (folder_name, status, created_at, updated_at) "
                      "VALUES ('2', 'approved', 'x', 'x')")  # fmt: skip
     s = state(conn, lock_file, day_limit=1)
-    assert s.why_not == "На сьогодні все: 1 з 1. Завтра після 00:00 натисніть «Старт» ще раз."
+    assert s.why_not == (
+        "На сьогодні все: робот уже почав 1 публікацію, а ліміт на добу — 1 (Налаштування). "
+        "Завтра після 00:00 натисніть «Старт»."
+    )
     assert "продовжимо" not in s.why_not
     assert s.groups_text.startswith("Сьогодні на Шафі: ")
     assert "з минулих постів" in s.groups_text and "з нових (бот)" in s.groups_text
