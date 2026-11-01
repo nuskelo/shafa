@@ -1,0 +1,13 @@
+<!-- 1) У <head>, одразу ПІСЛЯ <link rel="stylesheet" href="style.css"> — щоб темна тема ставала до малювання сторінки -->
+<script>try{if(localStorage.getItem("shafa-theme")==="dark")document.documentElement.setAttribute("data-theme","dark")}catch(e){}</script>
+
+<!-- 2) Кнопка в шапці: на сторінках-списках — ПЕРЕД <form ... class="quit">, на Картці — останнім елементом у .top-in -->
+<button type="button" class="theme-toggle" data-theme-toggle aria-label="Перемкнути тему" title="Світла / темна тема"><svg class="t-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><svg class="t-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><span class="label t-light">Темна тема</span><span class="label t-dark">Світла тема</span></button>
+
+<!-- 3) Перед </body> (або в наявний спільний JS) -->
+<script>
+document.addEventListener('click',function(e){var b=e.target.closest('[data-theme-toggle]');if(!b)return;
+var r=document.documentElement,d=r.getAttribute('data-theme')==='dark';
+if(d)r.removeAttribute('data-theme');else r.setAttribute('data-theme','dark');
+try{localStorage.setItem('shafa-theme',d?'light':'dark')}catch(err){}});
+</script>

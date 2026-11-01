@@ -3,6 +3,15 @@
 // Прапорець для стилів: чипи показуються лише коли JS працює (без нього — звичайні поля).
 document.documentElement.classList.add("js");
 
+// Кнопка «Темна / Світла тема» (DES-001): вибір зберігається в localStorage, theme.js ставить його при завантаженні.
+document.addEventListener("click", (event) => {
+  if (!event.target.closest("[data-theme-toggle]")) return;
+  const root = document.documentElement;
+  const dark = root.getAttribute("data-theme") === "dark";
+  if (dark) root.removeAttribute("data-theme"); else root.setAttribute("data-theme", "dark");
+  try { localStorage.setItem("shafa-theme", dark ? "light" : "dark"); } catch (e) {}
+});
+
 // A23: повідомлення вже показане сервером; `?msg=` не лишаємо в адресі, інакше F5 покаже його знову.
 try {
   const url = new URL(window.location.href);

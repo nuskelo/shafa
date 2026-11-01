@@ -100,7 +100,7 @@ def test_page_works_offline_no_external_files(app):
     for text in (css, page):
         assert "googleapis" not in text and "@import" not in text
         assert not re.search(r'(src|href)="https?://', text)
-    assert "--accent: #1f4fd1" in css and "Inter, system-ui" in css
+    assert "--accent: #b9521b" in css and "Inter, system-ui" in css  # DES-001: тепла тема
 
 
 # --- Мітки Карток і фільтри ---

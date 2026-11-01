@@ -68,6 +68,7 @@ PACKAGE = Path(__file__).resolve().parent
 STATIC = {
     "style.css": "text/css; charset=utf-8",
     "app.js": "text/javascript; charset=utf-8",
+    "theme.js": "text/javascript; charset=utf-8",
     "icon.svg": "image/svg+xml",
 }
 

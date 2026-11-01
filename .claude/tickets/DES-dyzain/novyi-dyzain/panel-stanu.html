@@ -1,0 +1,59 @@
+<section class="sp" aria-label="Стан програми" aria-live="polite">
+  <div class="sp-robot">
+    <div class="sp-main">
+      <div class="sp-head">
+        <span class="dot dot-idle" aria-hidden="true"></span>
+        <h2 class="sp-title">Робот чекає</h2>
+        <span class="sp-note">Сьогодні робот ще не запускався — можна натискати «Старт».</span>
+        <details class="more-info sp-more">
+          <summary>Детальніше</summary>
+          <p class="why">Ліміти «Сьогодні на Шафі» рахують усі спроби публікації, зокрема ті, що пішли в Проблеми, — тому цифра може бути більшою за кількість опублікованих.</p>
+          <p class="why">«Пробно заповнити завтрашні»: робот відкриє форму Шафи й заповнить її для завтрашніх Карток, але нічого не опублікує (≈ 5 хв). Так видно наперед, чи нема проблем.</p>
+        </details>
+      </div>
+      <div class="sp-stats" role="list" aria-label="Сьогодні на Шафі">
+        <div class="stat stat-key" role="listitem"><span class="stat-label">Сьогодні опублікує</span><span class="stat-num">до 1 <small>Картки · ≈ 3 хв</small></span></div>
+        <div class="stat" role="listitem"><span class="stat-label">З минулих постів</span><span class="stat-num">0 <small>з 20</small></span></div>
+        <div class="stat" role="listitem"><span class="stat-label">З нових (бот)</span><span class="stat-num">0 <small>з 10</small></span></div>
+        <div class="stat" role="listitem"><span class="stat-label">Схвалених</span><span class="stat-num">1</span></div>
+      </div>
+      <div class="sp-foot">
+        <span class="sp-line">Останній запуск: вчора, 31.10 о 12:05 — опубліковано 20, у Проблемах 1, денний ліміт того дня вичерпано → <a href="06-problemy.html">Відкрити Проблеми</a> · <a href="12-sesiia.html">Подробиці сесії</a></span>
+      </div>
+    </div>
+    <form class="sp-actions">
+      <button type="button" class="sp-start">Старт</button>
+      <button type="button" class="sp-rehearse" title="Робот заповнить форму Шафи для завтрашніх Карток, але нічого не опублікує">Пробно заповнити завтрашні (без публікації, ~5 хв)</button>
+    </form>
+  </div>
+
+  <div class="sp-row">
+    <div class="sp-box sp-ai">
+      <div class="sp-head">
+        <span class="dot dot-ok" aria-hidden="true"></span>
+        <h3 class="sp-title-s">ШІ</h3>
+        <details class="more-info sp-more">
+          <summary>Детальніше</summary>
+          <p class="why">Натискайте «Знайти нові пости і відправити на ШІ» після нових постів у каналі. На ШІ вони підуть через 7 днів — це нормально, що одразу не з'являються.</p>
+          <p class="why">675 чекають своєї черги: ШІ готує Картки лише на 3 дні роботи робота наперед.</p>
+          <p class="why">Нові пости йдуть на ШІ через 7 днів після публікації в каналі (зараз таких: 57) — щоб не оформлювати те, що швидко продасться.</p>
+          <p class="why">«Знайти нові пости і відправити на ШІ»: програма шукає нові папки з постами, забирає готові результати й відправляє нові Картки на ШІ одним пакетом — результати зазвичай до години.</p>
+        </details>
+        <button type="button" class="sp-find">Знайти нові пости і відправити на ШІ</button>
+      </div>
+      <div class="sp-stats" role="list" aria-label="ШІ">
+        <a class="stat stat-link" role="listitem" href="01-holovna-na-perevirku.html"><span class="stat-label">Готові до перевірки</span><span class="stat-num">29</span></a>
+        <div class="stat" role="listitem"><span class="stat-label">Готові йти на ШІ</span><span class="stat-num">705</span></div>
+        <div class="stat" role="listitem" title="ШІ готує Картки лише на 3 дні роботи робота наперед"><span class="stat-label">Чекають своєї черги</span><span class="stat-num">675</span></div>
+        <div class="stat stat-warn" role="listitem"><span class="stat-label">Нових постів з бота</span><span class="stat-num">13</span></div>
+      </div>
+      <p class="sp-line sp-ai-note">Готово о 12:04: 30 Карток у «На перевірку».</p>
+    </div>
+
+    <div class="sp-box sp-list">
+      <div class="sp-li"><span class="dot dot-ok" aria-hidden="true"></span><span><b>Бот:</b> працює</span></div>
+      <div class="sp-li"><span class="dot dot-ok" aria-hidden="true"></span><span><b>Все гаразд</b> <span class="sp-note">перевірено сьогодні о 15:23</span></span><button type="button" class="sp-check">Перевірити ще раз</button></div>
+      <div class="sp-li"><span class="dot dot-ok" aria-hidden="true"></span><span><b>Сайт:</b> чекає <b>68</b> · вийде сьогодні <b>0</b> · продано за тиждень <b>49</b> · відкладено (запобіжник) <b>0</b></span></div>
+    </div>
+  </div>
+</section>
