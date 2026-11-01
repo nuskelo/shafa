@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% block title %}Шафа-помічник{% endblock %}</title>
 <link rel="stylesheet" href="/static/style.css">
+<script src="/static/theme.js"></script>
 <link rel="icon" href="/static/icon.svg">
 <script src="/static/app.js"></script>
 </head>
@@ -27,6 +28,7 @@
         </div>
       </details>
     </nav>
+    {% include "theme_button.html" %}
     {% if can_quit %}
     <form method="get" action="/quit" class="quit">
       <button title="Закрити програму: екран і бота">Вийти</button>
