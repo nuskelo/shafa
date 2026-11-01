@@ -14,7 +14,7 @@ import pytest
 from shafa import batch, config, health, options, web
 from shafa.bot import run as bot_run
 from shafa.robot import publish
-from test_web import HOST, PORT, TOKEN, get, html, location, post
+from test_web import HOST, PORT, TOKEN, get, html, location, plain, post
 
 SRC = Path(web.__file__).parent
 
@@ -277,7 +277,7 @@ def row(status="ok", name="База", text="гаразд", fix=""):
 def test_health_before_first_run_without_file(app):
     page = html(get(app, "/review"))
     assert "Самоперевірка ще не проходила" in page
-    assert re.search(r"<button>Перевірити</button>", page)
+    assert re.search(r'class="sp-check">Перевірити</button>', page)
     assert "Перевірити ще раз" not in page
 
 
@@ -286,7 +286,9 @@ def test_health_shows_last_result_from_file(app):
     write_last(config.data_dir(), at, [row(), row()])
     page = html(get(app, "/review"))
     assert f"Востаннє вчора о {at:%H:%M}: усе гаразд" in page
-    assert re.search(r"<button>Перевірити</button>", page) and "Перевірити ще раз" not in page
+    assert (
+        re.search(r'class="sp-check">Перевірити</button>', page) and "Перевірити ще раз" not in page
+    )
 
 
 def test_health_last_result_with_problems_counts(app):
@@ -311,7 +313,7 @@ def test_health_after_run_counts_add_up(app):
 def test_health_all_ok_after_run(app):
     app.health_result = (datetime.now().astimezone().isoformat(), [health.Check("a", "ok", "ok")])
     page = html(get(app, "/review"))
-    assert re.search(r"Все гаразд</strong>\s*<span class=\"tile-sub\">перевірено сьогодні о", page)
+    assert re.search(r"Все гаразд</b>\s*<span class=\"sp-note\">перевірено сьогодні о", page)
 
 
 def test_load_last_ignores_broken_file(tmp_path):
@@ -326,7 +328,7 @@ def test_load_last_ignores_broken_file(tmp_path):
 
 
 def panel(app):
-    return html(get(app, "/review"))
+    return plain(html(get(app, "/review")))
 
 
 def test_bot_tile_stopped(app):

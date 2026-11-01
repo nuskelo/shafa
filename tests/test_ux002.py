@@ -9,7 +9,7 @@ from shafa import web
 from shafa.robot import control, lock, publish
 from test_robot_control import NOW, session
 from test_robot_publish import Env, add, other_item
-from test_web import PORT, TOKEN, get, html, location, post
+from test_web import PORT, TOKEN, get, html, location, plain, post
 from test_web_robot import Process, Spawner
 
 LOCAL = NOW  # час «зараз» у тестах панелі: 13.10.2026 12:00 UTC
@@ -441,7 +441,7 @@ def test_panel_never_shows_raw_codes_or_tomorrow(app, conn, root, lock_file):
     page = html(get(app, "/review"))
     for raw in ("section_yellow", "продовжимо завтра", "Робота не запущено\n"):
         assert raw not in page
-    assert "Сьогодні на Шафі: з минулих постів" in page
+    assert "З минулих постів" in plain(page) and "З нових (бот)" in plain(page)
     assert "Пробно заповнити завтрашні (без публікації, ~5 хв)" in page
     assert "Перевірити завтрашні" not in page
 
@@ -449,7 +449,7 @@ def test_panel_never_shows_raw_codes_or_tomorrow(app, conn, root, lock_file):
 def test_health_button_label_before_first_check(app):
     page = html(get(app, "/review"))
     if "Самоперевірка ще не проходила" in page:
-        assert "<button>Перевірити</button>" in page
+        assert 'class="sp-check">Перевірити</button>' in page
 
 
 def test_panel_carries_tab_counts_for_live_update(app, conn, root):

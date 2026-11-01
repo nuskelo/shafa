@@ -4,7 +4,7 @@ import pytest
 
 from shafa import web
 from shafa.robot import lock
-from test_web import PORT, TOKEN, get, html, location, post
+from test_web import PORT, TOKEN, get, html, location, plain, post
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ def with_token(monkeypatch):
 
 def test_no_token(app, started):
     page = html(get(app, "/review"))
-    assert "Бот: не налаштований — скажіть Власнику" in page
+    assert "Бот: не налаштований — скажіть Власнику" in plain(page)
     assert "Запустити бота" not in page
     assert location(post(app, "/bot", action="start", back="/review")) == (
         "/review?msg=bot_no_token"
@@ -42,7 +42,7 @@ def test_no_token(app, started):
 
 def test_stopped_bot_can_be_started(app, started, with_token, tmp_path, root):
     page = html(get(app, "/review"))
-    assert "Бот: вимкнений" in page and ">Запустити бота</button>" in page
+    assert "Бот: вимкнений" in plain(page) and ">Запустити бота</button>" in page
     assert "123:секрет" not in page
 
     response = post(app, "/bot", action="start", back="/approved")
@@ -54,7 +54,7 @@ def test_stopped_bot_can_be_started(app, started, with_token, tmp_path, root):
 def test_running_bot(app, started, with_token, bot_lock):
     with lock.hold("bot", bot_lock):
         page = html(get(app, "/review"))
-        assert "Бот: працює" in page and "Запустити бота" not in page
+        assert "Бот: працює" in plain(page) and "Запустити бота" not in page
         assert location(post(app, "/bot", action="start")) == "/review?msg=bot_running"
     assert started == []
 
@@ -63,7 +63,7 @@ def test_failed_bot_shows_reason(conn, app, with_token):
     with conn:
         conn.execute("INSERT INTO bot_status VALUES (1, 'x', 'x', 'Бот не адміністратор каналу')")
     page = html(get(app, "/review"))
-    assert "Бот: зупинився через помилку — якщо повториться, скажіть Власнику" in page
+    assert "Бот: зупинився через помилку — якщо повториться, скажіть Власнику" in plain(page)
     assert "Для Власника: Бот не адміністратор каналу" in page
     assert "Запустити бота" in page
 
