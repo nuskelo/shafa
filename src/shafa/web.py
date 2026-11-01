@@ -94,6 +94,7 @@ MESSAGES = {
     "approved": "Схвалено",
     "rejected": f"Картку «{{name}}» відкладено в Архів на {review.ARCHIVE_DAYS} днів.",
     "approved_next": "Схвалено «{name}» → у «Схвалених». Це наступна Картка.",
+    "approved_back": "Схвалено «{name}» — Картка знову в «Схвалених».",
     "approved_left": "Схвалено. Лишилось {n} пропущених — ось перша з них.",
     "approved_done": "Схвалено. На перевірці більше нічого немає — можна натискати «Старт» угорі.",
     "rejected_left": f"Картку «{{name}}» відкладено в Архів на {review.ARCHIVE_DAYS} днів. "
@@ -116,7 +117,8 @@ MESSAGES = {
     "stale": "Картку вже змінено — сторінку оновлено",
     "photos_retry": "Картку повернуто на перевірку — перегляньте й схваліть знову",
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
-    "recheck_new": "Папку перевірено: усе добре, Картка чекає на ШІ",
+    "recheck_new": "Перевірено: усе гаразд. Картка знову піде на ШІ й з'явиться в «На перевірку» — "
+    "зазвичай до години, при великій черзі пізніше.",
     "recheck_problem": "Папку перевірено: проблема лишилась",
     "recheck_many_items": "Проблема лишилась: у пості досі кілька пар чи розмірів. Опублікуйте на "
     "Шафі вручну («Опублікувала вручну») або «В архів».",
@@ -140,6 +142,7 @@ MESSAGES = {
     "robot_cannot_start_busy": "Робота не запущено: робот уже працює",
     "robot_cannot_start_none": "Робота не запущено: немає Схвалених Карток",
     "robot_cannot_start_limit": "Робота не запущено: на сьогодні все — ліміт доби вичерпано",
+    "robot_cannot_start_groups": "Робота не запущено: на сьогодні місць для цих Карток немає",
     "robot_cannot_start_login": "Робота не запущено: спершу увійдіть на Шафу",
     "robot_cannot_start_setup": "Робота не запущено: у налаштуваннях неправильні межі на день",
     "robot_paused": "Пауза: робот допише поточний товар і зачекає",
@@ -175,7 +178,7 @@ MESSAGES = {
     "bot_started": "Запускаю бота — за кілька секунд він з'явиться на панелі",
     "bot_running": "Бот уже працює",
     "bot_no_token": "Бот не підключений — скажіть Власнику",
-    "settings_saved": "Збережено. Нові значення діють з наступного «Старт».",
+    "settings_saved": "Збережено. Робот візьме нові ліміти при наступному «Старт»; решта діє одразу.",
     "settings_root": "Збережено. Нова папка діятиме для бота після перезапуску програми: "
     "«Вийти» і відкрити ярликом знову.",
     "reread_started": "При наступному «Старт» робот спершу перечитає «Мої речі» — це додасть 5–10 хв.",
@@ -277,6 +280,7 @@ PROBLEM_KINDS = {
         "Нема входу на Шафу",
         "натисніть на панелі «Увійти на Шафу», потім «Перевірити ще раз»",
     ),
+    "robot_publish_blocked": ("Захист робота", "нічого не натискайте, скажіть Власнику"),  # R-B8
     "post_deleted": (
         "Пост видалено",
         "пост прибрано з каналу — схоже, продано; публікувати не треба",
@@ -290,6 +294,11 @@ OTHER_KIND = ("Проблема", "відкрийте Картку")
 # Кнопки в рядку Проблеми — лише ті, що працюють на сервері: `publish.to_archive` приймає тільки ці
 # коди (і всі `robot_…`, див. `publish.can_archive`).
 ARCHIVE_CODES = publish.ARCHIVABLE
+FOLDER_CODES = (  # про папку чи пост: «Перевірити ще раз» перечитує папку (у старих постів її нема)
+    "bad_folder_name", "duplicate_post", "post_not_found", "no_text", "no_price", "no_photos",
+    "too_many_photos", "folder_missing",
+)  # fmt: skip
+LOOSE_CODES = (*FOLDER_CODES, "ai_error", "stale_rules")  # R-B5: раніше — лише «Перевірити ще раз»
 LINK_CODES = (
     "publish_uncertain",
     "publish_error",
@@ -495,6 +504,13 @@ class App:
         origin = request.headers.get("origin")
         return origin is None or origin in {f"http://{h}" for h in self._allowed_hosts()}
 
+    def _own_referer(self, request: Request) -> str | None:
+        """Сторінка, з якої надіслали форму, — лише з нашого хоста й лише коли `Origin` наш."""
+        parts = urlsplit(request.headers.get("referer") or "")
+        if not self._origin_ok(request) or parts.netloc not in self._allowed_hosts():
+            return None
+        return safe_back(parts.path + (f"?{parts.query}" if parts.query else ""))
+
     def _token_ok(self, request: Request) -> bool:
         sent = (request.form.get("token") or [""])[0]
         return hmac.compare_digest(sent.encode("utf-8"), self.token.encode("utf-8"))
@@ -510,7 +526,9 @@ class App:
             response = self.page(
                 "error.html",
                 403,
-                message="Програму перезапускали, тому дію не виконано. Натисніть «На головну» і повторіть.",
+                message="Програму перезапускали — зміни не збережено. Натисніть «Назад» у "
+                "браузері, оновіть сторінку (F5) і внесіть зміни ще раз.",
+                back_url=self._own_referer(request),  # R-A8
             )
         else:
             try:
@@ -698,6 +716,7 @@ class App:
                 current=None,
                 message=None,
                 back_url=_referer_path(request),
+                robot_working=(lock.busy(self.lock_file) or {}).get("mode") == "publish",  # R-A7
             )
         finally:
             conn.close()
@@ -884,7 +903,7 @@ class App:
         state.counters = [
             (text, href)
             for text, href in (
-                (f"Чекають на ШІ: {state.ready}" if state.ready else None, None),
+                (f"Готові йти на ШІ: {state.ready}" if state.ready else None, None),
                 (f"ШІ зараз заповнює: {state.pending}" if state.pending else None, None),
                 (f"Готові до перевірки: {to_check}" if to_check else None, f"/{Status.REVIEW}"),
             )
@@ -1160,7 +1179,12 @@ class App:
                 return redirect(f"{back}{sep}msg=robot_login_done")
             commands = {"pause": "pause", "resume": None, "stop": "stop"}
             if action in commands:
+                open_id = conn.execute(
+                    "SELECT id FROM sessions WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1"
+                ).fetchone()
                 done = publish.request(conn, commands[action])
+                if done and open_id:  # R-A2: час паузи не рахується в «ще ≈»
+                    control.mark_pause(open_id[0], action == "pause")
                 message = {"pause": "robot_paused", "resume": "robot_resumed",
                            "stop": "robot_stopping"}[action]  # fmt: skip
                 return redirect(f"{back}{sep}msg={message if done else 'robot_not_running'}")
@@ -1284,7 +1308,10 @@ class App:
         """Що скаже робот про Картку (QA-002) — лише «На перевірку» і «Схвалені»."""
         if card.status not in (Status.REVIEW, Status.APPROVED):
             return Precheck(None, [])
-        return precheck(card, self.root)
+        check = precheck(card, self.root)
+        if no_photos(check.error):  # R-B9: що робити, а не «немає фото: 1.jpg»
+            return Precheck(NO_PHOTOS_OLD if is_old(card.folder_name) else NO_PHOTOS, check.notes)
+        return check
 
     def _empty_note(self, status, cards, marks, chosen, kind, query):
         """Порожній відфільтрований список, а в «На перевірку» ще є Картки (B2, UX-003): що лишилось і
@@ -1348,7 +1375,7 @@ class App:
             base = self._filtered(cards, marks, "", kind)
             warn = sum(1 for c in base if marks[c.id].tone != "ok")
             for key, label, count in (
-                ("", "Усі", len(base)),
+                ("", "Усі", len(base) or None),  # R-B10: не «Усі · 0» поруч з «Усі · 27» нижче
                 ("warn", "Треба глянути", warn),
                 ("ok", "Без жовтого", len(base) - warn),
             ):
@@ -1357,7 +1384,7 @@ class App:
             base = self._filtered(cards, marks, chosen)
             old = sum(1 for c in base if is_old(c.folder_name))
             for key, label, count in (
-                ("", "Усі", len(base)),
+                ("", "Усі", len(base) or None),
                 ("new", "З бота", len(base) - old),
                 ("old", "Старі пости", old),
             ):
@@ -1524,12 +1551,22 @@ class App:
                     empty = fresh is not None and not fresh.fields["price"].value
                     return redirect(back(msg="saved_no_price" if empty else "saved"))
             sure = (request.form.get("sure") or [""])[0] == "1"
-            if action == "to_archive" and card.problem_code in review.NO_RESTORE and not sure:
-                return self._confirm(
-                    conn, request, card, action, from_, stay,
-                    "Картку не можна буде повернути. Точно в архів?",
-                    "Так, в архів", "Ні, назад",
-                )  # fmt: skip
+            if action == "to_archive" and not sure:
+                on_shafa = conn.execute(
+                    "SELECT shafa_id FROM items WHERE id = ?", (item_id,)
+                ).fetchone()[0]
+                if on_shafa is not None:  # R-B2: з Архіву такі Картки не повертаються
+                    return self._confirm(
+                        conn, request, card, action, from_, stay,
+                        "Картку не можна буде повернути — оголошення вже є на Шафі. Точно в архів?",
+                        "Так, в архів", "Ні, назад",
+                    )  # fmt: skip
+                if card.problem_code in review.NO_RESTORE:
+                    return self._confirm(
+                        conn, request, card, action, from_, stay,
+                        "Картку не можна буде повернути. Точно в архів?",
+                        "Так, в архів", "Ні, назад",
+                    )  # fmt: skip
             if action in review.ACTIONS:
                 message = review.act(conn, item_id, action, self.root, confirmed=sure)
                 if message == review.CONFIRM_RESTORE:  # B10: продану пару — лише після питання
@@ -1549,6 +1586,10 @@ class App:
                 if message == "unapproved":  # лишаємось на Картці — поля знову активні
                     return redirect(back(msg=message))
                 if message in ("approved", "rejected"):  # «Схвалити і далі» / «Відхилити»
+                    if message == "approved" and urlsplit(from_).path != f"/{Status.REVIEW}":
+                        # R-B1: схвалили Картку, відкриту зі «Схвалених» (після «Скасувати
+                        # схвалення»), — «наступна» лишилась би схваленою (лише читання)
+                        return redirect(with_params(from_, msg="approved_back", ok=item_id))
                     if following and message == "approved":
                         return redirect(with_params(following, msg="approved_next", ok=item_id))
                     if following:
@@ -1657,7 +1698,11 @@ class App:
         перша з них (по колу); немає — «більше нічого немає» і що робити далі."""
         review_list = from_ if urlsplit(from_).path == f"/{Status.REVIEW}" else f"/{Status.REVIEW}"
         undo = {"ok": item_id} if message == "rejected" else {}  # для «[Повернути]» (UX-004)
-        left = self._list_ids(conn, Status.REVIEW, review_list)
+        left = [  # R-B9: Картки без фото не схвалити — «пропущеними» їх не рахуємо
+            i
+            for i in self._list_ids(conn, Status.REVIEW, review_list)
+            if (c := review.load_card(conn, i)) is None or not no_photos(self._precheck(c).error)
+        ]
         if left:
             return with_params(
                 item_url(left[0], review_list), msg=f"{message}_left", n=len(left), **undo
@@ -1725,7 +1770,7 @@ class App:
             ids = [
                 r[0]
                 for r in conn.execute(
-                    "SELECT id FROM items WHERE session_id = ? ORDER BY published_at, id",
+                    "SELECT id FROM items WHERE session_id = ? ORDER BY published_at IS NULL, published_at, id",
                     (session_id,),
                 )
             ]
@@ -1738,6 +1783,8 @@ class App:
                 tone=session_tone(row),
                 cards=cards,
                 rows={c.id: problem_row(c) for c in cards if c.status == Status.PROBLEM},
+                shown_problems=sum(c.status == Status.PROBLEM for c in cards),
+                shown_published=sum(c.status != Status.PROBLEM for c in cards),
                 reason_of=control.reason_of,
                 message=None,
             )
@@ -1909,6 +1956,17 @@ BLOCK_TODO = {  # чому не можна схвалити → що зроби�
 NO_PRICE_ERROR = "Немає ціни"  # `robot.plan`: те саме, що «вкажіть ціну»
 
 
+NO_PHOTOS = (
+    "у Картки немає фото. Додайте фото в папку поста й натисніть «Зберегти», "
+    "або «Не публікувати (в Архів)»."
+)
+NO_PHOTOS_OLD = "фото поста не збереглось — «Не публікувати» або скажіть Власнику."
+
+
+def no_photos(error: str | None) -> bool:
+    return bool(error) and (error.startswith("Немає фото") or error in (NO_PHOTOS, NO_PHOTOS_OLD))
+
+
 def approve_todo(card: review.Card, block: str | None, robot_error: str | None) -> str | None:
     """Усе, що заважає схвалити, одним блоком: «Щоб схвалити: 1) вкажіть ціну; 2) перевірте розділ»."""
     items = []
@@ -1972,6 +2030,9 @@ def first_sentence(text_: str) -> str:
     return found[0] if found else text_.strip()
 
 
+_KID_DOUBT = re.compile(r"дитяч", re.IGNORECASE)
+
+
 def gender_buttons(card: review.Card) -> GenderButtons | None:
     """Кнопки «Це жіночі / Це чоловічі» біля жовтого розділу, якщо сумнів саме про це і пара є в каталозі."""
     section = card.fields["section"]
@@ -1983,6 +2044,15 @@ def gender_buttons(card: review.Card) -> GenderButtons | None:
     if found is None:
         return None
     short = first_sentence(section.reason)
+    if _KID_DOUBT.search(section.reason) and found[0] == review.GENDER_PAIRS[0][1]:
+        # R-B4: сумнів «дитяча чи доросла» — кнопки «жіночі/чоловічі» не про те
+        return GenderButtons(
+            "Доросла чи дитяча пара?",
+            f"{short.rstrip('.')}. Якщо дитяча — виберіть у полі «Розділ» «Дитячий одяг / Для "
+            "дівчаток (хлопчиків) / Взуття / …».",
+            section.reason if short != section.reason.strip() else None,
+            [],
+        )
     return GenderButtons(
         found[0], short, section.reason if short != section.reason.strip() else None, found[1]
     )
@@ -2170,6 +2240,10 @@ def problem_actions(code: str | None, folder_name: str | None = None) -> Actions
     manual = publish.can_publish_by_hand(code)
     if code == "robot_logged_out":
         return Actions(False, True)
+    if code == "robot_publish_blocked":  # R-B8: захист — нічого не натискати
+        return Actions(False, False)
+    if code in LOOSE_CODES:  # R-B5: у кожної Проблеми є вихід — «В архів»
+        return Actions(True, not (old and code in FOLDER_CODES), manual=manual)
     if code.startswith("robot_"):
         return Actions(True, True, to_review=True, manual=manual)
     if (
@@ -2195,13 +2269,29 @@ def no_restore_reason(code: str | None, shafa_id) -> str | None:
     return None
 
 
+ARCHIVE_WHY = {
+    "possible_duplicate": "ви вирішили: схожа пара вже є на Шафі",
+    "already_published": "ви вирішили: цей пост уже є на Шафі",
+    "size_gone": "розмір прибрали з поста — мабуть, продано",
+    "shafa_declined": "Шафа відхилила оголошення",
+    "photos_missing": "фото поста не знайшлося — ви вирішили не публікувати",
+}
+
+
 def archive_reason(card: review.Card) -> str:
     """Чому Картка в Архіві — для неї, без службових слів."""
     if card.problem_code == review.POST_DELETED:
         return "пост видалено з каналу — пару, мабуть, продано"
     if card.problem_text and card.problem_code in ("duplicate", "many_items", "no_section"):
         return plain(card.problem_text).rstrip(".")
-    return "ви вирішили не публікувати" if not card.problem_code else "Картка не піде на Шафу"
+    code = card.problem_code or ""
+    if not code:
+        return "ви вирішили не публікувати"
+    if code in ARCHIVE_WHY:  # R-B3
+        return ARCHIVE_WHY[code]
+    if code.startswith("robot_"):
+        return "ви вирішили не публікувати після помилки робота"
+    return "Картка не піде на Шафу"
 
 
 def names(text_: str | None) -> str:
@@ -2215,8 +2305,14 @@ def plain(text_: str | None) -> str:
     return names(_SCREEN.sub("", text_).strip())
 
 
+OLD_CODES = (*FOLDER_CODES, "photos_missing", "size_gone")
+OLD_TODO = "Продано — «В архів». Не продано — скажіть Власнику."  # R-B6: у старих постів папки нема
+
+
 def problem_hint(card: review.Card) -> str | None:
     """Довгий текст «що сталось і що робити» для Картки-Проблеми."""
+    if (card.problem_code or "") in OLD_CODES and is_old(card.folder_name):
+        return "Це старий пост: папки з фото в нього нема, тож перевіряти тут нічого. " + OLD_TODO
     hint = PROBLEM_HINTS.get(card.problem_code or "")
     if hint and "{size}" in hint:
         found = re.search(r"Розмір (\S+) прибрано", card.problem_text or "")
@@ -2229,6 +2325,8 @@ def problem_row(card: review.Card) -> ProblemRow:
     label, todo = PROBLEM_KINDS.get(code) or (
         ROBOT_KIND if code.startswith("robot_") else OTHER_KIND
     )
+    if code in OLD_CODES and is_old(card.folder_name):
+        todo = OLD_TODO[:1].lower() + OLD_TODO[1:]
     short = STICKY_TITLES.get(code)
     full = names(card.problem_text)
     text_ = plain(card.problem_text)

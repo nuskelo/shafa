@@ -21,7 +21,7 @@
       {% if card.id not in on_shafa %}
       <form method="post" action="/item/{{ card.id }}" class="restore">
         <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}">
-        <button name="action" value="restore">Повернути</button>
+        <button name="action" value="restore">Повернути на перевірку</button>
       </form>
       {% endif %}
     </span>

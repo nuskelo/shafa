@@ -13,7 +13,8 @@
   </div>
   <div class="s-why tone-{{ tone }}">{% if tone == "run" %}працює{% else %}{{ reason_of(session.stop_code, session.stop_reason) or "закінчилась" }}{% endif %}</div>
 </div>
-{% if not cards %}<p class="empty">У цій сесії робот не брався за жодну Картку.</p>{% endif %}
+{% if not cards and not session.problems %}<p class="empty">У цій сесії робот не брався за жодну Картку.</p>
+{% elif not shown_published %}<p class="empty">Опублікованих у цій сесії немає. Картки, що пішли в Проблеми, — {% if shown_problems %}нижче{% else %}у розділі «<a href="/problem">Проблеми</a>»{% endif %}.</p>{% endif %}
 <ul class="grid">
 {% for card in cards %}
   {% set row = rows.get(card.id) %}

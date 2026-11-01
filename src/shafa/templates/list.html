@@ -18,7 +18,7 @@
     <div class="filters" role="group" aria-label="Що треба">
       <span class="hint">Що треба:</span>
       {% for key, label, n, href in filters %}
-      <a class="pill{% if chosen == key %} on{% endif %}" href="{{ href }}"{% if chosen == key %} aria-current="true"{% endif %}>{{ label }} · {{ n }}</a>
+      <a class="pill{% if chosen == key %} on{% endif %}" href="{{ href }}"{% if chosen == key %} aria-current="true"{% endif %}>{{ label }}{% if n is not none %} · {{ n }}{% endif %}</a>
       {% endfor %}
     </div>
     {% endif %}
@@ -26,7 +26,7 @@
     <div class="filters" role="group" aria-label="Звідки">
       <span class="hint">Звідки:</span>
       {% for key, label, n, href in kinds %}
-      <a class="pill{% if kind == key %} on{% endif %}" href="{{ href }}"{% if kind == key %} aria-current="true"{% endif %}>{{ label }} · {{ n }}</a>
+      <a class="pill{% if kind == key %} on{% endif %}" href="{{ href }}"{% if kind == key %} aria-current="true"{% endif %}>{{ label }}{% if n is not none %} · {{ n }}{% endif %}</a>
       {% endfor %}
     </div>
     {% endif %}
