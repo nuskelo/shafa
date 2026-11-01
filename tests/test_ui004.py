@@ -230,7 +230,7 @@ def test_every_panel_action_is_in_the_markup(conn, root, app, monkeypatch):
         web.App, "bot_state", lambda self, c: web.BotState("stopped", "вимкнений", True)
     )
     page = html(get(app, "/review"))
-    assert re.search(r'<form method="post" action="/robot" class="status-actions">', page)
+    assert re.search(r'<form method="post" action="/robot" class="sp-actions">', page)
     for value in ("start", "rehearse"):
         assert f'name="action" value="{value}"' in page
     assert 'action="/ai"' in page and 'name="action" value="update"' in page
@@ -370,7 +370,7 @@ def test_browser_shows_stale_when_server_is_gone(conn, root, live, chromium):
     try:
         page.goto(f"http://127.0.0.1:{live.port}/review")
         page.evaluate("document.getElementById('robot').dataset.panel = '/нема-такої-сторінки'")
-        assert wait_for(lambda: page.locator(".status.stale .stale-note").count() == 1)
+        assert wait_for(lambda: page.locator(".sp.stale .stale-note").count() == 1)
         page.evaluate(
             "document.getElementById('robot').dataset.panel = '/robot/panel?back=/review'"
         )
@@ -388,7 +388,7 @@ def test_browser_keeps_opened_details_across_refresh(conn, root, live, chromium)
         with conn:  # щось змінилось — смужку перемальовано
             conn.execute("INSERT INTO sessions (started_at, ended_at) VALUES ('x', 'y')")
         ready(conn, root, status=Status.APPROVED)
-        assert wait_for(lambda: "Схвалених 1" in page.inner_text("#robot"))
+        assert wait_for(lambda: re.search(r"Схвалених\s+1", page.inner_text("#robot")))
         assert page.locator("details[data-key=ai]").evaluate("e => e.open")
     finally:
         page.close()

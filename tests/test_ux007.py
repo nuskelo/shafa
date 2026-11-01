@@ -10,7 +10,7 @@ import pytest
 from shafa import web
 from shafa.robot import control, lock, publish
 from test_robot_control import NOW, session
-from test_web import PORT, TOKEN, get, html, location, post
+from test_web import PORT, TOKEN, get, html, location, plain, post
 
 
 @pytest.fixture
@@ -136,7 +136,7 @@ def test_header_and_tile_use_different_names_for_waiting_cards(conn, root, tmp_p
     new_card(conn, root, folder="1349", post_id=1349, date="2026-10-12T10:00:00")
     page = html(get(ai_app, "/review"))
     assert "Ще не заповнені ШІ: 2" in page
-    assert "Готові йти на ШІ: 1" in page
+    assert "Готові йти на ШІ 1" in plain(page)
     assert "Чекають на ШІ" not in page
 
 

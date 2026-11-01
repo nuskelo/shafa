@@ -6,7 +6,7 @@ from shafa import web
 from shafa.db import Status, now
 from shafa.robot import browser, lock
 from test_review import add_card
-from test_web import PORT, TOKEN, get, html, location, post
+from test_web import PORT, TOKEN, get, html, location, plain, post
 
 
 @pytest.fixture(autouse=True)
@@ -73,14 +73,14 @@ def test_panel_on_every_page_and_start_disabled_without_approved(app):
     page = html(get(app, "/review"))
     assert "ПІДСТАВНА" not in page
     assert "Робот чекає" in page
-    assert 'value="start" class="approve" disabled' in page
+    assert 'value="start" class="approve sp-start" disabled' in page
     assert "Немає Схвалених — схваліть Картки у «На перевірку»" in page
-    assert "Сьогодні на Шафі: з минулих постів 0 з 0 · з нових (бот) 0 з 30" in page
+    assert "З минулих постів 0 з 0" in plain(page) and "З нових (бот) 0 з 30" in plain(page)
 
 
 def test_start_spawns_robot_process(conn, root, app, spawner):
     card(conn, root)
-    assert 'value="start" class="approve">' in html(get(app, "/approved"))
+    assert 'value="start" class="approve sp-start">' in html(get(app, "/approved"))
 
     response = post(app, "/robot", action="start", back="/approved")
 
@@ -361,8 +361,8 @@ def test_site_line_on_panel_only_when_site_on(conn, root, app, monkeypatch):
 
     page = html(get(app, "/robot/panel"))
 
-    assert "чекає 1 · вийде сьогодні 0 · продано за тиждень 1" in page
-    assert "чекає 1" in html(get(app, "/review"))  # і на сторінках
+    assert "чекає 1 · вийде сьогодні 0 · продано за тиждень 1" in plain(page)
+    assert "чекає 1" in plain(html(get(app, "/review")))  # і на сторінках
 
 
 def test_held_sold_on_panel_and_release_button(conn, root, app, monkeypatch):
@@ -375,7 +375,9 @@ def test_held_sold_on_panel_and_release_button(conn, root, app, monkeypatch):
             "(6, '2999-01-01', 'fuse'), (7, '2999-01-01', NULL)"
         )
 
-    assert "продано за тиждень 1 · відкладено (запобіжник) 2" in html(get(app, "/robot/panel"))
+    assert "продано за тиждень 1 · відкладено (запобіжник) 2" in plain(
+        html(get(app, "/robot/panel"))
+    )
     assert "Відкладено запобіжником: 2" in html(get(app, "/settings"))
 
     page = html(get(app, location(post(app, "/site/release-sold"))))
@@ -384,7 +386,7 @@ def test_held_sold_on_panel_and_release_button(conn, root, app, monkeypatch):
     assert (
         conn.execute("SELECT COUNT(*) FROM post_checks WHERE hold IS NOT NULL").fetchone()[0] == 0
     )
-    assert "відкладено (запобіжник) 0" in html(get(app, "/robot/panel"))
+    assert "відкладено (запобіжник) 0" in plain(html(get(app, "/robot/panel")))
     assert "Відкладених «Продано» немає" in html(
         get(app, location(post(app, "/site/release-sold")))
     )

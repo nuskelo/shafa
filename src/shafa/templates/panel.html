@@ -1,155 +1,178 @@
-<section class="status" aria-label="Стан програми" aria-live="polite">
+<section class="sp" aria-label="Стан програми" aria-live="polite">
   {% if fake %}<p class="fake">ПІДСТАВНА ШАФА — тест, нічого не публікується на справжній сайт</p>{% endif %}
-  <div class="tiles">
-    <div class="tile robot robot-{{ robot.code }}">
-      <span class="dot dot-{{ tones.robot }}" aria-hidden="true"></span>
-      <div class="tile-body">
-        <strong class="tile-title">{{ robot.text }}</strong>
-        {% set working = robot.code in ("running", "pausing", "paused", "stopping") %}
-        {% if robot.progress %}<span class="tile-sub robot-progress">{{ robot.progress }}</span>{% endif %}
-        {% if robot.doing %}<span class="tile-sub robot-doing">{{ robot.doing }}</span>{% endif %}
-        {% if robot.previous %}<span class="tile-sub robot-previous">{{ robot.previous }}</span>{% endif %}
-        {% if working and not robot.progress and robot.session_published is not none %}<span class="tile-sub">Публікує: у цій сесії {{ robot.session_published }} · у черзі {{ robot.approved }}</span>{% endif %}
-        <span class="tile-sub">{{ robot.groups_text }}{% if not working %} · Схвалених {{ robot.approved }}{% endif %}</span>
-        {% if "start" in robot.buttons and robot.why_not %}<span class="tile-sub why">{{ robot.why_not }}</span>{% endif %}
-        {% if robot.eta_text %}<span class="tile-sub robot-eta">{{ robot.eta_text }}</span>{% endif %}
-        {% if robot.idle_note %}<span class="tile-sub robot-last">{{ robot.idle_note }}</span>{% endif %}
-        {% if robot.last and "start" in robot.buttons %}<span class="tile-sub robot-last">{{ robot.last }}{% if robot.last_problems %} → <a href="/problem">Відкрити Проблеми</a>{% endif %}{% if robot.last_session %} · <a href="/session/{{ robot.last_session }}">Подробиці сесії</a>{% endif %}</span>{% endif %}
-        {% if robot.rehearsal and "start" in robot.buttons %}<span class="tile-sub robot-last">{{ robot.rehearsal }}{% if robot.rehearsal_problems %} · <a href="/problem">Проблеми</a>{% endif %}</span>{% endif %}
-        {% if robot.code == "running" %}<span class="tile-sub">Не закривайте вікно Chrome робота і кришку ноутбука, поки робот працює.</span>{% endif %}
-        {% if "pause" in robot.buttons or "resume" in robot.buttons %}<span class="tile-sub">Пауза — робот зачекає, «Продовжити» поверне до роботи. Стоп — допише поточний товар і завершить сесію.</span>{% endif %}
-        {% if robot.code == "login_needed" %}
-        <p class="robot-help">Робот вийшов із Шафи. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».</p>
-        {% elif robot.never_logged %}
-        <p class="robot-help">Робот ще не входив на Шафу. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».</p>
-        {% endif %}
-        <details class="more-info" data-key="robot">
+  {% set working = robot.code in ("running", "pausing", "paused", "stopping") %}
+  {% set session_line = "Публікує: у цій сесії %s · у черзі %s" % (robot.session_published, robot.approved) if working and not robot.progress and robot.session_published is not none else "" %}
+  {% set why_line = robot.why_not if "start" in robot.buttons else "" %}
+  {% set note = robot.progress or session_line or robot.idle_note or why_line %}
+  <div class="sp-robot robot robot-{{ robot.code }}{% if tones.robot == 'ok' %} is-running{% elif tones.robot == 'warn' %} is-warn{% elif tones.robot == 'bad' %} is-error{% endif %}">
+    <div class="sp-main">
+      <div class="sp-head">
+        <span class="dot dot-{{ tones.robot }}" aria-hidden="true"></span>
+        <h2 class="sp-title">{{ robot.text }}</h2>
+        {% if note %}<span class="sp-note">{{ note }}</span>{% endif %}
+        <details class="more-info sp-more" data-key="robot">
           <summary>Детальніше</summary>
           <p class="why">Ліміти «Сьогодні на Шафі» рахують усі спроби публікації, зокрема ті, що пішли в Проблеми, — тому цифра може бути більшою за кількість опублікованих.</p>
           {% if "rehearse" in robot.buttons %}<p class="why">«Пробно заповнити завтрашні»: робот відкриє форму Шафи й заповнить її для завтрашніх Карток, але нічого не опублікує (≈ 5 хв). Так видно наперед, чи нема проблем.</p>{% endif %}
           {% for line in robot.details %}<p class="why">{{ line }}</p>{% endfor %}
         </details>
       </div>
+      <div class="sp-stats" role="list" aria-label="Сьогодні на Шафі">
+        <div class="stat stat-key" role="listitem"><span class="stat-label">Сьогодні опублікує</span><span class="stat-num">
+          {%- if working and robot.plan -%}
+            {{ robot.handled }} <small>з {{ robot.plan }}{% if robot.code == "paused" %} · на паузі{% elif robot.left_text %} · ще ≈ {{ robot.left_text }}{% endif %}</small>
+          {%- elif working -%}
+            {{ robot.session_published or 0 }} <small>у цій сесії</small>
+          {%- elif robot.eta_span -%}
+            до {{ robot.eta_cards }} <small>· ≈ {{ robot.eta_span }}</small>
+          {%- else -%}0{%- endif -%}
+        </span></div>
+        <div class="stat" role="listitem"><span class="stat-label">З минулих постів</span><span class="stat-num">{{ robot.started.old }} <small>з {{ robot.limits.old }}</small></span></div>
+        <div class="stat" role="listitem"><span class="stat-label">З нових (бот)</span><span class="stat-num">{{ robot.started.new }} <small>з {{ robot.limits.new }}</small></span></div>
+        <div class="stat" role="listitem"><span class="stat-label">Схвалених</span><span class="stat-num">{{ robot.approved }}</span></div>
+      </div>
+      {% set lines = [] %}
+      {% if robot.doing %}{% set _ = lines.append(("robot-doing", robot.doing)) %}{% endif %}
+      {% if robot.previous %}{% set _ = lines.append(("robot-previous", robot.previous)) %}{% endif %}
+      {% if session_line and session_line != note %}{% set _ = lines.append(("", session_line)) %}{% endif %}
+      {% if why_line and why_line != note %}{% set _ = lines.append(("why", why_line)) %}{% endif %}
+      {% if robot.idle_note and robot.idle_note != note %}{% set _ = lines.append(("robot-last", robot.idle_note)) %}{% endif %}
+      {% if robot.code == "running" %}{% set _ = lines.append(("", "Не закривайте вікно Chrome робота і кришку ноутбука, поки робот працює.")) %}{% endif %}
+      {% if "pause" in robot.buttons or "resume" in robot.buttons %}{% set _ = lines.append(("", "Пауза — робот зачекає, «Продовжити» поверне до роботи. Стоп — допише поточний товар і завершить сесію.")) %}{% endif %}
+      {% if robot.code == "login_needed" %}{% set _ = lines.append(("robot-help", "Робот вийшов із Шафи. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».")) %}
+      {% elif robot.never_logged %}{% set _ = lines.append(("robot-help", "Робот ще не входив на Шафу. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».")) %}{% endif %}
+      {% if lines or robot.last and "start" in robot.buttons or robot.rehearsal and "start" in robot.buttons %}
+      <div class="sp-foot">
+        {% for kind, text in lines %}<span class="sp-line {{ kind }}">{{ text }}</span>
+        {% endfor %}
+        {% if robot.last and "start" in robot.buttons %}<span class="sp-line robot-last">{{ robot.last }}{% if robot.last_problems %} → <a href="/problem">Відкрити Проблеми</a>{% endif %}{% if robot.last_session %} · <a href="/session/{{ robot.last_session }}">Подробиці сесії</a>{% endif %}</span>{% endif %}
+        {% if robot.rehearsal and "start" in robot.buttons %}<span class="sp-line robot-last">{{ robot.rehearsal }}{% if robot.rehearsal_problems %} · <a href="/problem">Проблеми</a>{% endif %}</span>{% endif %}
+      </div>
+      {% endif %}
     </div>
+    <form method="post" action="/robot" class="sp-actions">
+      <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="back" value="{{ back }}">
+      {% if "start" in robot.buttons %}
+      <button name="action" value="start" class="approve sp-start"{% if not robot.can_start %} disabled{% endif %}>Старт</button>
+      {% endif %}
+      {% if "rehearse" in robot.buttons %}
+      <button name="action" value="rehearse" class="sp-rehearse" title="Робот заповнить форму Шафи для завтрашніх Карток, але нічого не опублікує">Пробно заповнити завтрашні (без публікації, ~5 хв)</button>
+      {% endif %}
+      {% if "resume" in robot.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
+      {% if "pause" in robot.buttons %}<button name="action" value="pause">Пауза</button>{% endif %}
+      {% if "login" in robot.buttons %}<button name="action" value="login">Увійти на Шафу</button>{% endif %}
+      {% if "login_done" in robot.buttons %}<button name="action" value="login_done">Вхід виконано — закрити вікно</button>{% endif %}
+      {% if "stop" in robot.buttons %}<button name="action" value="stop" class="reject sp-stop">Стоп</button>{% endif %}
+    </form>
+  </div>
 
-    <div class="tile ai{% if ai.busy %} ai-busy{% endif %}">
-      <span class="dot dot-{{ tones.ai }}" aria-hidden="true"></span>
-      <div class="tile-body">
-        <strong class="tile-title">ШІ{% if ai.busy %}: {{ ai.busy }}{% endif %}</strong>
-        <span class="tile-sub">{% for text, href in ai.counters %}{% if not loop.first %} · {% endif %}{% if href %}<a href="{{ href }}">{{ text }}</a>{% else %}{{ text }}{% endif %}{% else %}Зараз ШІ нічого не чекає й нічого не заповнює{% endfor %}</span>
-        {% if ai.filling %}<span class="tile-sub ai-progress">{{ ai.filling }}</span>{% endif %}
-        {% if ai.checking %}<span class="tile-sub">{{ ai.checking }}</span>
-        <span class="tile-sub">Тримайте вікно програми відкритим (можна згорнути) — інакше результати не заберуться.</span>{% endif %}
-        {% if ai.finished %}<span class="tile-sub">{{ ai.finished }}</span>{% endif %}
-        {% if ai.held %}<span class="tile-sub">{{ ai.held }}</span>{% endif %}
-        {% if ai.new_posts %}<span class="tile-sub">Нових постів з бота: {{ ai.new_posts }} — натисніть «Знайти нові пости і відправити на ШІ»</span>{% endif %}
-        {% if ai.note %}<span class="tile-sub ai-note">{{ ai.note }}</span>{% endif %}
-        <form method="post" action="/ai" class="tile-buttons">
-          <input type="hidden" name="token" value="{{ token }}">
-          <input type="hidden" name="back" value="{{ back }}">
-          <button name="action" value="update"{% if ai.busy %} disabled{% endif %}>Знайти нові пости і відправити на ШІ</button>
-          {% if ai.recheckable and not ai.busy %}
-          <button name="action" value="recheck">Оновити Картки за новими правилами ({{ ai.recheckable }}, безкоштовно)</button>
-          {% endif %}
-          {% if ai.refillable and not ai.busy %}
-          <a class="button" href="/refill">Заповнити ШІ заново ({{ ai.refillable }}, платно)</a>
-          {% endif %}
-        </form>
-        <span class="tile-sub">{% if ai.pending %}ШІ працює… можна натиснути, щоб додати нові пости.{% else %}Натискайте після нових постів у каналі. На ШІ вони підуть через {{ ai.wait_text }} — це нормально, що одразу не з'являються.{% endif %}</span>
-        {% if (ai.recheckable or ai.refillable) and not ai.busy %}<span class="tile-sub">Програму оновили — натисніть, щоб Картки врахували зміни.</span>{% endif %}
-        <details class="more-info" data-key="ai">
+  <div class="sp-row">
+    <div class="sp-box sp-ai ai{% if ai.busy %} ai-busy{% endif %}">
+      <form id="ai-form" method="post" action="/ai" hidden>
+        <input type="hidden" name="token" value="{{ token }}">
+        <input type="hidden" name="back" value="{{ back }}">
+      </form>
+      <div class="sp-head">
+        <span class="dot dot-{{ tones.ai }}" aria-hidden="true"></span>
+        <h3 class="sp-title-s">ШІ{% if ai.busy %}: {{ ai.busy }}{% endif %}</h3>
+        <details class="more-info sp-more" data-key="ai">
           <summary>Детальніше</summary>
           {% if ai.detail %}<p class="why">Для Власника: {{ ai.detail }}</p>{% endif %}
+          <p class="why">{% if ai.pending %}ШІ працює… можна натиснути, щоб додати нові пости.{% else %}Натискайте після нових постів у каналі. На ШІ вони підуть через {{ ai.wait_text }} — це нормально, що одразу не з'являються.{% endif %}</p>
+          {% if (ai.recheckable or ai.refillable) and not ai.busy %}<p class="why">Програму оновили — натисніть, щоб Картки врахували зміни.</p>{% endif %}
+          {% if ai.held %}<p class="why">{{ ai.held }}</p>{% endif %}
+          {% if ai.new_posts %}<p class="why">Нових постів з бота: {{ ai.new_posts }} — натисніть «Знайти нові пости і відправити на ШІ»</p>{% endif %}
           <p class="why">Нові пости йдуть на ШІ через {{ ai.wait_text }} після публікації в каналі (зараз таких: {{ ai.young }}) — щоб не оформлювати те, що швидко продасться.</p>
           <p class="why">«Знайти нові пости і відправити на ШІ»: програма шукає нові папки з постами, забирає готові результати й відправляє нові Картки на ШІ одним пакетом — результати зазвичай до години.</p>
           {% if ai.cost %}<p class="why">Орієнтовна вартість пакета, що зараз заповнюється: {{ ai.cost }}.</p>{% endif %}
           {% if ai.recheckable and not ai.busy %}<p class="why">«Оновити Картки за новими правилами»: безкоштовно, без ШІ; ваші правки лишаються.</p>{% endif %}
           {% if ai.refillable and not ai.busy %}<p class="why">«Заповнити ШІ заново»: платно — на наступній сторінці буде видно, скільки це коштує.</p>{% endif %}
         </details>
+        <button form="ai-form" name="action" value="update" class="sp-find"{% if ai.busy %} disabled{% endif %}>Знайти нові пости і відправити на ШІ</button>
       </div>
+      <div class="sp-stats" role="list" aria-label="ШІ">
+        <a class="stat stat-link" role="listitem" href="/review"><span class="stat-label">Готові до перевірки</span><span class="stat-num">{{ ai.to_check }}</span></a>
+        <div class="stat" role="listitem"><span class="stat-label">Готові йти на ШІ</span><span class="stat-num">{{ ai.ready }}</span></div>
+        {% if ai.pending %}<div class="stat" role="listitem"><span class="stat-label">ШІ зараз заповнює</span><span class="stat-num">{{ ai.pending }}</span></div>{% endif %}
+        {% if ai.held_count %}<div class="stat" role="listitem" title="{{ ai.held }}"><span class="stat-label">Чекають своєї черги</span><span class="stat-num">{{ ai.held_count }}</span></div>{% endif %}
+        {% if ai.new_posts %}<div class="stat stat-warn" role="listitem" title="Нових постів з бота: {{ ai.new_posts }} — натисніть «Знайти нові пости і відправити на ШІ»"><span class="stat-label">Нових постів з бота</span><span class="stat-num">{{ ai.new_posts }}</span></div>{% endif %}
+      </div>
+      {% if not (ai.to_check or ai.ready or ai.pending) %}<p class="sp-line">Зараз ШІ нічого не чекає й нічого не заповнює</p>{% endif %}
+      {% if ai.filling %}<p class="sp-line ai-progress">{{ ai.filling }}</p>{% endif %}
+      {% if ai.checking %}<p class="sp-line">{{ ai.checking }}</p>
+      <p class="sp-line">Тримайте вікно програми відкритим (можна згорнути) — інакше результати не заберуться.</p>{% endif %}
+      {% if ai.finished %}<p class="sp-line">{{ ai.finished }}</p>{% endif %}
+      {% if ai.note %}<p class="sp-line sp-ai-note ai-note">{{ ai.note }}</p>{% endif %}
+      {% if (ai.recheckable or ai.refillable) and not ai.busy %}
+      <p class="sp-line">
+        {% if ai.recheckable %}<button form="ai-form" name="action" value="recheck">Оновити Картки за новими правилами ({{ ai.recheckable }}, безкоштовно)</button>{% endif %}
+        {% if ai.refillable %}<a class="button" href="/refill">Заповнити ШІ заново ({{ ai.refillable }}, платно)</a>{% endif %}
+      </p>
+      {% endif %}
     </div>
 
-    <div class="tile bot-{{ bot.code }}">
-      <span class="dot dot-{{ tones.bot }}" aria-hidden="true"></span>
-      <div class="tile-body">
-        <strong class="tile-title">Бот: {{ bot.text }}</strong>
+    <div class="sp-box sp-list">
+      <div class="sp-li bot-{{ bot.code }}{% if tones.bot in ('warn', 'bad') %} is-{{ tones.bot }}{% endif %}">
+        <span class="dot dot-{{ tones.bot }}" aria-hidden="true"></span>
+        <span><b>Бот:</b> {{ bot.text }}
+          {% if bot.detail %}
+          <details class="more-info sp-more" data-key="bot">
+            <summary>Детальніше</summary>
+            <p class="why">Для Власника: {{ bot.detail }}</p>
+          </details>
+          {% endif %}
+        </span>
         {% if bot.can_start %}
-        <form method="post" action="/bot" class="tile-buttons">
+        <form id="bot-form" method="post" action="/bot" hidden>
           <input type="hidden" name="token" value="{{ token }}">
           <input type="hidden" name="back" value="{{ back }}">
-          <button name="action" value="start">Запустити бота</button>
         </form>
-        {% endif %}
-        {% if bot.detail %}
-        <details class="more-info" data-key="bot">
-          <summary>Детальніше</summary>
-          <p class="why">Для Власника: {{ bot.detail }}</p>
-        </details>
+        <button form="bot-form" name="action" value="start" class="sp-check">Запустити бота</button>
         {% endif %}
       </div>
-    </div>
 
-    {% if site %}
-    <div class="tile">
-      <span class="dot dot-{{ tones.site }}" aria-hidden="true"></span>
-      <div class="tile-body">
-        <strong class="tile-title">Сайт</strong>
-        <span class="tile-sub">чекає {{ site[0] }} · вийде сьогодні {{ site[1] }} · продано за тиждень {{ site[2] }} · відкладено (запобіжник) {{ site[3] }}</span>
-      </div>
-    </div>
-    {% endif %}
-
-    <div class="tile health health-{{ health.code }}">
-      <span class="dot dot-{{ tones.health }}" aria-hidden="true"></span>
-      <div class="tile-body">
-        {% if health.code == "running" %}
-        <strong class="tile-title">Перевіряю…</strong>
-        {% elif health.code == "none" %}
-        <strong class="tile-title">Самоперевірка ще не проходила</strong>
-        {% elif health.old %}
-        <strong class="tile-title">Востаннє {{ when(health.at) }}: {% if health.code == "ok" %}усе гаразд{% else %}є що виправити ({{ health.rows | length }}){% endif %}</strong>
-        {% elif health.code == "ok" %}
-        <strong class="tile-title">Все гаразд</strong>
-        <span class="tile-sub">перевірено {{ when(health.at) }}</span>
-        {% else %}
-        <strong class="tile-title">Є що виправити ({{ health.rows | length }})</strong>
-        <span class="tile-sub">інші {{ health.ok }} — гаразд · перевірено {{ when(health.at) }}</span>
-        {% endif %}
-        {% if health.rows %}
-        <details class="more-info" data-key="health" open>
-          <summary>Детальніше</summary>
-          <ul class="health-rows">
-            {% for row in health.rows %}
-            <li class="health-{{ row.status }}"><strong>{{ row.name }}:</strong> {{ row.text }}{% if row.fix %} <span class="health-fix">Що зробити: {{ row.fix }}</span>{% endif %}</li>
-            {% endfor %}
-          </ul>
-        </details>
-        {% endif %}
+      <div class="sp-li health health-{{ health.code }}{% if tones.health in ('warn', 'bad') %} is-{{ tones.health }}{% endif %}">
+        <span class="dot dot-{{ tones.health }}" aria-hidden="true"></span>
+        <span>
+          {% if health.code == "running" %}
+          <b>Перевіряю…</b>
+          {% elif health.code == "none" %}
+          <b>Самоперевірка ще не проходила</b>
+          {% elif health.old %}
+          <b>Востаннє {{ when(health.at) }}: {% if health.code == "ok" %}усе гаразд{% else %}є що виправити ({{ health.rows | length }}){% endif %}</b>
+          {% elif health.code == "ok" %}
+          <b>Все гаразд</b> <span class="sp-note">перевірено {{ when(health.at) }}</span>
+          {% else %}
+          <b>Є що виправити ({{ health.rows | length }})</b> <span class="sp-note">інші {{ health.ok }} — гаразд · перевірено {{ when(health.at) }}</span>
+          {% endif %}
+          {% if health.rows %}
+          <details class="more-info sp-more" data-key="health" open>
+            <summary>Детальніше</summary>
+            <ul class="health-rows">
+              {% for row in health.rows %}
+              <li class="health-{{ row.status }}"><strong>{{ row.name }}:</strong> {{ row.text }}{% if row.fix %} <span class="health-fix">Що зробити: {{ row.fix }}</span>{% endif %}</li>
+              {% endfor %}
+            </ul>
+          </details>
+          {% endif %}
+        </span>
         {% if health.code != "running" %}
-        <form method="post" action="/health" class="tile-buttons">
+        <form id="health-form" method="post" action="/health" hidden>
           <input type="hidden" name="token" value="{{ token }}">
           <input type="hidden" name="back" value="{{ back }}">
-          <button>{% if health.code == "none" or health.old %}Перевірити{% else %}Перевірити ще раз{% endif %}</button>
         </form>
+        <button form="health-form" class="sp-check">{% if health.code == "none" or health.old %}Перевірити{% else %}Перевірити ще раз{% endif %}</button>
         {% endif %}
       </div>
+
+      {% if site %}
+      <div class="sp-li{% if tones.site == 'warn' %} is-warn{% endif %}">
+        <span class="dot dot-{{ tones.site }}" aria-hidden="true"></span>
+        <span><b>Сайт:</b> чекає <b>{{ site[0] }}</b> · вийде сьогодні <b>{{ site[1] }}</b> · продано за тиждень <b>{{ site[2] }}</b> · відкладено (запобіжник) <b>{{ site[3] }}</b></span>
+      </div>
+      {% endif %}
     </div>
   </div>
-
-  <form method="post" action="/robot" class="status-actions">
-    <input type="hidden" name="token" value="{{ token }}">
-    <input type="hidden" name="back" value="{{ back }}">
-    {% if "rehearse" in robot.buttons %}
-    <button name="action" value="rehearse" title="Робот заповнить форму Шафи для завтрашніх Карток, але нічого не опублікує">Пробно заповнити завтрашні (без публікації, ~5 хв)</button>
-    {% endif %}
-    {% if "pause" in robot.buttons %}<button name="action" value="pause">Пауза</button>{% endif %}
-    {% if "resume" in robot.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
-    {% if "stop" in robot.buttons %}<button name="action" value="stop" class="reject">Стоп</button>{% endif %}
-    {% if "login" in robot.buttons %}<button name="action" value="login">Увійти на Шафу</button>{% endif %}
-    {% if "login_done" in robot.buttons %}<button name="action" value="login_done">Вхід виконано — закрити вікно</button>{% endif %}
-    {% if "start" in robot.buttons %}
-    <button name="action" value="start" class="approve"{% if not robot.can_start %} disabled{% endif %}>Старт</button>
-    {% endif %}
-  </form>
 </section>
 {% if counts %}<span hidden data-counts="{% for key, value in counts.items() %}{{ key }}={{ value }};{% endfor %}"></span>{% endif %}

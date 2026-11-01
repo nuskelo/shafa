@@ -39,6 +39,11 @@ def post(app, path, token=TOKEN, origin=None, **form):
     return app.handle(web.Request("POST", path, {}, data, headers))
 
 
+def plain(page: str) -> str:
+    """Текст сторінки без тегів і зайвих пробілів: «<b>Бот:</b> працює» → «Бот: працює»."""
+    return " ".join(re.sub(r"<[^>]+>", " ", page).split())
+
+
 def html(response):
     assert response.status == 200, response.body[:300]
     return response.body.decode("utf-8")

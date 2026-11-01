@@ -1,6 +1,7 @@
 """Екран: панель ШІ («Оновити», лічильники, збір результатів) і «ШІ, спробуй ще раз» (CORE-004)."""
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 
 import anthropic
@@ -13,7 +14,7 @@ from test_ai import GOOD, message
 from test_batch import TODAY, line
 from test_batch import FakeClient as BatchClient
 from test_review import add_card, edits, status
-from test_web import PORT, TOKEN, get, html, location, post
+from test_web import PORT, TOKEN, get, html, location, plain, post
 
 
 class Clock:
@@ -96,14 +97,14 @@ def test_panel_counts(conn, app, root):
     new_card(conn, root, folder="1349", post_id=1349, date="2026-10-12T10:00:00")
     page = html(get(app, "/review"))
     assert (
-        "Готові йти на ШІ: 1" in page
+        "Готові йти на ШІ 1" in plain(page)
         and "Ще не заповнені ШІ: 2" in page
         and "ШІ зараз заповнює" not in page
     )  # нулі не показуємо
     assert "через 7 днів після публікації в каналі (зараз таких: 1)" in page
     assert 'action="/ai"' in page and ">Знайти нові пости і відправити на ШІ</button>" in page
     assert 'name="action" value="update"' in page  # форма та сама, змінився лише підпис
-    assert "Готові йти на ШІ: 1" in html(get(app, "/robot/panel?back=/review"))
+    assert "Готові йти на ШІ 1" in plain(html(get(app, "/robot/panel?back=/review")))
 
 
 def test_update_scans_sends_batch_and_reports(conn, app, root, client):
@@ -122,7 +123,7 @@ def test_update_scans_sends_batch_and_reports(conn, app, root, client):
     assert len(requests) == 2
     assert app.ai_note is None  # «що пішло» панель бере з бази, а не з примітки
     page = html(get(app, "/review"))
-    assert "ШІ зараз заповнює: 2" in page
+    assert "ШІ зараз заповнює 2" in plain(page)
     assert f"ШІ заповнює 2 Картки (відправлено о {sent_hm(conn)})" in page
     assert "натискати нічого не треба" in page
     assert "Тримайте вікно програми відкритим" in page
@@ -163,7 +164,7 @@ def test_results_collected_on_open_and_every_few_minutes(conn, app, root, client
 
     assert status(conn, item_id) == Status.REVIEW
     assert "(відправлено о" not in page and "Тримайте вікно" not in page
-    assert "Готові до перевірки: 1" in page and 'href="/review"' in page
+    assert "Готові до перевірки 1" in plain(page) and 'href="/review"' in page
     assert "Готово о " in page and "1 Картка у «На перевірку»" in page
     clock.now += web.COLLECT_EVERY
     calls = len(client.batches.calls)
@@ -230,7 +231,7 @@ def test_panel_without_anything_says_so(app):
     page = html(get(app, "/review"))
     assert "Зараз ШІ нічого не чекає й нічого не заповнює" in page
     assert (
-        "Готові йти на ШІ" not in page
+        "Готові йти на ШІ 0" in plain(page)  # прямокутник лишається з нулем, DES-002
         and "Ще не заповнені ШІ" not in page
         and "Готово о" not in page
     )
@@ -261,7 +262,11 @@ def test_no_cents_in_panel(conn, app, root, client):
     new_card(conn, root)
     update(app)
     page = html(get(app, "/review"))
-    assert "¢" not in page and "≈ " not in page.split("Детальніше")[0].split("tile ai")[-1]
+    shown = re.sub(  # блок ШІ без «Детальніше»
+        r"<details.*?</details>", "",
+        page.split('class="sp-box sp-ai')[1].split('class="sp-box sp-list')[0], flags=re.DOTALL,
+    )  # fmt: skip
+    assert "¢" not in page and "≈ " not in shown and "Орієнтовна вартість" not in shown
     assert "$" in page  # сума — лише під «Детальніше», у доларах
     for name in ("panel.html", "panel_mini.html"):
         assert "¢" not in (Path(web.__file__).parent / "templates" / name).read_text("utf-8")
@@ -284,7 +289,7 @@ def test_held_text_counts_old_beyond_ahead_days(conn, root, tmp_path, app, monke
     monkeypatch.setenv("SHAFA_DAILY_OLD", "1")
     old_cards(conn, root, 5, tmp_path)
     page = html(get(app, "/review"))
-    assert "Готові йти на ШІ: 5" in page
+    assert "Готові йти на ШІ 5" in plain(page)
     assert "2 чекають своєї черги: ШІ готує Картки лише на 3 дні роботи робота наперед" in page
     assert "наступним пакетом" not in page
 
@@ -320,7 +325,7 @@ def test_uncertain_and_busy_wording(app, conn, root):
     app.ai_busy = "шукаю нові пости й відправляю…"
     page = html(get(app, "/review"))
     assert "ШІ: шукаю нові пости й відправляю…" in page
-    assert 'name="action" value="update" disabled' in page
+    assert 'name="action" value="update" class="sp-find" disabled' in page
 
 
 def test_rule_buttons_have_plain_words(conn, root, app):
