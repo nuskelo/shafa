@@ -209,7 +209,7 @@
   {% else %}
   <form method="post" action="/item/{{ card.id }}" class="decide">
     {{ hidden() }}
-    {% if problem_archive %}<button name="action" value="to_archive" class="reject">В Архів</button>{% endif %}
+    {% if problem_archive %}<button name="action" value="to_archive" class="reject">В архів</button>{% endif %}
     {% if problem_recheck %}<button name="action" value="recheck">Перевірити ще раз</button>{% endif %}
   </form>
   {% endif %}
@@ -362,7 +362,7 @@
     <button form="fields" name="action" value="unapprove">Скасувати схвалення</button>
     {% else %}
     <span class="spacer"></span>
-    <button form="fields" name="action" value="restore">Повернути</button>
+    <button form="fields" name="action" value="restore">Повернути на перевірку</button>
     {% endif %}
   </div>
 </div>

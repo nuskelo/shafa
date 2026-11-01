@@ -79,7 +79,7 @@ def test_other_archived_card_restores_without_question(conn, root, app):
 def test_card_page_restore_button_also_asks(conn, root, app):
     item = archived(conn, root, "post_deleted", "x")
     page = html(get(app, f"/item/{item}?from=/archived"))
-    assert "Повернути</button>" in page
+    assert "Повернути на перевірку</button>" in page
     again = html(post(app, f"/item/{item}", action="restore"))
     assert "Повернути все одно?" in again
 
@@ -206,9 +206,9 @@ def test_new_card_in_batch_explains_itself(conn, root, app):
 
 
 def test_counter_of_waiting_cards_next_to_tabs(conn, root, app):
-    assert "Чекають на ШІ" not in html(get(app, "/review"))
+    assert "Ще не заповнені ШІ" not in html(get(app, "/review"))
     add_card(conn, root, status=Status.NEW)
-    assert "Чекають на ШІ: 1" in html(get(app, "/review"))
+    assert "Ще не заповнені ШІ: 1" in html(get(app, "/review"))
 
 
 def no_key(app):

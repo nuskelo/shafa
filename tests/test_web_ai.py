@@ -95,11 +95,15 @@ def test_panel_counts(conn, app, root):
     new_card(conn, root)
     new_card(conn, root, folder="1349", post_id=1349, date="2026-10-12T10:00:00")
     page = html(get(app, "/review"))
-    assert "Чекають на ШІ: 1" in page and "ШІ зараз заповнює" not in page  # нулі не показуємо
+    assert (
+        "Готові йти на ШІ: 1" in page
+        and "Ще не заповнені ШІ: 2" in page
+        and "ШІ зараз заповнює" not in page
+    )  # нулі не показуємо
     assert "через 7 днів після публікації в каналі (зараз таких: 1)" in page
     assert 'action="/ai"' in page and ">Знайти нові пости і відправити на ШІ</button>" in page
     assert 'name="action" value="update"' in page  # форма та сама, змінився лише підпис
-    assert "Чекають на ШІ: 1" in html(get(app, "/robot/panel?back=/review"))
+    assert "Готові йти на ШІ: 1" in html(get(app, "/robot/panel?back=/review"))
 
 
 def test_update_scans_sends_batch_and_reports(conn, app, root, client):
@@ -225,7 +229,11 @@ def test_note_is_replaced_not_stuck(conn, app, root, client):
 def test_panel_without_anything_says_so(app):
     page = html(get(app, "/review"))
     assert "Зараз ШІ нічого не чекає й нічого не заповнює" in page
-    assert "Чекають на ШІ" not in page and "Готово о" not in page
+    assert (
+        "Готові йти на ШІ" not in page
+        and "Ще не заповнені ШІ" not in page
+        and "Готово о" not in page
+    )
 
 
 def test_dot_is_calm_while_ai_works_and_warns_on_real_errors(conn, app, root, client):
@@ -276,7 +284,7 @@ def test_held_text_counts_old_beyond_ahead_days(conn, root, tmp_path, app, monke
     monkeypatch.setenv("SHAFA_DAILY_OLD", "1")
     old_cards(conn, root, 5, tmp_path)
     page = html(get(app, "/review"))
-    assert "Чекають на ШІ: 5" in page
+    assert "Готові йти на ШІ: 5" in page
     assert "2 чекають своєї черги: ШІ готує Картки лише на 3 дні роботи робота наперед" in page
     assert "наступним пакетом" not in page
 

@@ -452,7 +452,10 @@ def test_card_page_offers_only_open_on_shafa_and_archive(env, app):
 def test_archive_button_works_and_restore_is_hidden_and_refused(env, app):
     item = declined_card(env)
 
-    assert location(post(app, f"/item/{item}", action="to_archive")).endswith(
+    asked = post(app, f"/item/{item}", action="to_archive")  # UX-007 R-B2: спершу питання
+    assert asked.status == 200 and "оголошення вже є на Шафі. Точно в архів?" in asked.body.decode()
+    assert state(env.conn, item)[0] == Status.PROBLEM
+    assert location(post(app, f"/item/{item}", action="to_archive", sure="1")).endswith(
         "/problem?msg=duplicate_archived"
     )
     assert state(env.conn, item)[0] == Status.ARCHIVED

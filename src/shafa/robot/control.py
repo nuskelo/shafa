@@ -6,6 +6,7 @@
 Windows: без вікна консолі й у своїй групі процесів.
 """
 
+import json
 import math
 import os
 import sqlite3
@@ -21,11 +22,12 @@ from shafa.robot import lock, publish, rehearse
 ITEM_MINUTES = 4  # орієнтовно: стільки триває один товар (форма + фото + клік)
 POST_MINUTES = 3  # орієнтовно: стільки хвилин на пост разом із паузою, поки нема власних вимірів
 LOG_NAME = "robot-run.log"
+PAUSE_NAME = "robot-pause.json"  # UX-007: скільки сесія простояла на паузі (не рахується в «ще ≈»)
 LOGIN_NAME = "login-last"  # UX-002: коли Власник/Продавчиня востаннє закривала вікно входу
 
 TEXTS = {
     "stopped": "Робот чекає",
-    "starting": "Робот запускається…",
+    "starting": "Робот запускається — відкривається вікно Chrome (до хвилини)",
     "running": "Робот публікує",
     "pausing": "Пауза: чекаю, поки допишеться поточний товар",
     "paused": "Робот на паузі — нічого не робить. «Продовжити» або «Стоп».",
@@ -68,7 +70,10 @@ LAST = {  # причина зупинки останньої сесії — пр
 }
 
 # Що написати, коли «Старт» не спрацював (код — ключ у `web.MESSAGES`)
-WHY_CODES = {"busy": "busy", "none": "none", "limit": "limit", "login": "login", "setup": "setup"}
+WHY_CODES = {
+    "busy": "busy", "none": "none", "limit": "limit", "login": "login", "setup": "setup",
+    "groups": "groups",
+}  # fmt: skip
 
 
 @dataclass
@@ -108,6 +113,38 @@ class State:
         return "Сьогодні на Шафі: " + groups_line(self.started, self.limits)
 
 
+def _groups_exhausted(rows, started, limits, after: str) -> tuple[str, str]:
+    """R-A6: старі (чи нові) на сьогодні вичерпано, а Схвалених з іншої групи нема — так і кажемо."""
+    has_old = any(publish.is_old(r["folder_name"]) for r in rows)
+    has_new = any(not publish.is_old(r["folder_name"]) for r in rows)
+    if has_old and not has_new:
+        text = (
+            f"Старі пости на сьогодні вичерпано ({started.old} з {limits.old}). "
+            "Схвалених нових немає — решту робот опублікує завтра."
+        )
+        return text, "groups"
+    if has_new and not has_old:
+        text = (
+            f"Нові пости на сьогодні вичерпано ({started.new} з {limits.new}). "
+            "Схвалених старих немає — решту робот опублікує завтра."
+        )
+        return text, "groups"
+    return f"На сьогодні все: {groups_line(started, limits)}. {after}", "limit"
+
+
+def plural_posts(n: int) -> str:
+    word = "публікацій"
+    if n % 10 == 1 and n % 100 != 11:
+        word = "публікацію"
+    elif n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        word = "публікації"
+    return f"{n} {word}"
+
+
+def plural_cards(n: int) -> str:
+    return f"{n} " + ("Картки" if n % 10 == 1 and n % 100 != 11 else "Карток")
+
+
 def groups_line(started: publish.Groups, limits: publish.Groups) -> str:
     """«з минулих постів 0 з 20 · з нових (бот) 0 з 10» (A18)."""
     return f"з минулих постів {started.old} з {limits.old} · з нових (бот) {started.new} з {limits.new}"
@@ -133,6 +170,53 @@ def _login_at() -> datetime | None:
         return datetime.fromisoformat(login_path().read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
+
+
+def pause_path() -> Path:
+    return config.data_dir() / PAUSE_NAME
+
+
+def _pause_record(session_id: int) -> dict:
+    try:
+        data = json.loads(pause_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) and data.get("session") == session_id else {}
+
+
+def mark_pause(session_id: int, paused: bool, now: datetime | None = None) -> None:
+    """R-A2: «Пауза» / «Продовжити» / «Стоп» з екрана — запам'ятати, скільки сесія простояла на
+    паузі, щоб оцінка «ще ≈» не росла від цього часу. Збій запису оцінку лише спотворить."""
+    now = now or datetime.now().astimezone()
+    record = _pause_record(session_id)
+    total, since = float(record.get("total") or 0), record.get("since")
+    if paused and not since:
+        since = now.isoformat()
+    elif not paused and since:
+        try:
+            total += max((now - datetime.fromisoformat(since)).total_seconds(), 0)
+        except ValueError:
+            pass
+        since = None
+    try:
+        pause_path().parent.mkdir(parents=True, exist_ok=True)
+        pause_path().write_text(
+            json.dumps({"session": session_id, "total": total, "since": since}), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def paused_minutes(session_id: int, now: datetime) -> float:
+    """Скільки хвилин сесія простояла на паузі (разом з поточною, якщо вона триває)."""
+    record = _pause_record(session_id)
+    seconds = float(record.get("total") or 0)
+    if record.get("since"):
+        try:
+            seconds += max((now - datetime.fromisoformat(record["since"])).total_seconds(), 0)
+        except ValueError:
+            pass
+    return seconds / 60
 
 
 def _minutes_left(started: str | None, now: datetime) -> int | None:
@@ -324,7 +408,9 @@ def state(
     if busy and busy.get("mode") == "publish":
         command = open_session["command"] if open_session else None
         in_work = open_session["item_started_at"] if open_session else None
-        if command == "stop":
+        if open_session is None:
+            code = "starting"  # R-A1: замок є, сесії ще нема — Chrome відкривається
+        elif command == "stop":
             code = "stopping"
         elif command == "pause":
             code = "pausing" if in_work else "paused"
@@ -362,14 +448,16 @@ def state(
         why_not = "Немає Схвалених — схваліть Картки у «На перевірку», потім «Старт»."
         why_code = "none"
     elif idle and today >= day_limit:
-        why_not = f"На сьогодні все: {today} з {day_limit}. {after}"
+        why_not = (
+            f"На сьогодні все: робот уже почав {plural_posts(today)}, а ліміт на добу — "
+            f"{day_limit} (Налаштування). Завтра після 00:00 натисніть «Старт»."
+        )  # R-A5
         why_code = "limit"
     elif idle and limits is None:
         why_not = "Межі старих і нових на день у налаштуваннях неправильні"
         why_code = "setup"
     elif idle and not any(publish.group_open(r["folder_name"], started, limits) for r in rows):
-        why_not = f"На сьогодні все: {groups_line(started, limits)}. {after}"
-        why_code = "limit"
+        why_not, why_code = _groups_exhausted(rows, started, limits, after)
     elif not idle:
         why_code = "busy"
     can_start = idle and not why_not
@@ -413,13 +501,18 @@ def state(
         plan, handled = int(data["plan"]), int(data.get("handled") or 0)
         began = _stamp(open_session["started_at"], now)
         elapsed = max((now - began).total_seconds() / 60, 0) if began else 0
+        elapsed = max(elapsed - paused_minutes(open_session["id"], now), 0)  # R-A2
         per = elapsed / handled if handled else POST_MINUTES
         left = max(plan - handled, 0) * per
-        progress = f"Публікує: {handled} з {plan} на сьогодні · працює {span(elapsed)}"
-        mini = f"Робот: {handled} з {plan}"
-        if left >= 1:
-            progress += f" · ще ≈ {span(left, rough=True)}"
-            mini += f" · ≈ {span(left, rough=True)}"
+        if code == "paused":  # R-A2: на паузі — без «працює» і «ще ≈»
+            progress = f"Опубліковано {handled} з {plan} на сьогодні · на паузі"
+            mini = f"Робот: {handled} з {plan} · на паузі"
+        else:
+            progress = f"Публікує: {handled} з {plan} на сьогодні · працює {span(elapsed)}"
+            mini = f"Робот: {handled} з {plan}"
+            if left >= 1:
+                progress += f" · ще ≈ {span(left, rough=True)}"
+                mini += f" · ≈ {span(left, rough=True)}"
 
     text = TEXTS[code]
     if code in ("pausing", "stopping"):
@@ -429,6 +522,8 @@ def state(
         text = f"{verb}: дописую {what}"
         if wait is not None:
             text += f", ще ≈ {wait} хв" if wait else ", ще трохи"
+        elif code == "stopping" and not open_session["item_started_at"]:
+            text = "Стоп: робот завершує сесію"  # R-A16: між товарами дописувати нічого
     details: list[str] = []
     if code == "crashed":
         done = last["published"] if last is not None and crashed_after else 0
@@ -460,7 +555,10 @@ def state(
         idle_note = "Сьогодні робот ще не запускався — можна натискати «Старт»."
     eta = ""
     if can_start and queue_today:
-        eta = f"Опублікує до {queue_today} сьогодні (≈ {span(queue_today * POST_MINUTES, rough=True)})"
+        eta = (
+            f"Сьогодні опублікує до {plural_cards(queue_today)} "
+            f"(≈ {span(queue_today * POST_MINUTES, rough=True)})"
+        )
     rehearsal, rehearsal_problems = rehearsal_text(rehearse.last_summary(), now)
     return State(
         code, text, today, day_limit, approved, can_start, why_not, wait, last_text, buttons,

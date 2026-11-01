@@ -60,7 +60,7 @@ def test_daily_limit_exhausted_cannot_start(conn, root, lock_file):
         conn.execute("INSERT INTO items (folder_name, status, created_at, updated_at) "
                      "VALUES ('2', 'approved', 'x', 'x')")  # fmt: skip
     s = state(conn, lock_file, day_limit=1)
-    assert not s.can_start and "На сьогодні все: 1 з 1" in s.why_not
+    assert not s.can_start and "робот уже почав 1 публікацію, а ліміт на добу — 1" in s.why_not
     assert (s.published_today, s.day_limit) == (1, 1)
 
 

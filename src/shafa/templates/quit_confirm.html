@@ -3,7 +3,8 @@
 {% block status %}{% endblock %}
 {% block main %}
 <section class="problem-box confirm">
-  <p class="problem">Закрити програму? Бот у Telegram перестане приймати пости, а продане не зніматиметься з сайту, доки програма закрита. Щоб усе працювало — просто згорніть вікно.</p>
+  <p class="problem">Закрити програму? Бот у Telegram перестане приймати пости, а продане не зніматиметься з сайту, доки програма закрита. Нічна пробна перевірка не пройде. Щоб усе працювало — просто згорніть вікно.</p>
+  {% if robot_working %}<p class="problem">Робот зараз публікує — він допише поточний товар і зупиниться.</p>{% endif %}
   <form method="post" action="/quit" class="decide">
     <input type="hidden" name="token" value="{{ token }}">
     <input type="hidden" name="sure" value="1">

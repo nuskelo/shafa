@@ -171,7 +171,7 @@ def check(form: dict[str, str]) -> tuple[dict[str, str], dict[str, str], list[st
             values[option.name] = "1" if raw else "0"
         elif option.kind == "int":
             low, high = _LIMITS[option.name]
-            if not raw.isdigit() or not low <= int(raw) <= high:
+            if not (raw.isascii() and raw.isdigit()) or not low <= int(raw) <= high:
                 errors[option.name] = f"ціле число від {low} до {high}"
             else:
                 values[option.name] = str(int(raw))

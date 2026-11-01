@@ -55,7 +55,7 @@
           <a class="button" href="/refill">Заповнити ШІ заново ({{ ai.refillable }}, платно)</a>
           {% endif %}
         </form>
-        <span class="tile-sub">{% if ai.pending %}ШІ працює… можна натиснути, щоб додати нові пости.{% else %}Натискайте після нових постів у каналі — без цього нові пости не стануть Картками. Поки ШІ заповнює — натискати не треба.{% endif %}</span>
+        <span class="tile-sub">{% if ai.pending %}ШІ працює… можна натиснути, щоб додати нові пости.{% else %}Натискайте після нових постів у каналі. На ШІ вони підуть через {{ ai.wait_text }} — це нормально, що одразу не з'являються.{% endif %}</span>
         {% if (ai.recheckable or ai.refillable) and not ai.busy %}<span class="tile-sub">Програму оновили — натисніть, щоб Картки врахували зміни.</span>{% endif %}
         <details class="more-info" data-key="ai">
           <summary>Детальніше</summary>
@@ -146,7 +146,7 @@
     {% if "resume" in robot.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
     {% if "stop" in robot.buttons %}<button name="action" value="stop" class="reject">Стоп</button>{% endif %}
     {% if "login" in robot.buttons %}<button name="action" value="login">Увійти на Шафу</button>{% endif %}
-    {% if "login_done" in robot.buttons %}<button name="action" value="login_done">Я увійшов — закрити вікно</button>{% endif %}
+    {% if "login_done" in robot.buttons %}<button name="action" value="login_done">Вхід виконано — закрити вікно</button>{% endif %}
     {% if "start" in robot.buttons %}
     <button name="action" value="start" class="approve"{% if not robot.can_start %} disabled{% endif %}>Старт</button>
     {% endif %}

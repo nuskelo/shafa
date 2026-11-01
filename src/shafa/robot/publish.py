@@ -872,6 +872,10 @@ class Run:
 
     def _problem(self, report: Report, card: review.Card, source: str, code: str, text: str):
         if _problem(self.conn, card.id, source, code, text):
+            with self.conn:  # UX-007 R-A3: сторінка сесії показує й Картки, що пішли в Проблеми
+                self.conn.execute(
+                    "UPDATE items SET session_id = ? WHERE id = ?", (report.session_id, card.id)
+                )
             report.problems.append((card.post_id, code, text))
             self.log(f"Пост {card.post_id}: {text}")
             events.emit("robot.problem", f"{_label(card)}: {text}", data={"code": code})
@@ -1193,7 +1197,7 @@ def _decide(
 
 # UX-004 (B5): «Опублікувала вручну» — коди Проблем, які робот не розв'яже сам, а людина може
 # опублікувати товар на Шафі руками й вставити посилання (як «На Шафі є» для `UNSURE`).
-HAND_CODES = (*UNSURE, "many_items", "no_section", "possible_duplicate")
+HAND_CODES = (*UNSURE, "many_items", "no_section", "possible_duplicate", "no_text")
 
 
 def can_publish_by_hand(code: str | None) -> bool:
@@ -1283,6 +1287,9 @@ def other_item(conn: sqlite3.Connection, item_id: int) -> str:
 ARCHIVABLE = (
     "possible_duplicate", "already_published", listings_mod.DECLINED_CODE, *review.NO_RESTORE,
     "size_gone", "photos_missing",
+    # UX-007 R-B5: Проблеми про папку, текст, ШІ — теж можна прибрати («В архів»)
+    "bad_folder_name", "duplicate_post", "post_not_found", "no_text", "no_price", "no_photos",
+    "too_many_photos", "folder_missing", "ai_error", "stale_rules",
 )  # fmt: skip
 
 
