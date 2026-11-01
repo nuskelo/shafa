@@ -377,6 +377,8 @@ class AiState:
     error: bool = False  # немає ключа, бюджет, збій — єдине, що фарбує кружок жовтим
     detail: str = ""  # технічна причина — лише під «Детальніше» (для Власника)
     wait_text: str = ""  # «7 днів»
+    to_check: int = 0  # DES-002: Картки «На перевірку» — число для прямокутника (текст у counters)
+    held_count: int = 0  # DES-002: скільки готових Карток чекають своєї черги (текст у `held`)
 
 
 @dataclass(frozen=True)
@@ -900,6 +902,7 @@ class App:
             ).fetchone()[0],
             error=self.ai_note_error,
             wait_text=batch.days_word(lim.wait_days),
+            to_check=to_check, held_count=held,
         )  # fmt: skip
         state.counters = [
             (text, href)

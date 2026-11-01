@@ -107,6 +107,12 @@ class State:
     mini: str = ""  # «Робот: 4 з 19 · ≈ 1 год» — для міні-панелі на Картці
     never_logged: bool = False  # профілю робота ще немає — показати «Увійти на Шафу»
     details: list[str] = field(default_factory=list)  # «Детальніше»: пояснення й сирі рядки
+    # DES-002: ті самі розрахунки, що в eta_text і progress, але окремими значеннями для цифр панелі
+    eta_cards: str = ""  # «5 Карток» — що опублікує сьогодні (як у eta_text)
+    eta_span: str = ""  # «15 хв» — оцінка часу на ці Картки
+    plan: int | None = None  # скільки Карток у плані поточної сесії
+    handled: int = 0  # скільки з них оброблено
+    left_text: str = ""  # «1 год 20 хв» — скільки ще; порожньо на паузі й коли менше хвилини
 
     @property
     def groups_text(self) -> str:
@@ -497,8 +503,10 @@ def state(
     if code == "paused":
         doing = ""  # на паузі робот нічого не робить
     progress, mini = "", ""
+    plan_n, handled_n, left_text = None, 0, ""
     if data.get("plan"):
         plan, handled = int(data["plan"]), int(data.get("handled") or 0)
+        plan_n, handled_n = plan, handled
         began = _stamp(open_session["started_at"], now)
         elapsed = max((now - began).total_seconds() / 60, 0) if began else 0
         elapsed = max(elapsed - paused_minutes(open_session["id"], now), 0)  # R-A2
@@ -511,8 +519,9 @@ def state(
             progress = f"Публікує: {handled} з {plan} на сьогодні · працює {span(elapsed)}"
             mini = f"Робот: {handled} з {plan}"
             if left >= 1:
-                progress += f" · ще ≈ {span(left, rough=True)}"
-                mini += f" · ≈ {span(left, rough=True)}"
+                left_text = span(left, rough=True)
+                progress += f" · ще ≈ {left_text}"
+                mini += f" · ≈ {left_text}"
 
     text = TEXTS[code]
     if code in ("pausing", "stopping"):
@@ -553,12 +562,11 @@ def state(
         last is None or (_stamp(last["started_at"], now) or now).date() != now.date()
     ):
         idle_note = "Сьогодні робот ще не запускався — можна натискати «Старт»."
-    eta = ""
+    eta, eta_cards, eta_span = "", "", ""
     if can_start and queue_today:
-        eta = (
-            f"Сьогодні опублікує до {plural_cards(queue_today)} "
-            f"(≈ {span(queue_today * POST_MINUTES, rough=True)})"
-        )
+        eta_cards = plural_cards(queue_today)
+        eta_span = span(queue_today * POST_MINUTES, rough=True)
+        eta = f"Сьогодні опублікує до {eta_cards} (≈ {eta_span})"
     rehearsal, rehearsal_problems = rehearsal_text(rehearse.last_summary(), now)
     return State(
         code, text, today, day_limit, approved, can_start, why_not, wait, last_text, buttons,
@@ -567,6 +575,7 @@ def state(
         last["id"] if last is not None else None,
         int(last["problems"] or 0) if last is not None else 0,
         idle_note, queue_today, eta, progress, doing, previous, mini, never_logged and idle, details,
+        eta_cards, eta_span, plan_n, handled_n, left_text,
     )  # fmt: skip
 
 
