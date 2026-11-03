@@ -245,11 +245,11 @@ class GenderChoice(NamedTuple):
 GENDER_PAIRS = (
     (
         (("women", catalog.WOMEN, "Це жіночі"), ("men", catalog.MEN, "Це чоловічі")),
-        "Перевір: жіночі чи чоловічі?",
+        "Перевірте: жіночі чи чоловічі?",
     ),
     (
         (("girls", catalog.GIRLS, "Для дівчаток"), ("boys", catalog.BOYS, "Для хлопчиків")),
-        "Перевір: для дівчаток чи для хлопчиків?",
+        "Перевірте: для дівчаток чи для хлопчиків?",
     ),
 )
 
@@ -426,7 +426,7 @@ def _check_price(fields: dict[str, FieldView], edits: dict[str, Any], post_text:
         return
     reason = (
         f"Ціна {field.value} грн дуже відрізняється від поста "
-        f"({posted} грн → на Шафі {expected}). Перевір."
+        f"({posted} грн → на Шафі {expected}). Перевірте."
     )
     fields["price"] = replace(field, yellow=True, reason=reason)
 

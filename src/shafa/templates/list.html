@@ -41,7 +41,7 @@
 </div>
 
 {% if not cards %}
-<p class="empty">{% if query %}Нічого не знайдено.{% elif empty_note %}{{ empty_note[0] }} <a href="{{ empty_note[1] }}">{{ empty_note[2] }}</a>{% elif chosen or kind %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
+<p class="empty">{% if query %}Нічого не знайдено.{% if empty_note %} {{ empty_note[0] }} <a href="{{ reset_url }}">{{ empty_note[2] }}</a>{% endif %}{% elif empty_note %}{{ empty_note[0] }} <a href="{{ empty_note[1] }}">{{ empty_note[2] }}</a>{% elif chosen or kind %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
 {% endif %}
 
 {% block cards %}

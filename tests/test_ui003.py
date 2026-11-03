@@ -238,7 +238,7 @@ def test_bot_token_missing_and_rights_error(ready, monkeypatch):
     check = ready.run(bot_rights=no_rights)["Бот"]
     assert check.status == FAIL and "не адміністратор" in check.text
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN")
-    assert ready.run()["Бот"].text == "Бот не підключений"
+    assert ready.run()["Бот"].text == "не підключений"
 
 
 def test_bot_process_states(ready):
@@ -273,7 +273,7 @@ def test_bot_not_running(ready, tmp_path):
 def test_site_skip_missing_key_errors_ok(ready, monkeypatch):
     assert ready.run()["Сайт"].status == SKIP
     monkeypatch.setenv("SHAFA_SITE_SEND", "так")
-    assert ready.run()["Сайт"].text == "Сайт не підключений"
+    assert ready.run()["Сайт"].text == "не підключений"
     monkeypatch.setenv("SITE_INTEGRATION_KEY", SITE_KEY)
     assert ready.run()["Сайт"].status == OK
 

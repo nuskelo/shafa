@@ -276,7 +276,7 @@ def _bot(ctx: _Ctx) -> Check:
 
     token = config.setting(run.TOKEN)
     if token is None:
-        return Check(BOT, FAIL, "Бот не підключений", ASK_OWNER)
+        return Check(BOT, FAIL, "не підключений", ASK_OWNER)
     ctx.secrets.append(token)
     try:
         name = _limited(ctx.deps.bot_rights, token, config.setting(run.CHANNEL))
@@ -292,7 +292,7 @@ def _site(ctx: _Ctx) -> Check:
         return Check(SITE, SKIP, "Відправка на сайт вимкнена")
     key = site.key()
     if key is None:
-        return Check(SITE, FAIL, "Сайт не підключений", ASK_OWNER)
+        return Check(SITE, FAIL, "не підключений", ASK_OWNER)
     ctx.secrets.append(key)
     try:
         _limited(ctx.deps.site_get, key)

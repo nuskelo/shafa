@@ -94,6 +94,11 @@ def cards(n: int) -> str:
     return f"{n} {word}"
 
 
+def cards_acc(n: int) -> str:
+    """Знахідний відмінок: «1 Картку», «2 Картки», «5 Карток» (UX-008, R-B19)."""
+    return cards(n).replace("Картка", "Картку")
+
+
 def clean_url(url: str) -> str:
     """Посилання без параметрів і якоря (як у `robot-run.log`)."""
     return url.split("?", 1)[0].split("#", 1)[0]

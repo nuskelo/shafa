@@ -69,8 +69,8 @@
   {% elif f.spec.widget == "yesno" %}
   <select id="f-{{ name }}" name="{{ name }}"{{ off }}>
     <option value="">—</option>
-    <option value="yes"{% if f.inputs[0] == "yes" %} selected{% endif %}>так</option>
-    <option value="no"{% if f.inputs[0] == "no" %} selected{% endif %}>ні</option>
+    <option value="yes"{% if f.inputs[0] == "yes" %} selected{% endif %}>так{% if name == "teen" %} — для підлітків{% endif %}</option>
+    <option value="no"{% if f.inputs[0] == "no" %} selected{% endif %}>ні{% if name == "teen" %} — для дітей{% endif %}</option>
   </select>
   {% elif f.spec.widget == "price" %}
   <span class="money"><input id="f-{{ name }}" name="{{ name }}" value="{{ f.inputs[0] }}" inputmode="numeric" class="short"{{ off }}><span class="unit">грн</span></span>
