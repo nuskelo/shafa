@@ -210,9 +210,9 @@ def test_comments_never_came_seller_and_owner_told_once(conn, bot, tg, upd, cloc
 # --- C35, C36: пост не знайдено, довідка ---
 
 
-def test_queue_none_points_to_new_preview_button(conn, bot):
-    assert "а під новим прев'ю натисни «📦 Пост уже в каналі»" in core.TEXTS["queue_none"]
-    assert "а під новими прев'ю натисни «📦 Пост уже в каналі»" in core.TEXTS["queue_all_missing"]
+def test_queue_none_says_probably_sold(conn, bot):
+    assert "Мабуть, уже продано — тоді натисни «Скасувати» під прев'ю" in core.TEXTS["queue_none"]
+    assert "Мабуть, уже продано" in core.TEXTS["queue_all_missing"]
 
 
 def test_help_text(conn, bot, tg, upd, clock, monkeypatch):

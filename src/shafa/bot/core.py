@@ -97,6 +97,7 @@ NO_EDIT = "noedit"
 PUBLISH_ALL = "puball"
 CANCEL_ALL = "cancelall"
 QUEUE_ALL = "queueall"  # BOT-016: «Усі лише в чергу Шафи» у зведенні чернеток
+CANCEL_MISSING = "cm"  # BOT-017: «🗑 Скасувати ці N» під підсумком; id чернеток — у самій кнопці
 QUEUE_ALL_NAMES = 10  # скільки не знайдених постів називає підсумок «Усіх лише в чергу»
 PUBLISH_ALL_PAUSE = 3  # секунд між постами «Опублікувати всі»
 SUMMARY_DELAY = timedelta(seconds=2)  # «Чернеток: N» — після останнього прев'ю, без мигтіння
@@ -157,8 +158,10 @@ TEXTS = {
     "queue_all_nothing": "Немає прев'ю, які можна поставити в чергу.",
     "queue_all_done": "У черзі Шафи: {k} ({numbers}).",
     "queue_all_known": "Уже були в черзі або опубліковані: {numbers}.",
-    "queue_all_missing": "Не знайшов: {m} — {names} — перешли ці пости з каналу, а під новими "
-    "прев'ю натисни «📦 Пост уже в каналі».",
+    "queue_all_missing": "Не знайшов у каналі: {m} — {names}. Мабуть, уже продано (проданий пост "
+    "видаляють з каналу). Продано — натисни «🗑 Скасувати ці {m}». Не продано — скажи Власнику.",
+    "cancel_missing": "🗑 Скасувати ці {k}",
+    "cancel_missing_done": "Скасовано: {k}. Нічого не опубліковано.",
     "queue_all_dropped": "Telegram не відповідає — спробуй пізніше. Не шукав ще {n} — вони "
     "лишились з кнопками.",
     "queue_all_failed": "Не вийшло: {n} (причини — у повідомленнях вище) — вони лишились з кнопками.",
@@ -171,8 +174,8 @@ TEXTS = {
     "comments_failed": "Фото в коментарі до поста {link} так і не додались — додай їх руками в "
     "коментарях до поста.",
     "queue_search": "Шукаю пост у каналі — це може тривати кілька хвилин…",
-    "queue_none": "Не знайшов у каналі пост з таким описом. Перешли мені цей пост з каналу, а під "
-    "новим прев'ю натисни «📦 Пост уже в каналі».",
+    "queue_none": "Не знайшов у каналі пост з таким описом. Мабуть, уже продано — тоді натисни "
+    "«Скасувати» під прев'ю. Не продано — скажи Власнику.",
     "queue_known": "Пост {n} уже в черзі або опубліковано — нічого не змінюю.",
     "queue_done": "Пост {n} від {date} — у черзі Шафи, фото: {k}. На Шафу — не раніше {until}.",
     "queued": "Цей пост уже в черзі Шафи.",
@@ -886,6 +889,9 @@ class Bot:
             return
         if action in (PUBLISH_ALL, CANCEL_ALL, QUEUE_ALL):
             self._all(update_id, query, chat["id"], action)
+            return
+        if action == CANCEL_MISSING:
+            self._cancel_missing(update_id, query, chat["id"], raw_id)
             return
         draft = None
         if raw_id.isdigit():
@@ -1720,7 +1726,69 @@ class Bot:
         if waiting:
             names = ", ".join(f"«{first_line(d['id'], self)}»" for d in waiting)
             lines.append(TEXTS["all_waiting"].format(names=names))
-        self.say(chat_id, "\n".join(lines) or TEXTS["queue_all_nothing"])
+        markup = cancel_missing_markup(missing) if missing else None
+        self.say(chat_id, "\n".join(lines) or TEXTS["queue_all_nothing"], markup)
+
+    def _cancel_missing(self, update_id: int, query: dict, chat_id: int, raw: str) -> None:
+        """BOT-017: скасувати рівно ті чернетки, яких не знайшли в каналі, — лише ще відкриті."""
+        self._mark(update_id)
+        pressed = (query.get("message") or {}).get("message_id")
+        if pressed:
+            self._drop_buttons(chat_id, pressed)
+        ids = []
+        for part in raw.split(","):
+            try:
+                ids.append(int(part, 36))
+            except ValueError:
+                continue
+        marks = ", ".join("?" * len(OPEN))
+        drafts = []
+        for draft_id in ids:
+            draft = self.conn.execute(
+                f"SELECT * FROM bot_drafts WHERE id = ? AND chat_id = ? AND state IN ({marks})",
+                (draft_id, chat_id, *OPEN),
+            ).fetchone()
+            if draft is not None:
+                drafts.append(draft)
+        with self.conn:
+            for draft in drafts:
+                self.conn.execute(
+                    f"UPDATE bot_drafts SET state = 'canceled', updated_at = ? "
+                    f"WHERE id = ? AND state IN ({marks})",
+                    (self._stamp(), draft["id"], *OPEN),
+                )
+        for draft in drafts:
+            for message_id in (draft["preview_message_id"], draft["edit_message_id"]):
+                if message_id:
+                    self._drop_buttons(chat_id, message_id)
+        self._answer(query.get("id", ""), TEXTS["canceled"] if drafts else TEXTS["gone"])
+        if drafts:
+            self.say(chat_id, TEXTS["cancel_missing_done"].format(k=len(drafts)))
+
+
+def cancel_missing_markup(missing: list[int]) -> dict:
+    """Кнопка «🗑 Скасувати ці N»; id — base36 у `callback_data` (≤ 64 байти). Не вмістились — решта
+    лишається з власними кнопками, а число на кнопці чесне."""
+    ids: list[str] = []
+    for draft_id in missing:
+        code = _base36(draft_id)
+        if len(f"{CANCEL_MISSING}:{','.join([*ids, code])}".encode()) > 64:
+            break
+        ids.append(code)
+    text = TEXTS["cancel_missing"].format(k=len(ids))
+    return {
+        "inline_keyboard": [[{"text": text, "callback_data": f"{CANCEL_MISSING}:{','.join(ids)}"}]]
+    }
+
+
+def _base36(number: int) -> str:
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out = ""
+    while True:
+        number, rest = divmod(number, 36)
+        out = digits[rest] + out
+        if not number:
+            return out
 
 
 def first_line(draft_id: int, bot: "Bot") -> str:
