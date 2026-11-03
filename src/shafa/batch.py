@@ -26,7 +26,7 @@ from typing import Any
 
 import anthropic
 
-from shafa import ai, config, events, fill, rules, variants
+from shafa import ai, config, events, fill, rules, summer, variants
 from shafa.db import Status, now
 from shafa.folders import OLD_PREFIX, is_old
 from shafa.robot import publish
@@ -59,6 +59,7 @@ class Limits:
     old_per_day: int = (
         10  # «Старих на день» (робот): ШІ готує старі не більше ніж на AHEAD_DAYS днів
     )
+    summer_until: tuple[int, int] | None = None  # (місяць, день) виходу літнього; None — не чекає
 
 
 def _int_setting(name: str, default: int, low: int, high: int) -> int:
@@ -86,11 +87,16 @@ def limits() -> Limits:
         old_per_day = publish.group_limits().old
     except publish.SetupError as error:
         raise SetupError(str(error)) from None
+    try:
+        summer_until = summer.configured()
+    except summer.DateError:
+        raise SetupError(f"{summer.SETTING} — дата ДД.ММ, наприклад 01.03, або порожньо") from None
     return Limits(
         _int_setting(WAIT_SETTING, WAIT_DAYS, 0, 60),
         _int_setting(BATCH_SETTING, BATCH_LIMIT, 1, 500),
         money,
         old_per_day,
+        summer_until,
     )
 
 
@@ -118,12 +124,18 @@ class Queue:
     ready: list[sqlite3.Row]  # можна відправляти, найстаріші пости першими
     young: int  # новий пост ще молодший за `wait_days` (старі не чекають)
     pending: int  # чекають результату пакета
+    summer: int = 0  # літні Картки, що чекають весни (CORE-020); у `ready` і `young` не рахуються
 
 
-def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
+def queue(
+    conn: sqlite3.Connection,
+    today: datetime,
+    wait_days: int,
+    summer_until: tuple[int, int] | None = None,
+) -> Queue:
     rows = conn.execute(
         f"""
-        SELECT items.id, items.folder_name, items.post_id, items.refill_at, posts.date
+        SELECT items.id, items.folder_name, items.post_id, items.refill_at, posts.date, posts.text
         FROM items JOIN posts USING (post_id)
         WHERE items.status = ? AND items.id NOT IN ({fill.IN_BATCH})
         ORDER BY items.refill_at IS NULL, items.folder_name LIKE '{OLD_PREFIX}%',
@@ -132,6 +144,10 @@ def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
         """,
         (Status.NEW,),
     ).fetchall()
+    held_summer = 0
+    if summer.waiting(today, summer_until):  # «Перезаповнити» вже пройшло ШІ — не відкладаємо
+        kept = [r for r in rows if r["refill_at"] or not summer.is_summer(r["text"])]
+        held_summer, rows = len(rows) - len(kept), kept
     ready = [
         r
         for r in rows
@@ -143,7 +159,7 @@ def queue(conn: sqlite3.Connection, today: datetime, wait_days: int) -> Queue:
     pending = conn.execute(
         "SELECT count(DISTINCT item_id) FROM ai_batch_items WHERE state = 'pending'"
     ).fetchone()[0]
-    return Queue(ready, len(rows) - len(ready), pending)
+    return Queue(ready, len(rows) - len(ready), pending, held_summer)
 
 
 def old_ahead(conn: sqlite3.Connection) -> int:
@@ -241,6 +257,7 @@ class Plan:
     over_budget: bool = False  # зупинились через ліміт грошей
     young: int = 0
     pending: int = 0
+    summer: int = 0  # літні Картки, що чекають весни (CORE-020)
 
     @property
     def estimate(self) -> int:
@@ -255,10 +272,10 @@ def prepare(
     limit: int | None = None,
 ) -> Plan:
     """Зібрати запити пакета в межах лімітів Карток і грошей. Нічого не надсилає."""
-    q = queue(conn, today, lim.wait_days)
+    q = queue(conn, today, lim.wait_days, lim.summer_until)
     cap = min(lim.batch_limit, limit or lim.batch_limit)
     budget = budget_left(conn, today, lim)
-    plan = Plan(young=q.young, pending=q.pending)
+    plan = Plan(young=q.young, pending=q.pending, summer=q.summer)
     # старі — лише наперед (CORE-006): бланки на ≤ AHEAD_DAYS днів публікації, щоб не платити за всі
     room = old_room(conn, lim)
     for row in q.ready:
@@ -683,6 +700,13 @@ UNCERTAIN_TEXT = "ШІ не відповів вчасно — перевірю �
 
 def held_text(held: int) -> str:
     return HELD_TEXT.format(n=held, days=days_word(AHEAD_DAYS))
+
+
+def summer_text(count: int, until: tuple[int, int] | None) -> str | None:
+    """CORE-020, для панелі: «Літнє взуття чекає до 01.03: 163»."""
+    if not count or until is None:
+        return None
+    return f"Літнє взуття чекає до {summer.show(until)}: {count}"
 
 
 def sent_text(sent: Sent, lim: Limits, *, panel: bool = False) -> str:

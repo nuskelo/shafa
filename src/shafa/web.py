@@ -379,6 +379,7 @@ class AiState:
     wait_text: str = ""  # «7 днів»
     to_check: int = 0  # DES-002: Картки «На перевірку» — число для прямокутника (текст у counters)
     held_count: int = 0  # DES-002: скільки готових Карток чекають своєї черги (текст у `held`)
+    summer: str | None = None  # CORE-020: «Літнє взуття чекає до 01.03: N»
 
 
 @dataclass(frozen=True)
@@ -888,7 +889,7 @@ class App:
         except batch.SetupError as error:
             return AiState(busy=self.ai_busy, note=AI_SETTINGS_TEXT, error=True, detail=str(error))
         today = self.today()
-        q = batch.queue(conn, today, lim.wait_days)
+        q = batch.queue(conn, today, lim.wait_days, lim.summer_until)
         active, done = batch.active(conn), batch.last_finished(conn)
         to_check = review.counts(conn)[Status.REVIEW]
         held = batch.held_back(conn, q.ready, lim)
@@ -903,6 +904,7 @@ class App:
             error=self.ai_note_error,
             wait_text=batch.days_word(lim.wait_days),
             to_check=to_check, held_count=held,
+            summer=batch.summer_text(q.summer, lim.summer_until),
         )  # fmt: skip
         state.counters = [
             (text, href)

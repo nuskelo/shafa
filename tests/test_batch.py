@@ -477,10 +477,10 @@ def test_uncertain_batch_not_found_in_a_day_returns_cards(conn, root):
 
 
 def test_limits_from_settings(monkeypatch):
-    assert batch.limits() == batch.Limits(7, 50, 3_000_000)
+    assert batch.limits() == batch.Limits(7, 50, 3_000_000, summer_until=(3, 1))
     monkeypatch.setenv("SHAFA_AI_BATCH_LIMIT", "20")
     monkeypatch.setenv("SHAFA_AI_DAILY_USD", "1,5")
-    assert batch.limits() == batch.Limits(7, 20, 1_500_000)
+    assert batch.limits() == batch.Limits(7, 20, 1_500_000, summer_until=(3, 1))
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from shafa import config, places, site
+from shafa import config, places, site, summer
 from shafa.batch import BATCH_SETTING, DAILY_USD, MONEY_SETTING, WAIT_DAYS, WAIT_SETTING
 from shafa.robot import listings
 from shafa.robot.publish import (
@@ -31,7 +31,7 @@ class Option:
     label: str
     hint: str
     default: str
-    kind: str  # int / money / path / flag
+    kind: str  # int / money / date / path / flag
 
 
 OPTIONS = (
@@ -65,6 +65,13 @@ OPTIONS = (
         "від 0 до 60; за цей час частина пар продається — і не коштує грошей",
         str(WAIT_DAYS),
         "int",
+    ),
+    Option(
+        summer.SETTING,
+        "Літнє взуття (босоніжки, шльопанці…) — на Шафу з",
+        "ДД.ММ; з 1 вересня до цієї дати літнє чекає. Порожньо — не відкладати",
+        summer.DEFAULT,
+        "date",
     ),
     Option(
         BATCH_SETTING,
@@ -135,6 +142,8 @@ def current() -> dict[str, str]:
     values = {o.name: config.setting(o.name) or o.default for o in OPTIONS}
     if not values[ROOT_SETTING]:
         values[ROOT_SETTING] = str(places.default_root())
+    if values[summer.SETTING].lower() == summer.OFF:  # у полі — порожньо
+        values[summer.SETTING] = ""
     for option in OPTIONS:
         if option.kind == "flag":
             flag = (values[option.name] or "").lower() in ("1", "так", "yes", "true")
@@ -175,6 +184,14 @@ def check(form: dict[str, str]) -> tuple[dict[str, str], dict[str, str], list[st
                 errors[option.name] = f"ціле число від {low} до {high}"
             else:
                 values[option.name] = str(int(raw))
+        elif option.kind == "date":
+            if not raw:  # порожнє = не відкладати; у `.env` порожнє означало б «типово»
+                values[option.name] = summer.OFF
+                continue
+            try:
+                values[option.name] = summer.show(summer.parse(raw))
+            except summer.DateError:
+                errors[option.name] = "дата ДД.ММ, наприклад 01.03, або порожньо"
         elif option.kind == "money":
             # «$», пробіли й кома — як пише людина: «2,5 $»
             cleaned = raw.replace("$", "").replace("\xa0", "").replace(" ", "").replace(",", ".")
