@@ -208,7 +208,9 @@ def test_not_found_writes_nothing_and_asks_to_forward(conn, bot, tg, upd, clock,
     assert conn.execute("SELECT count(*) FROM site_jobs").fetchone()[0] == 0
     assert not list(root.iterdir())
     assert state(conn) == "preview"  # чернетка лишається з кнопками
-    assert tg.texts(SELLER)[-1].startswith("Не знайшов у каналі пост з таким описом. Перешли мені")
+    assert tg.texts(SELLER)[-1].startswith(
+        "Не знайшов у каналі пост з таким описом. Мабуть, уже продано"
+    )
     assert sent_to_channel(tg) == []
 
 

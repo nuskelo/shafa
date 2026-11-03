@@ -134,8 +134,8 @@ def test_not_found_stays_preview_and_is_named(conn, bot, tg, upd, clock):
     assert len(tg.forwards) == len(set(tg.forwards))  # навіть не знайдена — без другого перегляду
     answer = last_text(tg)
     assert "У черзі Шафи: 2 (7001, 7002)." in answer
-    assert "Не знайшов: 1 — «Шкіряна сумка Furla. 1800грн» — перешли ці пости з каналу" in answer
-    assert "під новими прев'ю натисни «📦 Пост уже в каналі»" in answer
+    assert "Не знайшов у каналі: 1 — «Шкіряна сумка Furla. 1800грн». Мабуть, уже продано" in answer
+    assert "натисни «🗑 Скасувати ці 1»" in answer
     assert [r["post_id"] for r in posts(conn)] == [7000, 7001, 7002]
     assert not (conn.execute("SELECT 1 FROM site_jobs WHERE post_id = 7003").fetchone())
 
@@ -194,3 +194,77 @@ def test_publish_all_still_works(conn, bot, tg, upd, clock):
     three_previews(upd, bot, tg, clock)
     press_all(upd, bot, tg, conn)
     assert [state(conn, i) for i in (1, 2, 3)] == ["published"] * 3
+
+
+# --- BOT-017: «мабуть, уже продано» і «🗑 Скасувати ці N» ---
+
+
+def last_markup(tg):
+    return [p for m, p in tg.calls if m == "sendMessage" and p["chat_id"] == SELLER][-1]["markup"]
+
+
+def press_cancel_missing(upd, bot, data, message_id=555):
+    query = {
+        "id": "cb", "from": {"id": SELLER}, "data": data,
+        "message": {"message_id": message_id, "chat": {"id": SELLER, "type": "private"}},
+    }  # fmt: skip
+    bot.handle(upd(callback_query=query))
+
+
+def five_previews(upd, bot, tg, clock):
+    texts = TEXTS + ["Кеди Nike 39 розмір. 900грн", "Ботильйони Zara 38 розмір. 700грн"]
+    three_previews(upd, bot, tg, clock, texts=texts)
+
+
+def test_cancel_missing_cancels_only_those_two(conn, bot, tg, upd, clock):
+    old_post(conn)
+    in_channel(tg, numbers=(7001, 7002, 7003), texts=TEXTS)  # кедів і ботильйонів у каналі немає
+    five_previews(upd, bot, tg, clock)
+    queue_all(upd, bot, tg, conn)
+    assert [state(conn, i) for i in (1, 2, 3, 4, 5)] == ["queued"] * 3 + ["preview"] * 2
+    assert "Скасувати ці 2" in last_text(tg)
+    button = last_markup(tg)["inline_keyboard"][0][0]
+    assert button["text"] == "🗑 Скасувати ці 2" and len(button["callback_data"].encode()) <= 64
+
+    press_cancel_missing(upd, bot, button["callback_data"])
+
+    assert [state(conn, i) for i in (1, 2, 3, 4, 5)] == ["queued"] * 3 + ["canceled"] * 2
+    assert last_text(tg) == "Скасовано: 2. Нічого не опубліковано."
+
+
+def test_cancel_missing_twice_changes_nothing(conn, bot, tg, upd, clock):
+    old_post(conn)
+    in_channel(tg, numbers=(7001, 7002), texts=TEXTS[:2])
+    three_previews(upd, bot, tg, clock)
+    queue_all(upd, bot, tg, conn)
+    data = last_markup(tg)["inline_keyboard"][0][0]["callback_data"]
+    press_cancel_missing(upd, bot, data)
+    sent = len(tg.texts(SELLER))
+
+    press_cancel_missing(upd, bot, data)
+
+    assert len(tg.texts(SELLER)) == sent
+    assert [state(conn, i) for i in (1, 2, 3)] == ["queued", "queued", "canceled"]
+
+
+def test_cancel_missing_skips_draft_published_meanwhile(conn, bot, tg, upd, clock):
+    old_post(conn)
+    in_channel(tg, numbers=(7001,), texts=TEXTS[:1])
+    three_previews(upd, bot, tg, clock)
+    queue_all(upd, bot, tg, conn)
+    data = last_markup(tg)["inline_keyboard"][0][0]["callback_data"]
+    conn.execute("UPDATE bot_drafts SET state = 'published' WHERE id = 2")
+    conn.commit()
+
+    press_cancel_missing(upd, bot, data)
+
+    assert [state(conn, i) for i in (1, 2, 3)] == ["queued", "published", "canceled"]
+    assert last_text(tg) == "Скасовано: 1. Нічого не опубліковано."
+
+
+def test_single_draft_not_found_text(conn, bot, tg, upd, clock):
+    old_post(conn)
+    in_channel(tg, numbers=(), texts=())
+    three_previews(upd, bot, tg, clock)
+    press(upd, bot, tg, "queue", 3)
+    assert "Мабуть, уже продано — тоді натисни «Скасувати» під прев'ю." in last_text(tg)
