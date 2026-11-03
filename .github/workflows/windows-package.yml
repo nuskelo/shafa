@@ -61,7 +61,7 @@ jobs:
           if ($url -notmatch '^http://127\.0\.0\.1:\d+/$') { throw "адреса не 127.0.0.1: $url" }
           $page = Invoke-WebRequest -Uri ($url + "review") -UseBasicParsing
           if ($page.StatusCode -ne 200) { throw "екран не відповів" }
-          if ($page.Content -notmatch "Бот: не налаштований") { throw "бот без налаштувань має бути вимкнений" }
+          if ($page.Content -notmatch "Бот:(</b>)?\s*не налаштований") { throw "бот без налаштувань має бути вимкнений" }
           if (Test-Path (Join-Path $data "bot.json")) { throw "бот запустився без налаштувань" }
           if (Test-Path (Join-Path $data "robot.json")) { throw "робот запустився" }
           & (Join-Path $py "python.exe") -m shafa quit
