@@ -166,7 +166,7 @@ def test_saved_without_price_says_so_and_approve_names_the_price(conn, root, app
 def test_gender_buttons_change_only_the_top_group(conn, root, app):
     item = gender_card(conn, root)
     page = page_of(app, item)
-    assert "Перевір: жіночі чи чоловічі?" in page
+    assert "Перевірте: жіночі чи чоловічі?" in page
     assert 'value="gender:women"' in page and 'value="gender:men"' in page
     assert "Це жіночі" in page and "Це чоловічі" in page
     assert 'value="confirm:section"' in page  # «Так, вірно» лишається
@@ -210,7 +210,7 @@ def test_kids_pair_and_unrelated_sections(conn, root, monkeypatch):
         catalog, "sections", lambda: (*every, "Дитячий одяг / Для хлопчиків / Взуття / Кросівки")
     )
     question, choices = review.gender_choices(catalog.find_section(kids))
-    assert question == "Перевір: для дівчаток чи для хлопчиків?"
+    assert question == "Перевірте: для дівчаток чи для хлопчиків?"
     assert [(c.label, c.path) for c in choices] == [
         ("Для дівчаток", kids),
         ("Для хлопчиків", "Дитячий одяг / Для хлопчиків / Взуття / Кросівки"),
@@ -238,7 +238,7 @@ def test_price_far_from_post_is_yellow_until_confirmed(conn, root, app):
     card = review.load_card(conn, item)
     assert card.fields["price"].value == 5 and card.fields["price"].yellow
     page = page_of(app, item)
-    assert "Ціна 5 грн дуже відрізняється від поста (1500 грн → на Шафі 1730). Перевір." in page
+    assert "Ціна 5 грн дуже відрізняється від поста (1500 грн → на Шафі 1730). Перевірте." in page
     assert 'value="confirm:price"' in page
     send_form(app, page, item, action="confirm:price", price="5")
     card = review.load_card(conn, item)

@@ -91,4 +91,4 @@ def test_navigation_and_approve_next_stay_inside_kind(conn, root, app):
     response = send_form(app, page, new2, action="approve")
     assert location(response) == "/review?k=new&msg=approved"  # «Старий» ще на перевірці
     page = html(fetch(app, location(response)))
-    assert "У цьому списку більше нічого немає. Ще 1 Картка на перевірці." in page
+    assert "З бота на перевірці нічого немає. Є 1 Картка зі старих постів." in page

@@ -120,6 +120,8 @@ MESSAGES = {
     "robot_retry": "Картку повернуто в Схвалені — робот спробує ще раз",
     "recheck_new": "Перевірено: усе гаразд. Картка знову піде на ШІ й з'явиться в «На перевірку» — "
     "зазвичай до години, при великій черзі пізніше.",
+    "recheck_rules_problem": "Картку перераховано за новими правилами, але проблема лишилась — "
+    "причина в рядку Картки.",
     "recheck_problem": "Папку перевірено: проблема лишилась",
     "recheck_many_items": "Проблема лишилась: у пості досі кілька пар чи розмірів. Опублікуйте на "
     "Шафі вручну («Опублікувала вручну») або «В архів».",
@@ -241,7 +243,7 @@ PROBLEM_KINDS = {
         "Не взуття й не аксесуар",
         "опублікуйте на Шафі вручну («Опублікувала вручну») або «В архів»",
     ),
-    "no_photos": ("Нема фото", "додайте в папку фото .jpg, потім «Перевірити ще раз»"),
+    "no_photos": ("Нема фото в папці", "додайте в папку фото .jpg, потім «Перевірити ще раз»"),
     "too_many_photos": (
         "Забагато фото",
         "залиште в папці не більше 10 фото, потім «Перевірити ще раз»",
@@ -257,7 +259,10 @@ PROBLEM_KINDS = {
     ),
     "possible_duplicate": (
         "Схожий є на Шафі",
-        "відкрийте Картку й порівняйте; якщо пару вже опублікували самі — «Опублікувала вручну»",
+        (
+            "відкрийте Картку й порівняйте: інша пара — «Це інший товар», та сама — «В архів»; "
+            "опублікували самі — «Опублікувала вручну»"
+        ),
     ),
     "already_published": ("Уже опубліковано", "цей пост уже на Шафі — відкрийте Картку"),
     "publish_uncertain": ("Не впевнений", "перевірте «Мої речі» на Шафі, потім відкрийте Картку"),
@@ -270,11 +275,11 @@ PROBLEM_KINDS = {
         "відкрийте Картку: виправте оголошення на Шафі або «В архів»",
     ),
     "photos_missing": (
-        "Фото",
+        "Нема фото в папці",
         "перевірте папку з фото, потім «Перевірити ще раз»; продано — «В архів»",
     ),
     "robot_photos": (
-        "Фото",
+        "Фото не завантажились",
         "«Перевірити ще раз» — робот спробує ще раз, або перевірте фото в Картці",
     ),
     "robot_logged_out": (
@@ -930,11 +935,13 @@ class App:
             )
             state.cost = f"{batch.approx_usd(active.estimate)} (зазвичай менше)"
         elif done and datetime.fromisoformat(done.at) > today - FINISHED_SHOWN:
-            parts = [f"{events.cards(done.ok)} у «На перевірку»"] if done.ok else []
+            parts = [f"ШІ заповнив {events.cards_acc(done.ok)}"] if done.ok else []
             if done.problems:
                 parts.append(f"{done.problems} — у «Проблеми»")
             if done.returned:
-                parts.append(f"{events.cards(done.returned)} ШІ не встиг обробити — знову в черзі")
+                parts.append(
+                    f"ШІ не встиг обробити {events.cards_acc(done.returned)} — знову в черзі"
+                )
             state.finished = f"Готово о {self._hm(done.at)}: " + ", ".join(parts) + "."
         return state
 
@@ -1235,7 +1242,7 @@ class App:
             everything = cards
             filters, kinds, cards = self._groups(status, cards, marks, chosen, kind, query)
             empty_note = (
-                self._empty_note(status, everything, marks, chosen, kind, query)
+                self._empty_note(conn, status, everything, marks, chosen, kind, query)
                 if not cards
                 else None
             )
@@ -1319,9 +1326,15 @@ class App:
             return Precheck(NO_PHOTOS_OLD if is_old(card.folder_name) else NO_PHOTOS, check.notes)
         return check
 
-    def _empty_note(self, status, cards, marks, chosen, kind, query):
+    def _empty_note(self, conn, status, cards, marks, chosen, kind, query):
         """Порожній відфільтрований список, а в «На перевірку» ще є Картки (B2, UX-003): що лишилось і
         куди йти. `(текст, посилання, підпис посилання)` або None."""
+        if status == Status.REVIEW and query:  # R-B12: пошук нічого не дав, а на перевірці ще є
+            left = len(review.list_tab(conn, Status.REVIEW))
+            if not left:
+                return None
+            word = plural(left, "Картка", "Картки", "Карток")
+            return f"На перевірці ще {word} —", f"/{status}", "«Скинути» пошук"
         if status != Status.REVIEW or query or not (chosen or kind) or not cards:
             return None
 
@@ -1340,6 +1353,15 @@ class App:
                     lead, what = "Карток без жовтого немає.", f"з жовтим {waits}"
                 note = f"{lead} Ще {plural(left, 'Картка', 'Картки', 'Карток')} {what}."
                 return note, href(other, kind), "Переглянути їх"
+        if kind:  # R-B11: чесно, чого саме немає і що є в іншій групі
+            rest = sum(1 for c in cards if is_old(c.folder_name) != (kind == "old"))
+            if rest:
+                word = plural(rest, "Картка", "Картки", "Карток")
+                if kind == "new":
+                    text_ = f"З бота на перевірці нічого немає. Є {word} зі старих постів."
+                else:
+                    text_ = f"Зі старих постів на перевірці нічого немає. Є {word} з бота."
+                return text_, href("", ""), "Показати всі"
         left = len(cards)
         return (
             f"У цьому списку більше нічого немає. Ще {plural(left, 'Картка', 'Картки', 'Карток')} на перевірці.",
@@ -1601,6 +1623,9 @@ class App:
                     if following:
                         return redirect(with_params(following, msg=message, ok=item_id))
                     return redirect(self._queue_end(conn, from_, message, item_id))
+                if message == "restored" and urlsplit(from_).path == f"/{Status.REVIEW}":
+                    # R-B15: «Повернути» після «відкладено в Архів» — відкриваємо саму Картку
+                    return redirect(card_url(item_id, from_, msg=message))
                 return redirect(with_msg(from_, message))
             decisions = {
                 "on_shafa": lambda: publish.on_shafa(
@@ -1627,6 +1652,9 @@ class App:
                 return redirect(back(msg=message))
             if action == "recheck":
                 result = review.recheck(conn, item_id, self.root, self.channel_id)
+                if result.code == "recheck_done" and result.status == Status.PROBLEM:
+                    # R-B22: за новими правилами Картка все одно в Проблемах — не «оновлено»
+                    return redirect(f"/{Status.PROBLEM}?msg=recheck_rules_problem")
                 if result.code in ("photos_retry", "recheck_done"):
                     return redirect(f"/{Status.REVIEW}?msg={result.code}")
                 if result.code in ("robot_retry", "recheck_new"):
@@ -2132,7 +2160,7 @@ def attention(card: review.Card) -> Attention | None:
     if len(yellow) > 2:
         lines.append(f"Ще {len(yellow) - 2} — у полях нижче")
     names = ", ".join(short_label(f) for f in yellow)
-    title = f"Перевір {plural(len(yellow), 'поле', 'поля', 'полів')}: {names}"
+    title = f"Перевірте {plural(len(yellow), 'поле', 'поля', 'полів')}: {names}"
     if gender and len(yellow) == 1:
         title = gender.question
     return Attention(title, lines, note)

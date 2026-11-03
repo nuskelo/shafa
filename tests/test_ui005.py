@@ -133,7 +133,7 @@ def test_yellow_note_lists_fields_and_reasons(conn, root, app):
     season = ai.Field("season", "Зимаа", True, "значення немає в довіднику")
     item = add_card(conn, root, text=TEXT, blank=blank_with(season))
     page = page_of(app, item)
-    assert "Перевір 1 поле: Сезон" in page and "значення немає в довіднику" in page
+    assert "Перевірте 1 поле: Сезон" in page and "значення немає в довіднику" in page
     assert page.index('class="attention"') < page.index('id="fields"')
 
 
@@ -143,7 +143,7 @@ def test_yellow_note_with_two_fields_names_each_reason(conn, root, app):
         blank=blank_with(ai.Field("season", "Зимаа", True, "сезон?"), ai.Field("brand", "x", True, "бренд?")),
     )  # fmt: skip
     page = page_of(app, item)
-    assert "Перевір 2 поля: Бренд, Сезон" in page or "Перевір 2 поля: Сезон, Бренд" in page
+    assert "Перевірте 2 поля: Бренд, Сезон" in page or "Перевірте 2 поля: Сезон, Бренд" in page
     assert "Сезон: сезон?" in page and "Бренд: бренд?" in page
 
 
@@ -155,7 +155,7 @@ def test_note_without_yellow_shows_note_text(conn, root, app):
         'class="attention"' in page
         and "Сезон змінено правилом: було Зима → стало Демісезон" in page
     )
-    assert "Перевір " not in page
+    assert "Перевірте " not in page
 
 
 def test_no_note_when_nothing_to_check(conn, root, app):

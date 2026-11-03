@@ -59,7 +59,8 @@
     <input type="hidden" name="token" value="{{ token }}">
     <p>Потрібно лише для старих постів (до бота), наприклад якщо дописали ціну в старий пост.</p>
     <p>Telegram Desktop → канал → «Експорт історії чату» (лише текст, формат JSON) → файл <b>result.json</b>.</p>
-    <input type="file" name="export" accept=".json,application/json" required>
+    <label for="export-file">Вибрати файл result.json</label>
+    <input type="file" id="export-file" name="export" accept=".json,application/json" required>
     <button>Завантажити експорт каналу</button>
   </form>
 </section>

@@ -165,7 +165,7 @@ def test_results_collected_on_open_and_every_few_minutes(conn, app, root, client
     assert status(conn, item_id) == Status.REVIEW
     assert "(відправлено о" not in page and "Тримайте вікно" not in page
     assert "Готові до перевірки 1" in plain(page) and 'href="/review"' in page
-    assert "Готово о " in page and "1 Картка у «На перевірку»" in page
+    assert "Готово о " in page and "ШІ заповнив 1 Картку" in page
     clock.now += web.COLLECT_EVERY
     calls = len(client.batches.calls)
     get(app, "/review")  # незібраних пакетів немає — API не питаємо

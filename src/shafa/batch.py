@@ -641,8 +641,8 @@ class Finished:
     """Підсумок останнього забраного пакета."""
 
     at: str  # UTC, ISO
-    ok: int  # Карток, що пішли в «На перевірку»
-    problems: int  # Карток, що пішли в «Проблеми»
+    ok: int  # Карток, які ШІ заповнив (за станом пакета, а не за нинішнім статусом, UX-008)
+    problems: int  # Карток, на які ШІ відповів помилкою
     returned: int  # не оброблено — знову в черзі
 
 
@@ -655,14 +655,12 @@ def last_finished(conn: sqlite3.Connection) -> Finished | None:
     if batch is None:
         return None
     ok = problems = returned = 0
-    for state, status in conn.execute(
-        "SELECT b.state, i.status FROM ai_batch_items b JOIN items i ON i.id = b.item_id "
-        "WHERE b.batch_id = ?",
-        (batch["id"],),
+    for (state,) in conn.execute(
+        "SELECT state FROM ai_batch_items WHERE batch_id = ?", (batch["id"],)
     ):
         if state == "returned":
             returned += 1
-        elif state == "error" or status == Status.PROBLEM:
+        elif state == "error":
             problems += 1
         else:
             ok += 1
@@ -754,5 +752,8 @@ def collect_problem_text(report: Collected) -> str | None:
     if report.note:
         return f"Не вдалося перевірити, чи готово ({report.note}) — спробую ще раз за кілька хвилин"
     if report.returned:
-        return f"ШІ не встиг обробити {report.returned} Карток — вони знову в черзі"
+        return (
+            f"ШІ не встиг обробити {events.cards_acc(report.returned)} — "
+            f"{'вона' if report.returned == 1 else 'вони'} знову в черзі"
+        )
     return None
