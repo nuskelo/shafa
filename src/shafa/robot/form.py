@@ -248,6 +248,15 @@ def among(value: str, values: list[str]) -> bool:
     return any(same(value, v) for v in values)
 
 
+# Прапорці-емодзі й variation selectors у назві вкладки: «🇺🇦Український» (ROBOT-017)
+FLAGS = re.compile("[\U0001f1e6-\U0001f1ff\ufe00-\ufe0f]")
+
+
+def plain(text: str) -> str:
+    """Текст кнопки без прапорців і variation selectors, пробіли стиснуто."""
+    return " ".join(FLAGS.sub("", text).split())
+
+
 ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
 
 
@@ -570,6 +579,16 @@ class PageWidget:
                 button = self.block.get_by_text(spelling, exact=True)
             if button.count():
                 self.session.click(button.first, f"{self.label}: {value}")
+                return True
+        return self._press_flagged(value)
+
+    def _press_flagged(self, value: str) -> bool:
+        """Вкладка з прапорцем («🇺🇦Український», ROBOT-017): точного збігу немає — кнопка, чий
+        текст без прапорців і є значенням. Більше нічого «схожого» не шукаємо."""
+        buttons = self.block.get_by_role("button")
+        for index, text in enumerate(buttons.all_inner_texts()):
+            if FLAGS.search(text) and same(plain(text), value):
+                self.session.click(buttons.nth(index), f"{self.label}: {value}")
                 return True
         return False
 
