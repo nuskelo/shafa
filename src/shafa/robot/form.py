@@ -292,6 +292,20 @@ def brand_key(text: str) -> str:
     return " ".join(plain.split()).casefold()
 
 
+def brand_variants(name: str) -> list[str]:
+    """Інші написання того самого бренду у знімку Шафи (ROBOT-018): збігаються за `brand_key` без
+    пробілів — «Marks&Spencer» = «Marks & Spencer». Лише точний збіг ключа, схожих не беремо.
+    Самого `name` у списку немає."""
+    own = brand_key(name)
+    compact = own.replace(" ", "")
+    found: list[str] = []
+    for brand in catalog.brands():
+        key = brand_key(brand)
+        if key != own and key.replace(" ", "") == compact and brand not in found:
+            found.append(brand)
+    return found
+
+
 # Підказка форми, а не значення поля: «Додайте заголовок(до +11%)», «Виберіть…» (ROBOT-006)
 HINT = re.compile(
     r"^\s*(додайте|добавьте|введіть|введите|виберіть|выберите|оберіть|select|add|enter|choose)\b"
@@ -913,7 +927,26 @@ class PageDriver:
         if not combo.count():
             raise FieldMissing("Бренд")
         combo.first.click()
-        combo.first.fill(name)
+        seen: list[str] = []
+        for spelling in [
+            name,
+            *brand_variants(name),
+        ]:  # ROBOT-018: «Marks&Spencer» → «Marks & Spencer»
+            if self._find_brand(combo.first, spelling, seen):
+                return True
+        try:
+            raw = [o for o in self.page.evaluate(OPTIONS_RAW) if not among(o, list(NO_OPTIONS))]
+        except Exception:  # noqa: BLE001 — діагностика не має ховати справжню причину
+            raw = seen
+        self.brand_miss = BrandMiss(name, raw, markup(self.page, mark))
+        combo.first.fill("")
+        self.session.press("Escape")
+        return False
+
+    def _find_brand(self, combo: Any, name: str, seen: list[str]) -> bool:
+        """Набрати `name` у полі бренду й клікнути варіант, що точно збігається за `brand_key`;
+        список може домальовуватись — до `BRAND_WAIT` с. `seen` — що показано востаннє."""
+        combo.fill(name)
         self.typed.add(name)
         browser.pause(1.0, 1.5)
         want = brand_key(name)
@@ -922,6 +955,7 @@ class PageDriver:
         while True:
             shown = self.page.evaluate(OPTIONS)  # позначає варіанти `data-robot-option`
             options = [o for o in shown if not among(o, list(NO_OPTIONS))]
+            seen[:] = options
             index = next((i for i, o in enumerate(shown) if brand_key(o) == want), None)
             if index is not None:
                 option = self.page.locator(f"[data-robot-option='{index}']")
@@ -931,16 +965,8 @@ class PageDriver:
             still = still + 0.5 if options and options == previous else 0.0
             previous = options
             if time.monotonic() >= deadline or still >= BRAND_STILL:
-                break
+                return False
             self.page.wait_for_timeout(500)
-        try:
-            raw = [o for o in self.page.evaluate(OPTIONS_RAW) if not among(o, list(NO_OPTIONS))]
-        except Exception:  # noqa: BLE001 — діагностика не має ховати справжню причину
-            raw = options
-        self.brand_miss = BrandMiss(name, raw, markup(self.page, mark))
-        combo.first.fill("")
-        self.session.press("Escape")
-        return False
 
     def keywords(self, words: list[str]) -> None:
         combo = self._block("Ключові слова").locator("input[role=combobox]")
