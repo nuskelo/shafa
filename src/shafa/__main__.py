@@ -17,6 +17,9 @@
 нічого не надсилає.
 `python -m shafa robot --login | --sync-catalog | --dry-fill --db … --post N [--post M …]` — робот
 Шафи: ручний вхід Власника, знімок довідників, заповнення форми БЕЗ публікації (до 3 Карток).
+`python -m shafa robot --klubok-dry-fill --fake-klubok --db … --post N [--post M …]` — KLB-001: форма
+Клубку заповнюється й звіряється на ПІДСТАВНОМУ Клубку (до 3 Карток), нічого не публікується, базу
+не пише; `python -m shafa klubok-catalog --from <тека з categors.json і filters.json>` — знімок.
 `python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
 `--pause | --resume | --stop --db …` — керування запущеною публікацією (поточний товар дописується).
 `python -m shafa bot --db … --root … [--check]` — Telegram-бот: пост від Продавчині → прев'ю →
@@ -223,6 +226,10 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-fill", action="store_true", help="заповнити форму, не публікувати")
     mode.add_argument("--publish", action="store_true", help="ОПУБЛІКУВАТИ схвалені на Шафі")
     mode.add_argument(
+        "--klubok-dry-fill", action="store_true",
+        help="KLB-001: заповнити форму Клубку (поки лише підставного), не публікувати",
+    )  # fmt: skip
+    mode.add_argument(
         "--rehearse", action="store_true",
         help="пробний прогін (QA-003): форма заповнюється, нічого не публікується; помилки — в «Проблеми»",
     )  # fmt: skip
@@ -241,6 +248,9 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--limit", type=int, help="скільки опублікувати (не більше ліміту доби)")
     # Підставна Шафа (UI-002, D5): лише тести й «мавпа»; у довідці не показується.
     cmd.add_argument("--fake-shafa", action="store_true", help=argparse.SUPPRESS)
+    cmd.add_argument(
+        "--fake-klubok", action="store_true", help="з --klubok-dry-fill: підставний Клубок"
+    )
     return parser
 
 
@@ -267,6 +277,8 @@ def run_control(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
 def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.pause or args.resume or args.stop:
         return run_control(parser, args)
+    if args.klubok_dry_fill or args.fake_klubok:
+        return run_klubok_dry_fill(parser, args)
 
     from shafa.robot import form, lock, publish
 
@@ -522,6 +534,49 @@ def run_rules(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if post is None:
         parser.error(f"Поста з номером {args.post} немає в експорті")
     print(format_rules(post))
+    return 0
+
+
+def run_klubok_dry_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """KLB-001: форма Клубку заповнюється й звіряється, НЕ публікується; лише підставний Клубок."""
+    from shafa.robot import form as shafa_form
+    from shafa.robot import klubok_fake, klubok_form, lock
+
+    if not args.klubok_dry_fill:
+        parser.error("--fake-klubok лише разом із --klubok-dry-fill")
+    if not args.fake_klubok:
+        parser.error("Живий Клубок — з KLB-003; поки лише --fake-klubok")
+    if not args.post or len(args.post) > shafa_form.MAX_CARDS:
+        parser.error(f"--post від 1 до {shafa_form.MAX_CARDS} разів")
+    root = _root(parser, args)
+    if args.db is None or not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    try:
+        conn = klubok_form.open_readonly(args.db)  # лише читання: у базу нічого не пишемо
+    except klubok_form.KlubokError as error:
+        print(error.text)
+        return 2
+    from playwright.sync_api import sync_playwright
+
+    server = klubok_fake.Server()
+    try:
+        with lock.hold("klubok-dry-fill"), sync_playwright() as p:  # той самий замок, що й у Шафи
+            session = klubok_fake.FakeSession(p, server.base, headless=False)
+            try:
+                klubok_form.dry_fill(
+                    conn, root, args.post, session, klubok_form.KlubokDriver,
+                    shafa_form.screens_dir(), log=lambda line: print(line, flush=True),
+                )  # fmt: skip
+            finally:
+                session.close()
+    except lock.Busy as error:
+        print(error)
+        return 2
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        server.close()
+        conn.close()
     return 0
 
 

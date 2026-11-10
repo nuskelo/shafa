@@ -304,7 +304,7 @@ def plan_lines(ad: fields.KlubokAd) -> list[str]:
     color = (
         "—"
         if ad.color is None
-        else ("Разноцветный" if ad.color == fields.COLOR_MULTI else ad.color)
+        else f"ключ {ad.color}" + (" (Разноцветный)" if ad.color == fields.COLOR_MULTI else "")
     )
     return [
         "Категорія: " + " / ".join(ad.leaf.path) + f" ({ad.leaf.id})",
