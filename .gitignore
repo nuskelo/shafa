@@ -11,6 +11,8 @@ data/
 !src/shafa/data/
 src/shafa/data/*
 !src/shafa/data/shafa-catalog.json
+# KLB-001: знімок категорій і фільтрів Клубку — теж публічні дані сайту (без токенів і cookies).
+!src/shafa/data/klubok-catalog.json
 result.json
 *.jpg
 *.jpeg
