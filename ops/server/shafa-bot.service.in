@@ -1,0 +1,26 @@
+# OPS-005: бот на сервері (шаблон — `install.sh` підставляє @…@). Службу НЕ вмикаємо, доки немає
+# `.env`, бази й переходу з Mac (docs/install-server.md): інакше вона до безкінечності перезапускається.
+[Unit]
+Description=Shafa: Telegram-бот (серверний режим, OPS-003)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@REPO@
+# Тека даних: звідси бот бере .env, базу й замок. Без цього Linux візьме ~/.local/share/shafa.
+Environment=SHAFA_DATA_DIR=@DATA@
+Environment=PYTHONUNBUFFERED=1
+# Головна папка (--root) — з SHAFA_ROOT_DIR у .env: одне джерело для служби й для ключа обміну.
+ExecStart=@REPO@/.venv/bin/python -m shafa bot --server --db @DATA@/shafa.sqlite
+Restart=always
+RestartSec=10
+MemoryMax=400M
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

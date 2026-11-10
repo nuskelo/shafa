@@ -1,0 +1,11 @@
+# OPS-005: нічна копія бази (запускає shafa-backup.timer). Бот не зупиняється: `sqlite3 .backup` безпечний.
+[Unit]
+Description=Shafa: копія бази бота
+
+[Service]
+Type=oneshot
+User=@USER@
+Environment=SHAFA_DATA_DIR=@DATA@
+ExecStart=/bin/sh @REPO@/ops/server/backup.sh @DATA@/shafa.sqlite @DATA@/backups
+NoNewPrivileges=true
+PrivateTmp=true
