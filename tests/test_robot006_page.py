@@ -3,6 +3,9 @@
 Без браузера Playwright (CI) — пропуск; логіку без браузера покриває `test_robot006.py`.
 """
 
+import pytest
+
+from shafa import catalog
 from shafa.robot import browser, form
 from shafa.robot.form import PageDriver
 from test_robot003_page import chromium  # noqa: F401 — фікстура браузера
@@ -113,3 +116,41 @@ def test_hint_is_not_written_as_value_of_untouched_field(chromium, monkeypatch):
     assert driver.untouched(["Тип"]) == []
     assert driver.untouched(["Тип", "Сезон"]) == ["на формі Шафа поставила сама: Сезон: Зима"]
     page.close()
+
+
+# --- ROBOT-018: бренд з «&» — Шафа не знаходить «Marks&Spencer», а «Marks & Spencer» знаходить ---
+
+SNAPSHOT_BRANDS = ["Marks & Spencer", "Marks&Spencer", "R.Marks", "Ecco"]
+
+
+@pytest.fixture(autouse=True)
+def brands(monkeypatch):
+    monkeypatch.setattr(catalog, "brands", lambda: SNAPSHOT_BRANDS)
+
+
+def test_brand_without_spaces_found_by_spaced_spelling(chromium, monkeypatch):  # noqa: F811
+    driver, page = make(chromium, monkeypatch, ["Marks & Spencer", "R.Marks", "Ecco"])
+    assert driver.brand("Marks&Spencer") is True
+    assert page.evaluate("window.picked") == ["Marks & Spencer"]
+    assert page.evaluate("window.added") == 0
+    assert driver.brand_miss is None
+    page.close()
+
+
+def test_brand_variants_never_pick_similar_brand(chromium, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(form, "BRAND_WAIT", 1)
+    monkeypatch.setattr(form, "BRAND_STILL", 1)
+    driver, page = make(chromium, monkeypatch, ["R.Marks", "Marks Spencer Kids"])
+    assert driver.brand("Marks&Spencer") is False
+    assert page.evaluate("window.picked") == []
+    assert page.evaluate("window.added") == 0
+    assert driver.brand_miss is not None
+    page.close()
+
+
+def test_brand_variants_from_snapshot():
+    assert "Marks & Spencer" in form.brand_variants("Marks&Spencer")
+    assert "Marks&Spencer" in form.brand_variants("Marks & Spencer")
+    assert "Marks&Spencer" not in form.brand_variants("Marks&Spencer")
+    assert "R.Marks" not in form.brand_variants("Marks&Spencer")
+    assert form.brand_variants("Ecco") == []

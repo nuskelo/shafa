@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from shafa import config, review
+from shafa import catalog, config, review
 from shafa.db import Status, now
 from shafa.robot import browser, guard, lang, listings
 from shafa.robot.plan import PlanError, Step, plan
@@ -168,7 +168,9 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
                     )
                 else:
                     notes.append(f"бренд {step.value} не в списку Шафи — лишено порожнім")
-        elif step.kind in ("condition", "size_system"):
+        elif step.kind == "size_system":
+            notes += size_system(driver, step)
+        elif step.kind == "condition":
             notes += driver.pick(step.label, [step.value]) or []
         elif step.kind == "choice" and not step.required:
             notes += optional(driver, step)
@@ -182,6 +184,19 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
             raise ValueError(f"Невідомий крок {step.kind}")
     driver.verify()  # Шафа могла переписати вже заповнене — перед публікацією ще раз звіряємо
     return notes
+
+
+NO_TABS = "{label}: вкладок систем нема — вибрано одразу"
+
+
+def size_system(driver: Driver, step: Step) -> list[str]:
+    """Вкладка системи розміру (ROBOT-018). У деяких розділах малюків (кросівки) вкладок на формі
+    немає — одразу кнопки розмірів: крок пропускаємо. Вкладки є, а потрібної нема — як раніше,
+    `FieldMissing`. Драйвер без `has_system_tabs` (тестові) — завжди як раніше."""
+    has_tabs = getattr(driver, "has_system_tabs", None)
+    if has_tabs is not None and not has_tabs(step.label):
+        return [NO_TABS.format(label=step.label)]
+    return driver.pick(step.label, [step.value]) or []
 
 
 def live_size(driver: Driver, step: Step) -> list[str]:
@@ -257,6 +272,15 @@ def plain(text: str) -> str:
     return " ".join(FLAGS.sub("", text).split())
 
 
+def is_size_text(text: str) -> bool:
+    """Кнопка розміру, а не вкладки системи: число («22», «17.5», «17,5»), літерний розмір, «Інший»."""
+    return bool(
+        re.fullmatch(r"\d+(?:[.,]\d+)?", text)
+        or catalog.is_letter_size(text)
+        or among(text, ["Інший"])
+    )
+
+
 ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
 
 
@@ -266,6 +290,20 @@ def brand_key(text: str) -> str:
     plain = unicodedata.normalize("NFKD", text.translate(ZERO_WIDTH))
     plain = "".join(c for c in plain if not unicodedata.combining(c))
     return " ".join(plain.split()).casefold()
+
+
+def brand_variants(name: str) -> list[str]:
+    """Інші написання того самого бренду у знімку Шафи (ROBOT-018): збігаються за `brand_key` без
+    пробілів — «Marks&Spencer» = «Marks & Spencer». Лише точний збіг ключа, схожих не беремо.
+    Самого `name` у списку немає."""
+    own = brand_key(name)
+    compact = own.replace(" ", "")
+    found: list[str] = []
+    for brand in catalog.brands():
+        key = brand_key(brand)
+        if key != own and key.replace(" ", "") == compact and brand not in found:
+            found.append(brand)
+    return found
 
 
 # Підказка форми, а не значення поля: «Додайте заголовок(до +11%)», «Виберіть…» (ROBOT-006)
@@ -832,6 +870,17 @@ class PageDriver:
             self.lists[label] = widget.chips()  # pick_values уже звірив: чипи — рівно наші
         return notes
 
+    def has_system_tabs(self, label: str) -> bool:
+        """У блоці розміру є вкладки систем (ROBOT-018): кнопка, чий текст — не розмір («22», «17.5»,
+        «S», «Інший»). Блоку чи кнопок немає — True: далі `pick` сам скаже, чого не знайшов."""
+        mark = self._find(label)
+        if mark is None:
+            return True
+        block = self.page.locator(f"[data-robot-block='{mark}']")
+        texts = [plain(t) for t in block.get_by_role("button").all_inner_texts()]
+        texts = [t for t in texts if t]
+        return not texts or any(not is_size_text(t) for t in texts)
+
     def size_block(self) -> dict | None:
         from shafa.robot import sync  # sync вантажить form лише всередині функцій
 
@@ -878,7 +927,26 @@ class PageDriver:
         if not combo.count():
             raise FieldMissing("Бренд")
         combo.first.click()
-        combo.first.fill(name)
+        seen: list[str] = []
+        for spelling in [
+            name,
+            *brand_variants(name),
+        ]:  # ROBOT-018: «Marks&Spencer» → «Marks & Spencer»
+            if self._find_brand(combo.first, spelling, seen):
+                return True
+        try:
+            raw = [o for o in self.page.evaluate(OPTIONS_RAW) if not among(o, list(NO_OPTIONS))]
+        except Exception:  # noqa: BLE001 — діагностика не має ховати справжню причину
+            raw = seen
+        self.brand_miss = BrandMiss(name, raw, markup(self.page, mark))
+        combo.first.fill("")
+        self.session.press("Escape")
+        return False
+
+    def _find_brand(self, combo: Any, name: str, seen: list[str]) -> bool:
+        """Набрати `name` у полі бренду й клікнути варіант, що точно збігається за `brand_key`;
+        список може домальовуватись — до `BRAND_WAIT` с. `seen` — що показано востаннє."""
+        combo.fill(name)
         self.typed.add(name)
         browser.pause(1.0, 1.5)
         want = brand_key(name)
@@ -887,6 +955,7 @@ class PageDriver:
         while True:
             shown = self.page.evaluate(OPTIONS)  # позначає варіанти `data-robot-option`
             options = [o for o in shown if not among(o, list(NO_OPTIONS))]
+            seen[:] = options
             index = next((i for i, o in enumerate(shown) if brand_key(o) == want), None)
             if index is not None:
                 option = self.page.locator(f"[data-robot-option='{index}']")
@@ -896,16 +965,8 @@ class PageDriver:
             still = still + 0.5 if options and options == previous else 0.0
             previous = options
             if time.monotonic() >= deadline or still >= BRAND_STILL:
-                break
+                return False
             self.page.wait_for_timeout(500)
-        try:
-            raw = [o for o in self.page.evaluate(OPTIONS_RAW) if not among(o, list(NO_OPTIONS))]
-        except Exception:  # noqa: BLE001 — діагностика не має ховати справжню причину
-            raw = options
-        self.brand_miss = BrandMiss(name, raw, markup(self.page, mark))
-        combo.first.fill("")
-        self.session.press("Escape")
-        return False
 
     def keywords(self, words: list[str]) -> None:
         combo = self._block("Ключові слова").locator("input[role=combobox]")
