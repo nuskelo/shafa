@@ -38,6 +38,7 @@ def form(root, **changes):
         "SHAFA_AI_BATCH_LIMIT": "40", "SHAFA_ROOT_DIR": str(root), "SHAFA_DELETE_PUBLISHED": "1",
         "SHAFA_DAILY_OLD": "10", "SHAFA_DAILY_NEW": "5", "SHAFA_LISTINGS_DAYS": "3",
         "SHAFA_SITE_WAIT_DAYS": "7", "SHAFA_SOLD_FUSE": "20",
+        "SHAFA_KLUBOK_DAILY_LIMIT": "10", "SHAFA_KLUBOK_FROM_POST": "7200",  # KLB-002
     }  # fmt: skip
     values.update(changes)
     return {k: v for k, v in values.items() if v is not None}

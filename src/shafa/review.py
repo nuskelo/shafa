@@ -678,6 +678,10 @@ def act(
                 f"WHERE id = ? AND problem_code IN ({', '.join('?' * len(NOTE_CODES))})",
                 (item_id, *NOTE_CODES),
             )
+        if action == "unapprove" and cursor.rowcount == 1:
+            from shafa.klubok import queue  # queue імпортує review
+
+            queue.forget(conn, item_id)  # KLB-002: знято зі схвалених — місця в черзі Клубку немає
         if action == "restore" and cursor.rowcount == 1:
             # DUP-001: ШІ відправив Картку в Архів як дубль, а вона її повертає — значить, це інший
             # товар: на схожі оголошення Картка більше не перевіряється (інакше ШІ знову б сказав «так»)

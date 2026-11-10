@@ -47,6 +47,7 @@ from shafa import (
 from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, list_folders, old_root
+from shafa.klubok import queue as klubok_queue
 from shafa.robot import browser, control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
@@ -2270,6 +2271,7 @@ def settings_blocks() -> list[tuple[str, list]]:
             site.SEND_SETTING, site.WAIT_SETTING, site.SOLD_SETTING, site.FUSE_SETTING
         ),
         "«Мої речі» на Шафі": (listings_mod.DAYS_SETTING,),
+        "Клубок": (klubok_queue.FLAG, klubok_queue.LIMIT_SETTING, klubok_queue.FROM_SETTING),
     }  # fmt: skip
     taken = {name for names in own.values() for name in names}
     blocks = [("Ліміти й робот", [o for o in options.OPTIONS if o.name not in taken])]

@@ -187,14 +187,21 @@ def delete_enabled() -> bool:
     return (config.setting(DELETE_SETTING) or "").lower() in ("1", "так", "yes", "true")
 
 
+def started_on(conn: sqlite3.Connection, sql: str, today: datetime) -> list:
+    """Перше поле рядків, чию публікацію почато за місцеву добу `today`. `sql` вибирає
+    (мітка, час початку UTC ISO) з умовою «час >= ?» — запас 2 доби, точна доба — тут (Шафа, Клубок)."""
+    since = (today - timedelta(days=2)).astimezone(UTC).isoformat(timespec="seconds")
+    day = today.astimezone().date()
+    rows = conn.execute(sql, (since,))
+    return [r[0] for r in rows if datetime.fromisoformat(r[1]).astimezone().date() == day]
+
+
 def _started_rows(conn: sqlite3.Connection, today: datetime) -> list[str]:
     """Назви Карток, чию публікацію почато за місцеву добу `today` (дійшли до кліку)."""
-    since = (today - timedelta(days=2)).astimezone(UTC).isoformat(timespec="seconds")
-    rows = conn.execute(
-        "SELECT folder_name, publish_started_at FROM items WHERE publish_started_at >= ?", (since,)
-    )
-    day = today.astimezone().date()
-    return [r[0] for r in rows if datetime.fromisoformat(r[1]).astimezone().date() == day]
+    return started_on(
+        conn, "SELECT folder_name, publish_started_at FROM items WHERE publish_started_at >= ?",
+        today,
+    )  # fmt: skip
 
 
 def started_today(conn: sqlite3.Connection, today: datetime) -> int:
@@ -438,6 +445,13 @@ def move_when_done(conn: sqlite3.Connection, root: Path, item_id: int) -> str | 
     return move_published(root, row[0])
 
 
+def klubok_needs(conn: sqlite3.Connection, post_id: int | None) -> bool:
+    """KLB-002 (D7): фото Карток поста ще потрібні Клубку — не стирати."""
+    from shafa.klubok import queue  # queue імпортує publish
+
+    return queue.post_needs_photos(conn, post_id)
+
+
 def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> list[str]:
     """Видалити з «Опубліковано» папки Карток, опублікованих понад 3 дні тому.
 
@@ -452,6 +466,8 @@ def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> li
         (Status.PUBLISHED, cutoff),
     ).fetchall():
         if borh.site_busy(conn, post_id):  # TD-058: пост ще йде на сайт — фото з папки потрібні
+            continue
+        if klubok_needs(conn, post_id):  # KLB-002 (D7): фото ще знадобляться Клубку
             continue
         if variant_size(name) is not None:  # спільна папка сестер (CORE-014): коли пізніша — теж
             later = conn.execute(
