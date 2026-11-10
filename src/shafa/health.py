@@ -272,7 +272,7 @@ def _bot_beat(ctx: _Ctx, name: str) -> Check:
 
 
 def _bot(ctx: _Ctx) -> Check:
-    from shafa.bot import run
+    from shafa.bot import client, run
 
     token = config.setting(run.TOKEN)
     if token is None:
@@ -284,7 +284,26 @@ def _bot(ctx: _Ctx) -> Check:
         return Check(BOT, FAIL, _plain(str(error)), "Виправте в Telegram або скажіть Власнику")
     except TimeoutError:
         return Check(BOT, FAIL, "Telegram не відповів за 10 секунд", "Перевірте інтернет")
-    return _bot_beat(ctx, name)
+    return _server_beat(ctx, name) if client.enabled() else _bot_beat(ctx, name)
+
+
+def _server_beat(ctx: _Ctx, name: str) -> Check:
+    """OPS-004: бот на сервері — живість за останнім вдалим обміном, не за замком."""
+    from shafa.bot import client
+
+    state = client.link(ctx.conn) if ctx.conn is not None else client.Link(None, None)
+    moment = ctx.deps.now()
+    age = state.age(moment)
+    if age is None:
+        return Check(BOT, WARN, f"Бот @{name} на сервері: зв'язку з ним ще не було", ASK_OWNER)
+    if state.lost(moment):
+        return Check(
+            BOT, WARN, f"Бот @{name} на сервері: зв'язку немає (востаннє {client.ago(age)})",
+            "Перевірте інтернет; якщо повторюється — скажіть Власнику",
+        )  # fmt: skip
+    if client.server_bot_stale(ctx.data_dir, moment):
+        return Check(BOT, WARN, f"Бот @{name} на сервері не відповідає", ASK_OWNER)
+    return Check(BOT, OK, f"Бот @{name} на сервері, на зв'язку {client.ago(age)}")
 
 
 def _site(ctx: _Ctx) -> Check:

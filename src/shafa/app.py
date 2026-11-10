@@ -65,12 +65,24 @@ def quit_app(kill: Callable[[int, int], None] = os.kill, wait: float = 10.0) -> 
     return stopped
 
 
+def start_sync(path: Path, root: Path) -> threading.Event | None:
+    """Бот на сервері (`SHAFA_BOT_SERVER`): потік обміну, звіту, тривог і сайту. Інакше — нічого."""
+    from shafa.bot import client
+
+    def log(text: str) -> None:
+        control.log_line(text, config.data_dir() / client.LOG_NAME)
+
+    return client.start(path, root, log=log)
+
+
 def quit_all(kill: Callable[[int, int], None] = os.kill) -> list[str]:
     """«Вийти»: бот — загасити; робот — «Стоп» (допише поточний товар). Повертає, що зроблено."""
+    from shafa.bot import client
     from shafa.bot import run as bot_run
 
     done = []
-    if stop_process(bot_run.LOCK_NAME, kill):
+    # OPS-004: бот на сервері — на цьому компі його процесу немає і шукати нічого
+    if not client.enabled() and stop_process(bot_run.LOCK_NAME, kill):
         done.append("бота зупинено")
     if lock.busy() is not None and db_path().is_file():
         conn = db.connect(db_path())
@@ -148,12 +160,15 @@ def start(
         ).start()
         if app.start_bot() == "bot_started":
             print("Бот запускається окремим процесом (журнал — bot-run.log у теці даних)")
+        sync_stop = start_sync(path, root_dir())  # OPS-004: бот на сервері — обмін і відправка
         app.start_health(throttle=False, delay=HEALTH_DELAY)  # у фоні: екран не чекає перевірки
         open_browser(url)
         try:
             serve(server)
         finally:
             night_stop.set()
+            if sync_stop is not None:
+                sync_stop.set()
             server.server_close()
             events.emit(
                 "app.stop", STOPPED

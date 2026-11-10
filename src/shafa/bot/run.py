@@ -125,6 +125,7 @@ OFFLINE_TEXT = "Немає зв'язку з Telegram — перевірте ін
 
 
 BUSY_TEXT = "Telegram тимчасово не відповідає — бот спробує сам"
+SERVER_TEXT = "Бот працює на сервері (SHAFA_BOT_SERVER) — на цьому комп'ютері його не запускаємо"
 
 
 def set_status(conn: sqlite3.Connection, started: bool = False, error: str | None = None) -> None:
@@ -148,6 +149,10 @@ def poll(
     log: Callable[[str], None] = print,
 ) -> None:
     """Довге опитування, доки `stop()` не скаже зупинитись. Конфлікт (другий бот) — SetupError."""
+    from shafa.bot import client
+
+    if client.enabled() and not bot.settings.server:  # OPS-004: опитує лише сервер, у коді
+        raise SetupError(SERVER_TEXT)
     offset = None
     while not stop():
         try:

@@ -493,6 +493,11 @@ def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     print(f"Екран перевірки: {url}\nЗупинити — Ctrl+C")
     if not args.fake_shafa and app.start_bot() == "bot_started":  # бот — разом з екраном
         print("Бот запускається окремим процесом (журнал — bot-run.log у теці даних)")
+    sync_stop = None
+    if not args.fake_shafa:  # OPS-004: бот на сервері — обмін, звіт, тривоги, сайт
+        from shafa.app import start_sync
+
+        sync_stop = start_sync(args.db, root)
     if not args.no_browser:
         webbrowser.open(url)
     try:
@@ -500,6 +505,8 @@ def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        if sync_stop is not None:
+            sync_stop.set()
         server.server_close()
     return 0
 
@@ -685,7 +692,7 @@ def run_fill(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
 
 def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
-    from shafa.bot import run
+    from shafa.bot import client, run
     from shafa.bot.core import Bot
     from shafa.bot.telegram import Telegram
     from shafa.robot import lock
@@ -693,6 +700,9 @@ def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     root = _root(parser, args)
     if not args.db.is_file():
         parser.error(f"Базу не знайдено: {args.db}")
+    if client.enabled() and not args.server and not args.check:
+        print(run.SERVER_TEXT)  # OPS-004: два опитувачі — 409 і падіння бота на сервері
+        return 2
     try:
         settings, token = run.settings(root), run.token()
     except run.SetupError as error:

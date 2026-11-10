@@ -1230,6 +1230,7 @@ class Bot:
             "cmd": "button", "data": query.get("data"), "chat_id": (message.get("chat") or {}).get("id"),
             "message_id": message.get("message_id"),
             "keyboard": (message.get("reply_markup") or {}).get("inline_keyboard"),
+            "text": message.get("text"),  # OPS-004: комп дописує результат під текст тривоги
         }  # fmt: skip
         with self.conn:
             self.conn.execute("INSERT OR IGNORE INTO bot_updates VALUES (?, ?)", (update_id, now()))
