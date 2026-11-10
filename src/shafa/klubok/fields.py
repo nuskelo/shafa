@@ -87,7 +87,7 @@ def sizes_for(values: list[str]) -> list[int] | None:
             number = float(value.replace(",", "."))
         except ValueError:
             return None
-        if number != number or number <= 0:
+        if not math.isfinite(number) or number <= 0:
             return None
         found.update({math.floor(number), math.ceil(number)})
     return sorted(found)
