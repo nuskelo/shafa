@@ -656,7 +656,8 @@ def test_only_bot_puts_posts_in_site_queue(conn, root, on, export_path):
         p.relative_to(src).as_posix() for p in src.rglob("*.py")
         if "site.enqueue(" in p.read_text(encoding="utf-8")
     )  # fmt: skip
-    assert callers == ["bot/core.py"]
+    # OPS-004: бот на сервері — пости бота ставить у чергу клієнт на компі (ті самі пости бота)
+    assert callers == ["bot/client.py", "bot/core.py"]
 
 
 def test_404_on_photo_forever_stops_after_one_resend(conn, root, on, worker, fake, said):
