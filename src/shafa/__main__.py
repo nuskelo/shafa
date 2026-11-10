@@ -248,9 +248,8 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--limit", type=int, help="скільки опублікувати (не більше ліміту доби)")
     # Підставна Шафа (UI-002, D5): лише тести й «мавпа»; у довідці не показується.
     cmd.add_argument("--fake-shafa", action="store_true", help=argparse.SUPPRESS)
-    cmd.add_argument(
-        "--fake-klubok", action="store_true", help="з --klubok-dry-fill: підставний Клубок"
-    )
+    # Підставний Клубок (KLB-001): лише тести й ручний прогін; у довідці не показується.
+    cmd.add_argument("--fake-klubok", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
