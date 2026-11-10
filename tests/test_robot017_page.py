@@ -121,3 +121,54 @@ def test_plain_strips_flags_and_extra_spaces():
     assert plain(" \U0001f1fa\U0001f1e6️  Український ") == "Український"
     assert plain("Американський") == "Американський"
     assert plain("37") == "37"
+
+
+# --- ROBOT-018: форма малюків без вкладок систем (кросівки): одразу кнопки розмірів ---
+
+NO_TABS = PAGE.replace(
+    """  'Американський': ['0,5', '1', '6,5', 'Інший'],
+  [FLAG + 'Український']: ['19', '20', '20,5', 'Інший'],""",
+    "  '': ['15', '16', '17', '17,5', '18', '22', 'Інший'],",
+).replace(
+    """  for (const name of Object.keys(SYSTEMS)) {""",
+    """  for (const name of Object.keys(SYSTEMS).filter(Boolean)) {""",
+)
+
+
+def test_kids_form_without_tabs_picks_size_22(make):
+    driver = make(NO_TABS)
+    assert driver.has_system_tabs("Розмір") is False
+    steps = [Step("size_system", "Розмір", "Український"), Step("sizes", "Розмір", ["22"])]
+    notes = form.execute(steps, driver)  # у кінці — verify
+    assert state(driver)[1] == "22"
+    assert any("вкладок систем нема" in n for n in notes)
+
+
+def test_tabs_present_but_wanted_missing_is_still_an_error(make):
+    driver = make(page_html("\U0001f1fa\U0001f1e6"))
+    assert driver.has_system_tabs("Розмір") is True
+    with pytest.raises(FieldMissing, match="Розмір: Польський"):
+        form.execute([Step("size_system", "Розмір", "Польський")], driver)
+
+
+def test_adult_and_flag_forms_have_tabs(make):
+    assert make(page_html("\U0001f1fa\U0001f1e6")).has_system_tabs("Розмір") is True
+
+
+def test_is_size_text():
+    for text in ("22", "17.5", "17,5", "Інший", "Другой", "XL", "S"):
+        assert form.is_size_text(text), text
+    for text in ("Американський", "Український", "Європейський"):
+        assert not form.is_size_text(text), text
+
+
+class NoTabs:
+    """Драйвер без `has_system_tabs` — поведінка як до ROBOT-018."""
+
+    def pick(self, label, values):
+        raise FieldMissing(f"{label}: {values[0]}")
+
+
+def test_driver_without_tab_probe_behaves_as_before():
+    with pytest.raises(FieldMissing):
+        form.size_system(NoTabs(), Step("size_system", "Розмір", "Український"))

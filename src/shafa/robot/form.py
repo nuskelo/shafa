@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from shafa import config, review
+from shafa import catalog, config, review
 from shafa.db import Status, now
 from shafa.robot import browser, guard, lang, listings
 from shafa.robot.plan import PlanError, Step, plan
@@ -168,7 +168,9 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
                     )
                 else:
                     notes.append(f"бренд {step.value} не в списку Шафи — лишено порожнім")
-        elif step.kind in ("condition", "size_system"):
+        elif step.kind == "size_system":
+            notes += size_system(driver, step)
+        elif step.kind == "condition":
             notes += driver.pick(step.label, [step.value]) or []
         elif step.kind == "choice" and not step.required:
             notes += optional(driver, step)
@@ -182,6 +184,19 @@ def execute(steps: list[Step], driver: Driver, strict: bool = False) -> list[str
             raise ValueError(f"Невідомий крок {step.kind}")
     driver.verify()  # Шафа могла переписати вже заповнене — перед публікацією ще раз звіряємо
     return notes
+
+
+NO_TABS = "{label}: вкладок систем нема — вибрано одразу"
+
+
+def size_system(driver: Driver, step: Step) -> list[str]:
+    """Вкладка системи розміру (ROBOT-018). У деяких розділах малюків (кросівки) вкладок на формі
+    немає — одразу кнопки розмірів: крок пропускаємо. Вкладки є, а потрібної нема — як раніше,
+    `FieldMissing`. Драйвер без `has_system_tabs` (тестові) — завжди як раніше."""
+    has_tabs = getattr(driver, "has_system_tabs", None)
+    if has_tabs is not None and not has_tabs(step.label):
+        return [NO_TABS.format(label=step.label)]
+    return driver.pick(step.label, [step.value]) or []
 
 
 def live_size(driver: Driver, step: Step) -> list[str]:
@@ -255,6 +270,15 @@ FLAGS = re.compile("[\U0001f1e6-\U0001f1ff\ufe00-\ufe0f]")
 def plain(text: str) -> str:
     """Текст кнопки без прапорців і variation selectors, пробіли стиснуто."""
     return " ".join(FLAGS.sub("", text).split())
+
+
+def is_size_text(text: str) -> bool:
+    """Кнопка розміру, а не вкладки системи: число («22», «17.5», «17,5»), літерний розмір, «Інший»."""
+    return bool(
+        re.fullmatch(r"\d+(?:[.,]\d+)?", text)
+        or catalog.is_letter_size(text)
+        or among(text, ["Інший"])
+    )
 
 
 ZERO_WIDTH = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"))
@@ -831,6 +855,17 @@ class PageDriver:
         if widget.listed:
             self.lists[label] = widget.chips()  # pick_values уже звірив: чипи — рівно наші
         return notes
+
+    def has_system_tabs(self, label: str) -> bool:
+        """У блоці розміру є вкладки систем (ROBOT-018): кнопка, чий текст — не розмір («22», «17.5»,
+        «S», «Інший»). Блоку чи кнопок немає — True: далі `pick` сам скаже, чого не знайшов."""
+        mark = self._find(label)
+        if mark is None:
+            return True
+        block = self.page.locator(f"[data-robot-block='{mark}']")
+        texts = [plain(t) for t in block.get_by_role("button").all_inner_texts()]
+        texts = [t for t in texts if t]
+        return not texts or any(not is_size_text(t) for t in texts)
 
     def size_block(self) -> dict | None:
         from shafa.robot import sync  # sync вантажить form лише всередині функцій
