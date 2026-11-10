@@ -7,7 +7,7 @@ import re
 
 import pytest
 
-from shafa import review, scan, web
+from shafa import db, review, scan, web
 from shafa.db import Status
 from shafa.robot import publish
 from test_review import add_card
@@ -34,7 +34,7 @@ def archived(conn, root, code=None, text=None, folder="1342", post_id=1342):
     with conn:
         conn.execute(
             "UPDATE items SET archived_at = ?, problem_code = ?, problem_text = ? WHERE id = ?",
-            ("2026-10-30T10:00:00+00:00", code, text, item),
+            (db.now(), code, text, item),
         )
     return item
 
