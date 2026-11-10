@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 class Status(StrEnum):
@@ -463,10 +463,50 @@ def _bot_queue(conn: sqlite3.Connection) -> None:
         raise RuntimeError("Після перебудови бази порушено зв'язки таблиць")
 
 
+# Версія 17 (OPS-003): бот на сервері. Лише нові таблиці, наявні не змінюються.
+# Сервер: `outbox` — вихідна черга для компа. `seq` ніколи не повторюється (AUTOINCREMENT), комп
+# забирає «після N» і підтверджує «до N». `kind`: `post` — новий пост бота (Unix-час у `at`, папка
+# в `data`), `edit` — пост змінено в каналі, `gone` — видалено з каналу (вид зарезервовано), `known`
+# — «Лише в чергу» для поста, який уже є, `owner_cmd` — команда чи кнопка Власника, яку виконує комп.
+# `ready = 0` — пост записано, папка з фото ще пишеться: черга віддається лише до першого такого.
+# Комп (OPS-004): `server_sync` — останній застосований `seq`, `owner_cmds` — команди з черги.
+OUTBOX = """
+CREATE TABLE outbox (
+    seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL CHECK (kind IN ('post', 'edit', 'gone', 'known', 'owner_cmd')),
+    at         INTEGER NOT NULL,
+    post_id    INTEGER,
+    data       TEXT NOT NULL,
+    ready      INTEGER NOT NULL DEFAULT 1 CHECK (ready IN (0, 1)),
+    created_at TEXT NOT NULL,
+    served_at  TEXT,
+    acked_at   TEXT,
+    pruned_at  TEXT
+);
+
+CREATE TABLE server_sync (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    last_seq INTEGER NOT NULL DEFAULT 0,
+    ok_at    TEXT,
+    error    TEXT
+);
+
+CREATE TABLE owner_cmds (
+    seq         INTEGER PRIMARY KEY,
+    cmd         TEXT NOT NULL,
+    data        TEXT NOT NULL,
+    at          INTEGER NOT NULL,
+    received_at TEXT NOT NULL,
+    done_at     TEXT,
+    result      TEXT
+);
+"""
+
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
     9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD, 13: ANSWERS, 14: LISTING_STATE,
-    15: _bot_queue,
+    15: _bot_queue, 16: OUTBOX,
 }  # fmt: skip
 
 

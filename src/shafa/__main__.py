@@ -171,6 +171,28 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
     _add_root(cmd)
     cmd.add_argument("--check", action="store_true", help="лише перевірити токен і права в каналі")
+    cmd.add_argument(
+        "--server", action="store_true",
+        help="бот на сервері (OPS-003): без сайту, звіту й тривог; усе для компа — у вихідну чергу",
+    )  # fmt: skip
+    cmd = commands.add_parser("outbox", help="вихідна черга бота на сервері для компа (OPS-003)")
+    cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite сервера")
+    _add_root(cmd)
+    act = cmd.add_mutually_exclusive_group(required=True)
+    act.add_argument("--give", type=int, metavar="N", help="zip з усім після N — у stdout")
+    act.add_argument("--ack", type=int, metavar="N", help="комп застосував усе до N")
+    act.add_argument(
+        "--ssh", action="store_true",
+        help="дія з SSH_ORIGINAL_COMMAND («give N» / «ack N») — для примусової команди SSH",
+    )  # fmt: skip
+    cmd = commands.add_parser("bot-pack", help="перехід бота на сервер: дані бота в один zip")
+    cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite")
+    _add_root(cmd)
+    cmd.add_argument("--out", type=Path, required=True, help="куди записати zip (має не існувати)")
+    cmd = commands.add_parser("bot-unpack", help="перехід бота на сервер: дані бота з zip сюди")
+    cmd.add_argument("--db", type=Path, required=True, help="файл бази SQLite сервера")
+    _add_root(cmd)
+    cmd.add_argument("--zip", type=Path, required=True, help="zip з `bot-pack`")
     cmd = commands.add_parser("app", help="програма з ярлика: екран, бот, один екземпляр")
     cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
     cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
@@ -684,19 +706,22 @@ def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     conn = db.connect(args.db)
     try:
         name, group = run.check_rights(tg, settings.channel_id)
-        settings = dataclasses.replace(settings, discussion_id=group)
+        settings = dataclasses.replace(settings, discussion_id=group, server=args.server)
         print(f"Бот @{name}: права в каналі є, коментарі — лише вона й бот")
         if args.check:
             return 0
         run.set_status(conn, started=True)
         bot = Bot(conn, tg, settings)
         bot.recover()
-        stop_site = run.start_site(args.db, root, token, settings)
-        print("Бот працює. Зупинити — Ctrl+C")
+        # OPS-003: на сервері сайту, нічної перевірки, звіту й тривог немає — це робить комп
+        stop_site = None if args.server else run.start_site(args.db, root, token, settings)
+        print("Бот працює на сервері (усе для компа — у вихідній черзі). Зупинити — Ctrl+C"
+              if args.server else "Бот працює. Зупинити — Ctrl+C")  # fmt: skip
         try:
             run.poll(bot, tg, conn, stop=lambda: False)
         finally:
-            stop_site.set()
+            if stop_site is not None:
+                stop_site.set()
     except run.SetupError as error:
         print(f"Бот зупинився: {error}")
         run.set_status(conn, error=str(error))
@@ -707,6 +732,55 @@ def run_bot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         conn.close()
         tg.close()
         held.release()
+    return 0
+
+
+def run_outbox(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """Вихідна черга сервера (OPS-003). У stdout — лише zip (`give`) чи «ok N» (`ack`): його читає
+    комп через SSH; усе інше — у stderr."""
+    import os
+
+    from shafa.bot import outbox
+
+    root = _root(parser, args)
+    if not args.db.is_file():
+        print(f"Базу не знайдено: {args.db}", file=sys.stderr)
+        return 2
+    try:
+        if args.ssh:
+            action, number = outbox.parse_ssh(os.environ.get("SSH_ORIGINAL_COMMAND"))
+        elif args.give is not None:
+            action, number = "give", args.give
+        else:
+            action, number = "ack", args.ack
+        conn = db.connect(args.db)
+        try:
+            if action == "give":
+                data, _ = outbox.give_bytes(conn, root, number)
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+            else:
+                print(f"ok {outbox.ack(conn, number, root).upto}")
+        finally:
+            conn.close()
+    except outbox.OutboxError as error:
+        print(f"Не вдалося: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def run_bot_move(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from shafa.bot import move
+
+    root = _root(parser, args)
+    try:
+        if args.command == "bot-pack":
+            print(move.pack(args.db, root, args.out).text())
+        else:
+            print(move.unpack(args.zip, args.db, root).text())
+    except move.MoveError as error:
+        print(f"Не вдалося: {error}", file=sys.stderr)
+        return 2
     return 0
 
 
@@ -761,6 +835,8 @@ def run_report(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "outbox":  # до будь-якого друку: stdout — це zip для компа
+        return run_outbox(parser, args)
     note = config.migrate_env()
     if note:
         print(note)
@@ -791,6 +867,8 @@ def main(argv: list[str] | None = None) -> int:
         return wizard.run()
     if args.command in ("transfer-pack", "transfer-unpack"):
         return run_transfer(args)
+    if args.command in ("bot-pack", "bot-unpack"):
+        return run_bot_move(parser, args)
     if args.command == "quit":
         from shafa import app
 

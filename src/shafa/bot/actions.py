@@ -219,7 +219,7 @@ def _swap_buttons(bot: Any, query: dict, keyboard: dict, note: str = "") -> None
         bot.log(f"Кнопки не змінено: {error}")
 
 
-def _is_owner(bot: Any, query: dict) -> bool:
+def is_owner(bot: Any, query: dict) -> bool:
     owner = bot.settings.owner_chat
     chat = (query.get("message") or {}).get("chat") or {}
     user = query.get("from") or {}
@@ -256,7 +256,7 @@ def _refusal(row: sqlite3.Row | None, code: str, action: str) -> str | None:
 
 def handle(bot: Any, query: dict) -> None:
     """Одне натискання кнопки тривоги. Чужий — «Немає доступу», нічого не змінюється."""
-    if not _is_owner(bot, query):
+    if not is_owner(bot, query):
         bot._answer(query.get("id", ""), TEXTS["denied"])
         return
     action, _, rest = str(query.get("data") or "").partition(":")

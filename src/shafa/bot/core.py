@@ -53,7 +53,7 @@ import pillow_heif
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import batch, changes, config, events, rules, site
-from shafa.bot import actions, alerts, channel, presence, report
+from shafa.bot import actions, alerts, channel, outbox, presence, report
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
@@ -104,6 +104,8 @@ SUMMARY_DELAY = timedelta(seconds=2)  # «Чернеток: N» — після �
 OPEN = ("collecting", "preview", "editing")  # відкриті чернетки
 
 TEXTS = {
+    # OPS-003: бот на сервері, а дані для звіту й кнопок — на компі
+    "owner_later": "Прийнято — зроблю, коли програма на компі буде на зв'язку.",
     "detail_on": "Детально: бачиш усе, що відбувається у фоні (ШІ, робот, довідники). "
     "Щоб лишити лише важливе — /detali.",
     "detail_off": "Лише важливе: тривоги, Проблеми, зупинки. Щоб бачити все — /detali.",
@@ -217,6 +219,7 @@ class Settings:
     root: Path  # Головна папка
     discussion_id: int | None = None  # група обговорення каналу (коментарі)
     export_channel_id: int | None = None  # канал Експорту (`TELEGRAM_CHANNEL_ID`), CORE-015
+    server: bool = False  # OPS-003: бот на сервері — сайт, звіт, тривоги й Картки робить комп
 
     @property
     def chats(self) -> set[int]:
@@ -491,15 +494,27 @@ class Bot:
 
     def _channel_edit(self, update_id: int, post: Any) -> None:
         """Пост нашого каналу змінено: пара ще чекає сайту — піде новий текст (SITE-002)."""
-        self._mark(update_id)
-        if (
-            not isinstance(post, dict)
-            or (post.get("chat") or {}).get("id") != self.settings.channel_id
-        ):
-            return
-        post_id, text = post.get("message_id"), post.get("caption", post.get("text"))
+        ours = isinstance(post, dict) and (post.get("chat") or {}).get("id") == (
+            self.settings.channel_id
+        )
+        post_id = post.get("message_id") if ours else None
+        text = post.get("caption", post.get("text")) if ours else None
         if not isinstance(post_id, int) or not isinstance(text, str):
+            self._mark(update_id)
             return
+        if self.settings.server:  # OPS-003: сайт і Картки — на компі, правка їде туди чергою
+            at = post.get("edit_date") or post.get("date") or int(self.clock().timestamp())
+            with self.conn:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO bot_updates VALUES (?, ?)", (update_id, now())
+                )
+                self.conn.execute(
+                    "UPDATE channel_posts SET text = ? WHERE post_id = ?", (text, post_id)
+                )
+                outbox.add(self.conn, "edit", at, post_id, {"text": text})
+            self.log(f"Пост {post_id} змінено в каналі — правка в черзі для компа")
+            return
+        self._mark(update_id)
         channel.edited(self.conn, post_id, text)
         if site.edited(self.conn, post_id, text):
             self.log(f"Пост {post_id} змінено в каналі — на сайт піде новий текст")
@@ -544,6 +559,14 @@ class Bot:
         text = message.get("text") or message.get("caption")
         part, refusal = self._part(message)
         if text and text.strip().startswith("/") and part is None:
+            owner = chat_id == self.settings.owner_chat
+            if (
+                owner
+                and self.settings.server
+                and (is_command(text, REPORT_COMMAND) or is_command(text, DETAIL_COMMAND))
+            ):
+                self._owner_command(update_id, message, text)  # позначка — разом із чергою
+                return
             self._mark(update_id)
             if chat_id == self.settings.owner_chat and is_command(text, REPORT_COMMAND):
                 self._report_now(chat_id)  # позначку «надіслано» не міняє
@@ -700,6 +723,8 @@ class Bot:
         self._comments_overdue(now_)
         self._retry_links(now_)
         self._summaries()
+        if self.settings.server:  # звіт і тривоги складає комп — дані там (OPS-003)
+            return
         self._daily_report(now_)
         self._alerts(now_)
 
@@ -880,6 +905,9 @@ class Bot:
         message = query.get("message") or {}
         chat = message.get("chat")
         action, _, raw_id = str(query.get("data") or "").partition(":")
+        if action in actions.ACTIONS and self.settings.server:  # OPS-003: виконає комп
+            self._owner_button(update_id, query)
+            return
         if action in actions.ACTIONS:  # BOT-011: кнопки тривог — лише Власнику, свої правила
             self._mark(update_id)
             actions.handle(self, query)
@@ -1051,6 +1079,7 @@ class Bot:
         date = local_date(sent["date"]) if isinstance(sent.get("date"), int) else None
         date = date or self.clock().strftime("%Y-%m-%dT%H:%M:%S")
         comments = "waiting" if len(photos) >= 2 else None
+        unix = sent["date"] if isinstance(sent.get("date"), int) else int(self.clock().timestamp())
         with self.conn:
             self.conn.execute(
                 "UPDATE bot_drafts SET state = 'published', post_id = ?, published_at = ?, "
@@ -1062,6 +1091,7 @@ class Bot:
                 "VALUES (?, ?, ?, 'bot', ?) ON CONFLICT (post_id) DO NOTHING",
                 (post_id, date, caption, now()),
             )
+            seq = self._outbox_post(post_id, unix, caption, "published", len(photos))
         self._fix_link(post_id, caption)
         link = post_link(self.settings.channel_id, post_id)
         try:
@@ -1069,11 +1099,13 @@ class Bot:
         except OSError as error:
             # без папки альбому для коментарів немає — Власник розбереться руками
             self._set(draft_id, note=f"папка не створена: {error}", comments=comments and "failed")
+            self._outbox_ready(seq, None)
             events.emit("post.failed", f"{post_id}: папку з фото не створено (пост у каналі є)")
             self.say(chat_id, TEXTS["done_no_photos"].format(link=link))
             self.tell_owner(f"пост {post_id} опубліковано, але папку не створено: {error}")
             return
         self._set(draft_id, folder_name=folder.name)
+        self._outbox_ready(seq, folder.name)
         self._to_site(post_id, folder.name, sent, caption)
         late = ""
         received = self.conn.execute(
@@ -1145,7 +1177,9 @@ class Bot:
 
     def _to_site(self, post_id: int, folder_name: str, sent: dict, caption: str) -> None:
         """Пост від бота → черга сайту (SITE-001). Лише запис у базу, мережі тут немає; будь-яка
-        помилка сайту публікацію в канал не ламає."""
+        помилка сайту публікацію в канал не ламає. На сервері сайт веде комп (OPS-003)."""
+        if self.settings.server:
+            return
         try:
             unix = sent.get("date")
             moment = datetime.fromtimestamp(unix, UTC) if isinstance(unix, int) else self.clock()
@@ -1154,6 +1188,53 @@ class Bot:
                 self.log(f"Пост {post_id} — у черзі на сайт")
         except Exception as error:  # noqa: BLE001 — канал важливіший за сайт
             self.log(f"Пост {post_id} не став у чергу сайту: {type(error).__name__}")
+
+    # --- Вихідна черга для компа (OPS-003, лише на сервері) ---
+
+    def _outbox_post(self, post_id: int, unix: int, text: str, via: str, photos: int) -> int | None:
+        """Новий пост → черга, у транзакції запису `posts` (її відкрив той, хто кличе). Папки ще
+        немає: запис неготовий, доки `_outbox_ready`."""
+        if not self.settings.server:
+            return None
+        data = {"text": text, "source": "bot", "via": via, "photos": photos, "folder": None}
+        return outbox.add(self.conn, "post", unix, post_id, data, ready=False)
+
+    def _outbox_ready(self, seq: int | None, folder: str | None) -> None:
+        if seq is not None:
+            outbox.mark_ready(self.conn, seq, folder)
+
+    def _owner_command(self, update_id: int, message: dict, text: str) -> None:
+        """`/zvit`, `/detali` на сервері: у чергу для компа і «Прийнято…»."""
+        command = REPORT_COMMAND if is_command(text, REPORT_COMMAND) else DETAIL_COMMAND
+        chat_id = message["chat"]["id"]
+        data = {
+            "cmd": command.lstrip("/"),
+            "chat_id": chat_id,
+            "message_id": message.get("message_id"),
+        }
+        at = message.get("date") if isinstance(message.get("date"), int) else None
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO bot_updates VALUES (?, ?)", (update_id, now()))
+            outbox.add(self.conn, "owner_cmd", at or int(self.clock().timestamp()), None, data)
+        self.say(chat_id, TEXTS["owner_later"])
+
+    def _owner_button(self, update_id: int, query: dict) -> None:
+        """Кнопка тривоги на сервері: чужим — «Немає доступу» (як BOT-011); Власнику — у чергу,
+        комп виконає й допише результат у повідомлення."""
+        if not actions.is_owner(self, query):
+            self._mark(update_id)
+            self._answer(query.get("id", ""), actions.TEXTS["denied"])
+            return
+        message = query.get("message") or {}
+        data = {
+            "cmd": "button", "data": query.get("data"), "chat_id": (message.get("chat") or {}).get("id"),
+            "message_id": message.get("message_id"),
+            "keyboard": (message.get("reply_markup") or {}).get("inline_keyboard"),
+        }  # fmt: skip
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO bot_updates VALUES (?, ?)", (update_id, now()))
+            outbox.add(self.conn, "owner_cmd", int(self.clock().timestamp()), None, data)
+        self._answer(query.get("id", ""), TEXTS["owner_later"])
 
     def _save_folder(self, post_id: int, photos: list[bytes]) -> Path:
         """Фото в `<Головна>/<номер>` (1.jpg, 2.jpg … у порядку надсилання). Є — `<номер>-бот`."""
@@ -1210,6 +1291,9 @@ class Bot:
         draft_id, chat_id = draft["id"], draft["chat_id"]
         post_id, unix, text = found
         if self.conn.execute("SELECT 1 FROM posts WHERE post_id = ?", (post_id,)).fetchone():
+            if self.settings.server:
+                with self.conn:
+                    outbox.add(self.conn, "known", unix, post_id, {"draft": draft_id})
             if not quiet:
                 self.say(chat_id, TEXTS["queue_known"].format(n=post_id))
             return "known"
@@ -1232,16 +1316,19 @@ class Bot:
                 "VALUES (?, ?, ?, 'bot', ?) ON CONFLICT (post_id) DO NOTHING",
                 (post_id, local_date(unix), text, now()),
             )
+            seq = self._outbox_post(post_id, unix, text, "queued", len(photos))
         self._drop_buttons(chat_id, draft["preview_message_id"])
         try:
             folder = self._save_folder(post_id, photos)
         except OSError as error:
             self._set(draft_id, note=f"папка не створена: {error}")
+            self._outbox_ready(seq, None)
             events.emit("post.failed", f"{post_id}: папку з фото не створено (у чергу не стала)")
             self.say(chat_id, TEXTS["failed"].format(why="папку з фото не створено"))
             self.tell_owner(f"пост {post_id} записано, але папку не створено: {error}")
             return "failed"
         self._set(draft_id, folder_name=folder.name)
+        self._outbox_ready(seq, folder.name)
         self._to_site(post_id, folder.name, {"date": unix}, text)
         if not quiet:
             posted = datetime.fromisoformat(local_date(unix))
@@ -1319,6 +1406,12 @@ class Bot:
         позначку знімаємо (чернетки, що встигли стати «публікую», — нижче, без повтору)."""
         with self.conn:
             self.conn.execute("DELETE FROM bot_summaries WHERE running = 1")
+        if self.settings.server:  # OPS-003: пост є, папка не дописалась — компу віддати як є
+            for post_id, folder in outbox.settle(self.conn):
+                self.tell_owner(
+                    f"бот зупинився, коли зберігав фото поста {post_id} — "
+                    + (f"перевір папку «{folder}» на сервері." if folder else "папки немає.")
+                )
         for row in self.conn.execute(
             "SELECT id, post_id FROM bot_drafts WHERE comments = 'sending'"
         ).fetchall():

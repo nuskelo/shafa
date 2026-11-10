@@ -412,6 +412,7 @@ def test_migration_keeps_drafts_and_accepts_queued(tmp_path):
     conn = db.connect(path)
     with conn:
         conn.executescript(
+            "DROP TABLE outbox; DROP TABLE server_sync; DROP TABLE owner_cmds; "
             "DROP TABLE channel_posts; ALTER TABLE bot_draft_parts DROP COLUMN origin_post; "
             "ALTER TABLE bot_draft_parts DROP COLUMN origin_date;"
         )
@@ -425,7 +426,7 @@ def test_migration_keeps_drafts_and_accepts_queued(tmp_path):
 
     conn = db.connect(path)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert conn.execute("SELECT state FROM bot_drafts").fetchone()[0] == "preview"
     assert conn.execute("SELECT text, origin_post FROM bot_draft_parts").fetchone()[:] == (
         "т",
