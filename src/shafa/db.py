@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 class Status(StrEnum):
@@ -132,7 +132,9 @@ CREATE TABLE sessions (
 
 
 def _rebuild_items(conn: sqlite3.Connection) -> None:
-    """Перебудова `items` без втрати фото, бланків і правок (вони посилаються на items)."""
+    """Перебудова `items` без втрати фото, бланків і правок (вони посилаються на items).
+
+    Майбутня перебудова `items` мусить зберегти й `klubok_ads` (FK на items, версія 18)."""
     conn.commit()
     conn.execute("PRAGMA foreign_keys = OFF")  # інакше DROP TABLE items видалить фото каскадом
     try:
@@ -503,10 +505,75 @@ CREATE TABLE owner_cmds (
 """
 
 
+# Версія 18 (KLB-002): Клубок. Лише нові таблиці; з наявних змінюється тільки `sessions` (колонка).
+# `klubok_ads` — оголошення Картки на Клубку (рядок на Картку): черга, публікація, дубль, продаж.
+# `klubok_listings` — знімок її оголошень на Клубку (`get-items`, KLB-003): розміри — з назви,
+# бренду й категорії там може не бути (NULL). `klubok_listings_read` — коли знімок прочитано.
+# `sessions.site` — чия сесія робота: усе наявне читає лише `shafa`, сесії Клубку — KLB-003.
+# Крок — функцією: таблиці й номер версії в одній транзакції (обрив — база лишається 17).
+KLUBOK = """
+CREATE TABLE klubok_ads (
+    item_id            INTEGER PRIMARY KEY REFERENCES items (id),
+    state              TEXT NOT NULL CHECK (state IN ('queued','publishing','published','problem',
+                                                      'sold_asked','sold','removed','skipped')),
+    klubok_id          INTEGER UNIQUE,
+    url                TEXT,
+    problem_code       TEXT,
+    problem_text       TEXT,
+    dup_klubok_id      INTEGER,   -- схоже оголошення на Клубку (її або програми)
+    dup_name           TEXT,
+    dup_ok_at          TEXT,      -- «Інша пара — виставити»: дублі для Картки більше не перевіряються
+    queued_at          TEXT,
+    publish_started_at TEXT,
+    published_at       TEXT,
+    renewed_at         TEXT,
+    gone_at            TEXT,
+    sold_ok_at         TEXT,
+    removed_at         TEXT,
+    session_id         INTEGER REFERENCES sessions (id),
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+CREATE INDEX klubok_ads_started ON klubok_ads (publish_started_at);
+CREATE TABLE klubok_listings (
+    id          INTEGER PRIMARY KEY,   -- id оголошення на Клубку
+    name        TEXT NOT NULL,
+    price       INTEGER,
+    sizes       TEXT NOT NULL,         -- JSON; з назви («38,5 розміру» → ["38,5"]), код
+    brand       TEXT,                  -- NULL: get-items не дає
+    category_id INTEGER,               -- NULL: якщо get-items не дає
+    url         TEXT,
+    photo       TEXT,
+    sold        INTEGER NOT NULL DEFAULT 0,
+    moderated   INTEGER,
+    renew_date  TEXT,
+    post_id     INTEGER,               -- лише надійне зіставлення (або «Так, дубль»)
+    asked_at    TEXT,                  -- KLB-005: уже показано в «Схоже, продано»
+    added_at    TEXT NOT NULL
+);
+CREATE TABLE klubok_listings_read (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    read_at TEXT NOT NULL,
+    count   INTEGER NOT NULL
+);
+ALTER TABLE sessions ADD COLUMN site TEXT NOT NULL DEFAULT 'shafa' CHECK (site IN ('shafa', 'klubok'));
+"""
+
+
+def _klubok(conn: sqlite3.Connection) -> None:
+    """Крок 17 → 18: усе або нічого (рядковий крок ставив би версію окремо від таблиць)."""
+    conn.commit()
+    try:
+        conn.executescript("BEGIN;" + KLUBOK + "PRAGMA user_version = 18; COMMIT;")
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
     9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD, 13: ANSWERS, 14: LISTING_STATE,
-    15: _bot_queue, 16: OUTBOX,
+    15: _bot_queue, 16: OUTBOX, 17: _klubok,
 }  # fmt: skip
 
 
@@ -520,9 +587,18 @@ def connect(path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        migrate(conn)
+    except RuntimeError:
+        conn.close()
+        raise
+    return conn
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Довести відкриту базу до `SCHEMA_VERSION` (той самий код для файлу й копії в пам'яті)."""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version > SCHEMA_VERSION:
-        conn.close()
         raise RuntimeError(f"Невідома версія бази {version} (очікується {SCHEMA_VERSION})")
     if version == 0:  # нова база: схема версії 3, далі — ті самі переходи, що й для старих
         with conn:
@@ -539,4 +615,3 @@ def connect(path: Path) -> sqlite3.Connection:
             conn.executescript(step)
             version += 1
             conn.execute(f"PRAGMA user_version = {version}")
-    return conn
