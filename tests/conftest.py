@@ -76,6 +76,17 @@ def shafa_snapshot(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def klubok_snapshot(monkeypatch):
+    """KLB-001: тести бачать малий знімок довідника Клубку з `fixtures/`, а не справжній."""
+    from shafa.klubok import catalog
+
+    monkeypatch.setattr(catalog, "SNAPSHOT", FIXTURES / "klubok-catalog.json")
+    catalog.snapshot.cache_clear()
+    yield
+    catalog.snapshot.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def no_real_browser(monkeypatch):
     """Жоден тест не відкриває справжній Chrome робота (і не ходить на Шафу), навіть через помилку."""
     from shafa.robot import browser

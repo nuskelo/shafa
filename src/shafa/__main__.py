@@ -212,6 +212,10 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--port", type=int, default=web.DEFAULT_PORT, help="порт на 127.0.0.1")
     cmd.add_argument("--no-browser", action="store_true", help="не відкривати браузер")
     cmd.add_argument("--fake-shafa", action="store_true", help=argparse.SUPPRESS)  # «мавпа»
+    cmd = commands.add_parser(
+        "klubok-catalog", help="знімок довідника Клубку з categors.json і filters.json (KLB-001)"
+    )
+    cmd.add_argument("--from", dest="source", type=Path, required=True, help="тека з двома JSON")
     cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
     mode.add_argument("--login", action="store_true", help="відкрити профіль робота для входу")
@@ -858,6 +862,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_fill(parser, args)
     if args.command == "ui":
         return run_ui(parser, args)
+    if args.command == "klubok-catalog":
+        return run_klubok_catalog(args)
     if args.command == "robot":
         return run_robot(parser, args)
     if args.command == "bot":
@@ -896,6 +902,19 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
     print(format_result(result))
+    return 0
+
+
+def run_klubok_catalog(args: argparse.Namespace) -> int:
+    from shafa.klubok import catalog
+
+    try:
+        snapshot = catalog.build(args.source)
+    except catalog.CatalogError as error:
+        print(f"Знімок не збережено: {error}")
+        return 2
+    catalog.save(snapshot)
+    print(f"Знімок збережено: {catalog.SNAPSHOT.name}, листків {len(snapshot['leaves'])}")
     return 0
 
 
