@@ -1,6 +1,6 @@
 """KLB-002 (D2): відкрита сесія Клубку не видна Шафі й не закривається нею."""
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -82,7 +82,7 @@ def test_bot_alerts_and_report_skip_klubok(conn, tmp_path):
     shafa = _session(conn, "shafa", ended=True, code="done")
     assert alerts._last_session(conn) == shafa
 
-    text = report.build(conn, tmp_path, date.today())
+    text = report.build(conn, tmp_path, NOW.date())
     assert "сесій 1" in text
 
 
