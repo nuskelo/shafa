@@ -11,7 +11,7 @@ from pathlib import Path
 
 from shafa import catalog as shafa_catalog
 from shafa import rules
-from shafa.folders import item_folder
+from shafa.folders import photo_folder
 from shafa.klubok import catalog, category
 from shafa.review import Card
 
@@ -31,6 +31,7 @@ COLORS = {
     "Коричневий": 5, "Чорний": 7, "Бордовий": 17, "Різнокольоровий": COLOR_MULTI,
 }  # fmt: skip
 MULTICOLOR = "Різнокольоровий"
+SUMMER = "Літо"
 MULTI_FROM = 3  # три кольори й більше — «Разноцветное»
 
 
@@ -55,11 +56,35 @@ class Skip:
     text: str
 
 
-def _winter(card: Card, path: str) -> bool:
+def seasons(card: Card, path: str) -> set[str]:
+    """Сезони Картки (її правка діє); порожній бланк — з тексту правилами коду. Без регістру."""
     season = card.fields["season"].value or []
     if not season:
         season = rules.season(card.post_text or "", path)[0] or []
-    return rules.WINTER.casefold() in {s.casefold() for s in season}
+    return {s.casefold() for s in season}
+
+
+def winter(card: Card, path: str) -> bool:
+    return rules.WINTER.casefold() in seasons(card, path)
+
+
+def summer_only(card: Card, path: str) -> bool:
+    """Лише «Літо» (KLB-002: таке йде на Клубок останнім)."""
+    return seasons(card, path) == {SUMMER.casefold()}
+
+
+def card_path(card: Card) -> str:
+    return card.path or shafa_catalog.normalize_section(card.fields["section"].value or "")
+
+
+def leaf_of(card: Card) -> catalog.Leaf | None:
+    """Листок Клубку для Картки або None (без фото, ціни й назви — для дублів і черги)."""
+    path = card_path(card)
+    if not path:
+        return None
+    gender, title = card.fields["gender"].value, (card.fields["title"].value or "").strip()
+    leaf_id = category.leaf_id(path, winter(card, path), gender, title)
+    return catalog.leaf(leaf_id) if leaf_id is not None else None
 
 
 def _sentence(text: str) -> str:
@@ -102,8 +127,13 @@ def color_key(colors: list[str]) -> int | None:
     return COLORS.get(colors[0])
 
 
-def sex_for(post_text: str | None) -> int:
-    """Для кого дитяче взуття: дівчинка 0, хлопчик 1, інакше «Любой пол» 2."""
+def sex_for(post_text: str | None, path: str | None = None) -> int:
+    """Для кого дитяче взуття: дівчинка 0, хлопчик 1, інакше «Любой пол» 2. D8 (KLB-002): спершу
+    розділ Картки (вона його перевірила), інакше слово в тексті."""
+    if path and path.startswith(shafa_catalog.GIRLS):
+        return SEX_GIRL
+    if path and path.startswith(shafa_catalog.BOYS):
+        return SEX_BOY
     return {"girls": SEX_GIRL, "boys": SEX_BOY}.get(rules.said_gender(post_text or ""), SEX_ANY)
 
 
@@ -113,7 +143,7 @@ def ad(card: Card, root: Path) -> KlubokAd | Skip:
     path = card.path or shafa_catalog.normalize_section(section)
     title = (f["title"] or "").strip()
 
-    leaf_id = category.leaf_id(path, _winter(card, path), f["gender"], title) if path else None
+    leaf_id = category.leaf_id(path, winter(card, path), f["gender"], title) if path else None
     if leaf_id is None:
         return Skip("klubok_no_category", f"Для «{path or 'без розділу'}» немає категорії Клубку")
     leaf = catalog.leaf(leaf_id)
@@ -145,7 +175,7 @@ def ad(card: Card, root: Path) -> KlubokAd | Skip:
             return Skip("klubok_size", f"Розміру {bad} немає у списку категорії Клубку")
         chosen = tuple(sizes)
 
-    folder = item_folder(root, card.folder_name)
+    folder = photo_folder(root, card.folder_name)  # D7: опубліковане — з «Опубліковано»
     photos = tuple(folder / p.file_name for p in card.photos)[:PHOTOS_MAX]
     missing = [p.name for p in photos if not p.is_file()]
     if not photos or missing:
@@ -157,7 +187,7 @@ def ad(card: Card, root: Path) -> KlubokAd | Skip:
         text=description(card.post_text, f["description"]),
         price=price,
         leaf=leaf,
-        sex=sex_for(card.post_text) if catalog.has_sex(leaf) else None,
+        sex=sex_for(card.post_text, path) if catalog.has_sex(leaf) else None,
         condition=CONDITION_NEW if f["condition"] == rules.NEW else CONDITION_USED,
         sizes=chosen,
         color=color_key(f["colors"] or []),
