@@ -381,10 +381,11 @@ def state(
     day_limit = day_limit or publish.daily_limit()
     busy = lock.busy(lock_file)
     open_session = conn.execute(
-        "SELECT * FROM sessions WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM sessions WHERE site = 'shafa' AND ended_at IS NULL ORDER BY id DESC LIMIT 1"
     ).fetchone()
     last = conn.execute(
-        "SELECT * FROM sessions WHERE ended_at IS NOT NULL ORDER BY id DESC LIMIT 1"
+        "SELECT * FROM sessions WHERE site = 'shafa' AND ended_at IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1"
     ).fetchone()
     rows = publish.queue_rows(conn)
     approved = len(rows)
@@ -397,7 +398,9 @@ def state(
 
     # A14: «запускається» — лише поки сесії, почато після запуску (відкритої чи вже закритої), немає
     if starting and spawned is not None:
-        newest = conn.execute("SELECT started_at FROM sessions ORDER BY id DESC LIMIT 1").fetchone()
+        newest = conn.execute(
+            "SELECT started_at FROM sessions WHERE site = 'shafa' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
         opened = _stamp(newest[0], now) if newest else None
         if opened is not None and opened >= spawned.astimezone(now.tzinfo):
             starting = False

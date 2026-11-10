@@ -335,7 +335,8 @@ def _login(ctx: _Ctx) -> Check:
         )
     if ctx.conn is not None:
         last = ctx.conn.execute(
-            "SELECT stop_code FROM sessions WHERE ended_at IS NOT NULL ORDER BY id DESC LIMIT 1"
+            "SELECT stop_code FROM sessions WHERE site = 'shafa' AND ended_at IS NOT NULL "
+            "ORDER BY id DESC LIMIT 1"
         ).fetchone()
         if last is not None and last["stop_code"] == "login":
             return Check(

@@ -644,7 +644,9 @@ class App:
 
     def _counts(self, conn) -> dict:
         counts = review.counts(conn)
-        counts["sessions"] = conn.execute("SELECT count(*) FROM sessions").fetchone()[0]
+        counts["sessions"] = conn.execute(
+            "SELECT count(*) FROM sessions WHERE site = 'shafa'"
+        ).fetchone()[0]
         return counts
 
     def _chrome(self, conn, request: Request) -> dict:
@@ -1224,7 +1226,8 @@ class App:
             commands = {"pause": "pause", "resume": None, "stop": "stop"}
             if action in commands:
                 open_id = conn.execute(
-                    "SELECT id FROM sessions WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1"
+                    "SELECT id FROM sessions WHERE site = 'shafa' AND ended_at IS NULL "
+                    "ORDER BY id DESC LIMIT 1"
                 ).fetchone()
                 done = publish.request(conn, commands[action])
                 if done and open_id:  # R-A2: час паузи не рахується в «ще ≈»
@@ -1813,7 +1816,9 @@ class App:
     def sessions_page(self, request: Request) -> Response:
         conn = self.connect()
         try:
-            sessions = conn.execute("SELECT * FROM sessions ORDER BY id DESC LIMIT 200").fetchall()
+            sessions = conn.execute(
+                "SELECT * FROM sessions WHERE site = 'shafa' ORDER BY id DESC LIMIT 200"
+            ).fetchall()
             return self.page(
                 "sessions.html",
                 **self._chrome(conn, request),
@@ -1829,7 +1834,9 @@ class App:
     def session_page(self, session_id: int, request: Request) -> Response:
         conn = self.connect()
         try:
-            row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE id = ? AND site = 'shafa'", (session_id,)
+            ).fetchone()
             if row is None:
                 return self.error(404, "Такої сесії немає.")
             ids = [

@@ -156,7 +156,7 @@ class Seed:
                 start = datetime.now(UTC) - timedelta(days=number + 1, hours=1)
                 self.conn.execute(
                     "INSERT INTO sessions (started_at, ended_at, published, problems, stop_reason, "
-                    "stop_code) VALUES (?, ?, 0, 0, ?, ?)",
+                    "stop_code, site) VALUES (?, ?, 0, 0, ?, ?, 'shafa')",
                     (
                         start.isoformat(timespec="seconds"),
                         (start + timedelta(minutes=20)).isoformat(timespec="seconds"),

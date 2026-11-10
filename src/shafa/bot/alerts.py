@@ -125,7 +125,7 @@ def _problems_now(conn: sqlite3.Connection) -> dict[str, str]:
 
 def _last_session(conn: sqlite3.Connection) -> int:
     return conn.execute(
-        "SELECT COALESCE(MAX(id), 0) FROM sessions WHERE ended_at IS NOT NULL"
+        "SELECT COALESCE(MAX(id), 0) FROM sessions WHERE ended_at IS NOT NULL AND site = 'shafa'"
     ).fetchone()[0]
 
 
@@ -184,7 +184,8 @@ def _sentence(text: object) -> str:
 def _session_events(conn: sqlite3.Connection, state: dict) -> list[Event]:
     out: list[Event] = []
     rows = conn.execute(
-        "SELECT * FROM sessions WHERE id > ? AND ended_at IS NOT NULL ORDER BY id",
+        "SELECT * FROM sessions WHERE id > ? AND ended_at IS NOT NULL AND site = 'shafa' "
+        "ORDER BY id",
         (state["session_id"],),
     ).fetchall()
     for row in rows:
