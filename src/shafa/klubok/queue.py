@@ -198,6 +198,14 @@ def _write(conn: sqlite3.Connection, v: Verdict, stamp: str) -> None:
     )
 
 
+def sync_one(conn: sqlite3.Connection, root: Path, item_id: int) -> None:
+    """Записати вердикт однієї Картки (екран: кнопка під рядком «Клубок», рядка ще немає)."""
+    verdict = plan_one(conn, root, item_id)
+    if verdict is not None:
+        with conn:
+            _write(conn, verdict, now())
+
+
 def forget(conn: sqlite3.Connection, item_id: int) -> None:
     """Картку знято зі схвалених: її місце в черзі зникає (у транзакції того, хто кличе)."""
     conn.execute("DELETE FROM klubok_ads WHERE item_id = ? AND state = ?", (item_id, QUEUED))
