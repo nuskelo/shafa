@@ -20,6 +20,8 @@
 `python -m shafa robot --klubok-dry-fill --fake-klubok --db … --post N [--post M …]` — KLB-001: форма
 Клубку заповнюється й звіряється на ПІДСТАВНОМУ Клубку (до 3 Карток), нічого не публікується, базу
 не пише; `python -m shafa klubok-catalog --from <тека з categors.json і filters.json>` — знімок.
+`python -m shafa klubok-queue --db <копія> --root <Головна> [--today РРРР-ММ-ДД]` — KLB-002: пробний
+прогін черги Клубку (копія бази в пам'яті, файл не змінюється; ≤ 60 рядків).
 `python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
 `--pause | --resume | --stop --db …` — керування запущеною публікацією (поточний товар дописується).
 `python -m shafa bot --db … --root … [--check]` — Telegram-бот: пост від Продавчині → прев'ю →
@@ -219,6 +221,12 @@ def build_parser() -> argparse.ArgumentParser:
         "klubok-catalog", help="знімок довідника Клубку з categors.json і filters.json (KLB-001)"
     )
     cmd.add_argument("--from", dest="source", type=Path, required=True, help="тека з двома JSON")
+    cmd = commands.add_parser(
+        "klubok-queue", help="пробний прогін черги Клубку на копії бази, нічого не пише (KLB-002)"
+    )
+    cmd.add_argument("--db", type=Path, required=True, help="файл бази (читається, не змінюється)")
+    _add_root(cmd)
+    cmd.add_argument("--today", help="день РРРР-ММ-ДД (типово сьогодні)")
     cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
     mode.add_argument("--login", action="store_true", help="відкрити профіль робота для входу")
@@ -918,6 +926,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_ui(parser, args)
     if args.command == "klubok-catalog":
         return run_klubok_catalog(args)
+    if args.command == "klubok-queue":
+        return run_klubok_queue(parser, args)
     if args.command == "robot":
         return run_robot(parser, args)
     if args.command == "bot":
@@ -969,6 +979,37 @@ def run_klubok_catalog(args: argparse.Namespace) -> int:
         return 2
     catalog.save(snapshot)
     print(f"Знімок збережено: {catalog.SNAPSHOT.name}, листків {len(snapshot['leaves'])}")
+    return 0
+
+
+def run_klubok_queue(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from datetime import date as date_
+    from datetime import datetime, time
+
+    from shafa.klubok import preview, queue
+
+    root = _root(parser, args)
+    if not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    today = datetime.now().astimezone()
+    if args.today:
+        try:
+            day = date_.fromisoformat(args.today)
+        except ValueError:
+            parser.error("--today — дата РРРР-ММ-ДД")
+        today = datetime.combine(day, time(12, 0)).astimezone()
+    try:
+        conn = preview.open_copy(args.db)
+    except preview.CopyError as error:
+        print(error)
+        return 2
+    try:
+        print("\n".join(preview.text(conn, root, today)))
+    except queue.SetupError as error:
+        print(f"Налаштування Клубку з помилкою: {error}")
+        return 2
+    finally:
+        conn.close()
     return 0
 
 
