@@ -1,0 +1,7 @@
+#!/bin/sh
+# OPS-005: команди `python -m shafa …` на сервері з правильною текою даних (`.env` лежить у ній).
+# Приклад: ~/shafa-cli bot-unpack --db ~/shafa-data/shafa.sqlite --zip ~/bot-pack.zip
+# Шляхи до файлів — повні (абсолютні).
+SHAFA_DATA_DIR=@DATA@
+export SHAFA_DATA_DIR
+exec @REPO@/.venv/bin/python -m shafa "$@"

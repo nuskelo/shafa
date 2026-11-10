@@ -1,0 +1,11 @@
+# OPS-005: щоночі о 03:30 за часом сервера (має бути Europe/Kyiv — див. docs/install-server.md).
+[Unit]
+Description=Shafa: нічна копія бази
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# Сервер був вимкнений о 03:30 — зробити копію після вмикання.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

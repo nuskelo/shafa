@@ -1,0 +1,1 @@
+restrict,command="env SHAFA_DATA_DIR=@DATA@ @REPO@/.venv/bin/python -m shafa outbox --ssh --db @DATA@/shafa.sqlite" @PUBKEY@
