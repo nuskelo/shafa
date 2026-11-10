@@ -181,6 +181,7 @@ MESSAGES = {
     "bot_started": "Запускаю бота — за кілька секунд він з'явиться на панелі",
     "bot_running": "Бот уже працює",
     "bot_no_token": "Бот не підключений — скажіть Власнику",
+    "bot_on_server": "Бот працює на сервері — тут його запускати не треба",
     "settings_saved": "Збережено. Робот візьме нові ліміти при наступному «Старт»; решта діє одразу.",
     "settings_root": "Збережено. Нова папка діятиме для бота після перезапуску програми: "
     "«Вийти» і відкрити ярликом знову.",
@@ -835,8 +836,10 @@ class App:
         return self.bot_lock or config.data_dir() / run.LOCK_NAME
 
     def bot_state(self, conn) -> BotState:
-        from shafa.bot import run
+        from shafa.bot import client, run
 
+        if client.enabled():  # OPS-004: процесу бота тут немає — лише зв'язок із сервером
+            return self._server_bot(conn)
         row = conn.execute("SELECT error FROM bot_status WHERE id = 1").fetchone()
         error = row["error"] if row else None
         if lock.busy(self._bot_lock()) is not None:
@@ -855,10 +858,38 @@ class App:
             can_start=True,
         )  # fmt: skip
 
+    def _server_bot(self, conn) -> BotState:
+        """«Бот: на сервері, на зв'язку N хв тому» — за останнім вдалим обміном (OPS-004)."""
+        from shafa.bot import client
+
+        moment = datetime.now().astimezone()
+        state = client.link(conn)
+        age = state.age(moment)
+        detail = state.error or ""
+        if age is None:
+            return BotState(
+                "server_lost", "на сервері, зв'язку з ним ще не було — скажіть Власнику",
+                detail=detail,
+            )  # fmt: skip
+        if state.lost(moment):
+            return BotState(
+                "server_lost",
+                f"на сервері, зв'язку немає (востаннє {client.ago(age)}) — перевірте інтернет; "
+                "якщо повторюється, скажіть Власнику",
+                detail=detail,
+            )
+        if client.server_bot_stale(config.data_dir(), moment):
+            return BotState(
+                "server_lost", "на сервері, але не відповідає — скажіть Власнику", detail=detail
+            )
+        return BotState("server", f"на сервері, на зв'язку {client.ago(age)}", detail=detail)
+
     def start_bot(self) -> str:
         """Запустити бота окремим процесом (як робота). Повертає код повідомлення."""
-        from shafa.bot import run
+        from shafa.bot import client, run
 
+        if client.enabled():  # OPS-004: бот на сервері — тут не запускаємо ніколи
+            return "bot_on_server"
         if config.setting(run.TOKEN) is None:
             return "bot_no_token"
         if lock.busy(self._bot_lock()) is not None:
@@ -2172,7 +2203,10 @@ ROBOT_TONES = {  # кружечок плитки «Робот»: ok — прац
     "login_needed": "warn", "login_open": "warn", "busy": "warn",
     "crashed": "bad", "failed": "bad",
 }  # fmt: skip
-BOT_TONES = {"running": "ok", "stopped": "idle", "no_token": "warn", "failed": "bad"}
+BOT_TONES = {
+    "running": "ok", "stopped": "idle", "no_token": "warn", "failed": "bad",
+    "server": "ok", "server_lost": "warn",  # OPS-004: бот на сервері
+}  # fmt: skip
 HEALTH_TONES = {"ok": "ok", "running": "idle", "none": "idle"}
 
 
