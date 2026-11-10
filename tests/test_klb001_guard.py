@@ -81,8 +81,8 @@ def test_enter_is_forbidden_everywhere():
         f"{K}/%72enew/all",  # закодоване «r»
         f"{K}/api/%252Frenew",
         f"{K}/Renew/All",
-        f"https://static.klubok.com/renew/all",
-        f"http://klubok.com/renew/all",
+        "https://static.klubok.com/renew/all",
+        "http://klubok.com/renew/all",
     ],
 )
 def test_dangerous_get_is_blocked(url):
