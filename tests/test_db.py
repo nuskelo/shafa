@@ -4,8 +4,11 @@ import pytest
 
 from shafa import db
 
+# OPS-003 (версія 17): нові таблиці бота на сервері
+OUTBOX_DROP = "DROP TABLE outbox; DROP TABLE server_sync; DROP TABLE owner_cmds;"
+
 # BOT-015 (версія 16): прибрати додане, щоб база стала старшою версією
-QUEUE_DROP = (
+QUEUE_DROP = OUTBOX_DROP + (
     "DROP TABLE channel_posts; ALTER TABLE bot_draft_parts DROP COLUMN origin_post; "
     "ALTER TABLE bot_draft_parts DROP COLUMN origin_date;"
 )
@@ -19,12 +22,13 @@ LISTINGS_DROP = (
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 16
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 17
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
         "bot_summaries", "site_jobs", "site_cache", "my_listings", "my_listings_read",
-        "post_checks", "ai_answers", "channel_posts",
+        "post_checks", "ai_answers", "channel_posts", "outbox", "server_sync", "owner_cmds",
+        "sqlite_sequence",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
@@ -186,7 +190,7 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
             "DROP TABLE site_jobs; DROP TABLE site_cache;"
         )
         conn.executescript(LISTINGS_DROP)
-        conn.executescript("DROP TABLE channel_posts;")
+        conn.executescript(OUTBOX_DROP + "DROP TABLE channel_posts;")
         conn.execute("PRAGMA user_version = 5")
     sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0]
     conn.close()
@@ -225,7 +229,7 @@ def test_version_6_migrated_adds_bot_tables(tmp_path):
             "DROP TABLE site_jobs; DROP TABLE site_cache;"
         )
         conn.executescript(LISTINGS_DROP)
-        conn.executescript("DROP TABLE channel_posts;")
+        conn.executescript(OUTBOX_DROP + "DROP TABLE channel_posts;")
         conn.execute("PRAGMA user_version = 6")
     conn.close()
 
