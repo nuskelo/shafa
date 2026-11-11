@@ -1964,12 +1964,8 @@ def _dup_link(conn, klubok_id: int | None) -> str | None:
 
 
 def _queue_place(conn, root: Path, item_id: int) -> int | None:
-    """Місце Картки серед тих, що в черзі Клубку (за порядком `plan`), або None."""
-    try:
-        queued = [v.item_id for v in klubok_queue.plan(conn, root) if v.state == "queued"]
-    except klubok_queue.SetupError:
-        return None
-    return queued.index(item_id) + 1 if item_id in queued else None
+    """Місце Картки серед рядків `queued` Клубку (порядок `plan`, без пошуку дублів, KLB-003 D7)."""
+    return klubok_queue.place(conn, root, item_id)
 
 
 def klubok_line(conn, root: Path, card: review.Card) -> dict | None:
