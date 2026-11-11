@@ -255,6 +255,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="KLB-003: ОПУБЛІКУВАТИ на Клубку з черги (потрібні --limit, живий сайт!)",
     )  # fmt: skip
     mode.add_argument(
+        "--klubok-confirm", action="store_true",
+        help="KLB-007: підтвердити, що невпевнена публікація відбулась (--post P --klubok-id N)",
+    )  # fmt: skip
+    mode.add_argument(
         "--rehearse", action="store_true",
         help="пробний прогін (QA-003): форма заповнюється, нічого не публікується; помилки — в «Проблеми»",
     )  # fmt: skip
@@ -270,6 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--sections", action="store_true", help="з --rehearse: по одній Картці з кожного розділу"
     )
     cmd.add_argument("--count", type=int, help="з --rehearse: скільки Карток (типово 5, до 30)")
+    cmd.add_argument("--klubok-id", type=int, help="з --klubok-confirm: id оголошення на Клубку")
     cmd.add_argument("--limit", type=int, help="скільки опублікувати (не більше ліміту доби)")
     cmd.add_argument(
         "--human-click", action="store_true",
@@ -307,6 +312,10 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         return run_control(parser, args)
     if args.human_click and not args.klubok_publish:
         parser.error("--human-click лише з --klubok-publish")
+    if args.klubok_confirm:
+        return run_klubok_confirm(parser, args)
+    if args.klubok_id is not None:
+        parser.error("--klubok-id лише з --klubok-confirm")
     if args.klubok_login or args.klubok_snapshot or args.klubok_publish:
         return run_klubok(parser, args)
     if args.klubok_dry_fill or args.fake_klubok:
@@ -566,6 +575,31 @@ def run_rules(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if post is None:
         parser.error(f"Поста з номером {args.post} немає в експорті")
     print(format_rules(post))
+    return 0
+
+
+def run_klubok_confirm(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """KLB-007: лише база. Не під час живої сесії робота (замок), Клубок не чіпаємо."""
+    from datetime import UTC, datetime
+
+    from shafa.klubok import queue as klubok_queue
+    from shafa.robot import lock
+
+    if not args.post or len(args.post) != 1 or args.klubok_id is None or args.klubok_id <= 0:
+        parser.error("--klubok-confirm: потрібні один --post і додатний --klubok-id")
+    if args.db is None or not args.db.is_file():
+        parser.error(f"Базу не знайдено: {args.db}")
+    if lock.busy() is not None:
+        print("Робот зараз працює — дочекайтесь кінця сесії")
+        return 2
+    conn = db.connect(args.db)
+    try:
+        print(klubok_queue.confirm(conn, args.post[0], args.klubok_id, datetime.now(UTC)))
+    except klubok_queue.ConfirmError as error:
+        print(error)
+        return 1
+    finally:
+        conn.close()
     return 0
 
 
