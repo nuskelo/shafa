@@ -19,6 +19,7 @@ from pathlib import Path
 from shafa import config, variants
 from shafa.db import Status, now
 from shafa.klubok import dup, fields
+from shafa.klubok.dup import Dup
 from shafa.review import Card, load_card
 from shafa.robot import publish
 
@@ -94,7 +95,7 @@ class Verdict:
     code: str | None = None
     text: str | None = None
     ad: fields.KlubokAd | None = None
-    dup: dup.Dup | None = None
+    dup: Dup | None = None  # (не `dup.Dup`: на 3.12 поле `dup` уже None)
     rank: int = 1  # 0 — зимове, 1 — інше, 2 — лише літнє
 
     @property
