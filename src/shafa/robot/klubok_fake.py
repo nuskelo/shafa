@@ -7,11 +7,18 @@
 (`/renew/all`) і «Отметить проданным» блокуються так само, як на живому сайті. Профіль Chrome —
 тимчасовий, не профіль робота. Дерево категорій і фільтри — зі знімка `klubok.catalog`.
 
+KLB-003: `GET /api/get-items` посторінково зі штучних оголошень (`listing`), помилки сторінок і
+«зсув» списку посеред читання; `/item/add` без входу → 301 `/signup`; `POST /api/add-edit-used` —
+режими `SUBMITS` (успіх, «низька оцінка», тайм-аут, HTTP 500, не JSON, інший статус, кнопка не
+надсилає); підставна reCAPTCHA на «чужому» хості: шлях `/google/…` підставного сервера guard бачить
+як `https://www.google.com/…` (так перевіряється дозвіл reCAPTCHA), `/evil/…` — як чужий сайт; 429.
+
 Фото: кожне вантажиться `DELAY` секунд (випадково), у `formData.images` елемент з'являється в
 порядку **відповіді сервера** — так відтворюється розсип порядку (1, 2, 3, 4, 5, 7, 8, 6), якщо
 вибрати кілька файлів одразу.
 """
 
+import html
 import itertools
 import json
 import random
@@ -28,6 +35,8 @@ from shafa.robot import klubok_form as form
 SCENARIOS = {
     "ok": "усе гаразд",
     "login": "сторінка просить увійти",
+    "signup": "без входу: /item/add → 301 /signup (як живий Клубок, HYP-4)",
+    "evil": "сторінка ще й надсилає щось на чужий сайт (guard має заблокувати)",
     "error429": "відповідь на відправку — «низька оцінка reCAPTCHA» (/error429)",
     "brand_none": "довідник брендів порожній",
 }
@@ -41,7 +50,33 @@ COLORS = {
     8: "Белый", 9: "Серебряный", 10: "Бежевый", 11: "Жёлтый", 12: "Золотой", 13: "Оранжевый",
     14: "Красный", 15: "Розовый", 16: "Фиолетовый", 17: "Бордо",
 }  # fmt: skip
-TRAP_WORDS = ("renew", "marksold", "delete", "payment")  # адреси-пастки: сервер їх записує
+TRAP_WORDS = ("renew", "marksold", "delete", "payment", "error429")
+SUBMITS = {
+    "success": "успіх: status success, used_id",
+    "error": "status Error (низька оцінка reCAPTCHA)",
+    "timeout": "відповідь не приходить довше, ніж чекає робот",
+    "http500": "HTTP 500",
+    "notjson": "відповідь не JSON",
+    "other": "status — щось інше",
+    "nosend": "кнопка нічого не надсилає",
+    "429": "HTTP 429",
+}
+USER = "198135"
+NAMES = ("Черевики", "Чоботи", "Кросівки", "Туфлі", "Кеди", "Сумка")
+
+
+def listing(n: int) -> dict[str, Any]:
+    """Штучне оголошення `get-items` (та сама структура, що в живого, KLB-003 HYP-1)."""
+    item_id = 800_000_000 + n
+    name = f"{NAMES[n % len(NAMES)]} Fakebrand{n % 97} {35 + n % 12} розміру"
+    return {
+        "ban_reason": "", "count_favourites": 0, "count_msg": 0, "count_view": 0, "id": item_id,
+        "img_link": f"https://img.klubok.com/img/used/fake/m/{item_id}_1.jpg", "is_fixed": False,
+        "is_p": True, "link": f"https://klubok.com/item-fake-{item_id}", "moderated": 0,
+        "name": name, "price": 500 + n % 40 * 50, "promoted": False,
+        "renew_date": f"2026-11-17T10:{n // 60 % 60:02d}:{n % 60:02d}Z", "sold": False,
+    }  # fmt: skip  # адреси-пастки: сервер їх записує
+
 
 PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <title>Підставний Клубок — не справжній сайт</title></head><body>
@@ -51,6 +86,7 @@ PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <a href="/users/198135?pg=renew-used&id=1">Обновить</a></p>
 <form id="addItemForm" autocomplete="off">
 <input id="token" type="hidden" value="fake">
+<input id="user_id" type="hidden" value="%(user)s">
 <div><label for="name">Описание</label>
 <input id="name" type="text" maxlength="100" minlength="3" name="item_name"></div>
 <div><textarea name="text" rows="6" minlength="3"></textarea></div>
@@ -76,9 +112,14 @@ PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 </form>
 <script>
 var TREE = %(tree)s, FILTERS = %(filters)s, SIZES = %(sizes)s, COLORS = %(colors)s;
-var SCENARIO = %(scenario)s;
+var SCENARIO = %(scenario)s, SENDS = %(sends)s;
+// Підставна reCAPTCHA: як справжня, ходить POST на google.com (тут — /google/…); не пустили — токена немає.
 window.grecaptcha = {ready: function (f) { f(); },
-  execute: function () { return Promise.resolve("fake-token"); }};
+  execute: function () {
+    return fetch("/google/recaptcha/api2/reload?k=fake", {method: "POST", body: "x"})
+      .then(function () { return "fake-token"; });
+  }};
+if (SCENARIO === "evil") fetch("/evil/collect", {method: "POST", body: "x"}).catch(function () {});
 var formData = {
   userItem: {item_name: "", text: "", price: "", brand_name: "", sex: "", condition: "",
     size: [], color: "", last_category_id: "", captcha: ""},
@@ -229,6 +270,7 @@ $("input[type=file]").addEventListener("change", function (e) {
 
 $("#addItemForm").addEventListener("submit", function (e) {
   e.preventDefault();
+  if (!SENDS) return;
   grecaptcha.ready(function () {
     grecaptcha.execute("key", {action: "add"}).then(function (token) {
       formData.userItem.captcha = token;
@@ -237,12 +279,16 @@ $("#addItemForm").addEventListener("submit", function (e) {
         .then(function (r) { return r.json(); }).then(function (data) {
           if (data.status === "success" && data.used_id > 0)
             location.replace("/payment/" + data.used_id + "?action=used-submit-ok-logged");
-          else location.replace("/error429?action=Add_new_item&score=" + data.score);
-        });
+          else if (data.status === "Error")
+            location.replace("/error429?action=Add_new_item&score=" + data.score);
+        }).catch(function () {});
     });
   });
 });
 </script></body></html>"""
+
+SIGNUP_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Регистрация</title>
+</head><body><h1>Підставний Клубок — вхід / реєстрація</h1></body></html>"""
 
 LOGIN_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Вход</title></head>
 <body><h1>Підставний Клубок — вхід</h1><form id="login"><input name="login">
@@ -265,7 +311,9 @@ def tree(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     return roots
 
 
-def page(snapshot: dict[str, Any], scenario: str = "ok") -> str:
+def page(
+    snapshot: dict[str, Any], scenario: str = "ok", sends: bool = True, user: str = USER
+) -> str:
     if scenario == "login":
         return LOGIN_PAGE
     filters = snapshot["filters"]
@@ -275,10 +323,12 @@ def page(snapshot: dict[str, Any], scenario: str = "ok") -> str:
         "sizes": [v["key"] for v in filters["4"]["values"]],
         "colors": COLORS,
         "scenario": scenario,
+        "sends": sends,
     }
-    return PAGE % {
-        k: json.dumps(v, ensure_ascii=False).replace("</", "<\\/") for k, v in values.items()
-    }
+    return PAGE % (
+        {k: json.dumps(v, ensure_ascii=False).replace("</", "<\\/") for k, v in values.items()}
+        | {"user": html.escape(user)}
+    )
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -290,16 +340,58 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parts = urlsplit(self.path)
         self.server.hits.append(("GET", self.path))
-        if any(word in self.path.lower() for word in TRAP_WORDS):
+        if parts.path in self.server.too_many:
+            self._send(429, b"{}", "application/json")
+        elif any(word in self.path.lower() for word in TRAP_WORDS):
             self.server.traps.append(self.path)
             self._send(200, b"trap", "text/plain")
+        elif parts.path == "/item/add" and self._scenario() == "signup":
+            self.send_response(301)
+            self.send_header("Location", "/signup")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif parts.path == "/signup":
+            self._send(200, SIGNUP_PAGE.encode("utf-8"), "text/html; charset=utf-8")
         elif parts.path == "/item/add":
-            body = page(self.server.snapshot, self._scenario()).encode("utf-8")
+            body = page(
+                self.server.snapshot, self._scenario(), self.server.submit != "nosend",
+                self.server.user,
+            ).encode("utf-8")  # fmt: skip
             self._send(200, body, "text/html; charset=utf-8")
+        elif parts.path == "/api/get-items":
+            self._items(parse_qs(parts.query))
         elif parts.path == "/api/get-brands":
             self._brands(parts.query)
         else:
             self._send(404, b"{}", "application/json")
+
+    def _items(self, params: dict[str, list[str]]) -> None:
+        srv = self.server
+        offset = int((params.get("offset") or ["0"])[0])
+        limit = int((params.get("limit") or ["60"])[0])
+        srv.item_reads.append(offset)
+        fault = srv.items_fault.get(offset)
+        if isinstance(fault, int):
+            self._send(fault, b"{}", "application/json")
+            return
+        if fault == "notjson":
+            self._send(200, b"<html>not json</html>", "text/html")
+            return
+        if (params.get("user_id") or [""])[0] != USER:
+            self._send(
+                200, b'{"status": "success", "items": [], "items_count": 0}', "application/json"
+            )
+            return
+        start = offset
+        if srv.shift_reads and offset > 0:  # «Обновить все» посеред читання: список зсунувся на 1
+            start = offset - 1
+            if offset + limit >= len(srv.listings):
+                srv.shift_reads -= 1
+        page_items = srv.listings[start : start + limit]
+        count = len(srv.listings) if srv.items_count is None else srv.items_count
+        body = {"items": page_items, "items_count": count, "tabs_count": [count, 0, 0, 0],
+                "status": "success"}  # fmt: skip
+        self._send(200, json.dumps(body, ensure_ascii=False).encode("utf-8"), "application/json")
 
     def _brands(self, query: str) -> None:
         params = parse_qs(query)
@@ -320,14 +412,39 @@ class _Handler(BaseHTTPRequestHandler):
             body = {"tmp_name": f"tmp{next(self.server.counter)}"}
             self._send(200, json.dumps(body).encode(), "application/json")
         elif path == "/api/add-edit-used":
-            self.server.submits += 1  # у KLB-001 сюди не має дійти нічого
-            if self._scenario() == "error429":
-                body = {"status": "Error", "score": 0.1}
-            else:
-                body = {"status": "success", "used_id": next(self.server.counter)}
-            self._send(200, json.dumps(body).encode(), "application/json")
+            self._submit()
+        elif path.startswith("/google/recaptcha/"):
+            self.server.captcha_posts += 1
+            self._send(200, b")]}'\n[]", "application/json")
         else:
             self._send(404, b"{}", "application/json")
+
+    def _submit(self) -> None:
+        srv = self.server
+        srv.submits += 1  # у KLB-001 сюди не має дійти нічого
+        mode = "error" if self._scenario() == "error429" else srv.submit
+        if mode == "timeout":
+            time.sleep(srv.submit_delay)
+            mode = "success"
+        if mode == "http500":
+            self._send(500, b"{}", "application/json")
+        elif mode == "429":
+            self._send(429, b"{}", "application/json")
+        elif mode == "notjson":
+            self._send(200, b"<html>oops</html>", "text/html")
+        elif mode == "other":
+            self._send(200, b'{"status": "pending"}', "application/json")
+        elif mode == "error":
+            body = {"status": "Error", "score": 0.1, "message": "low score"}
+            self._send(200, json.dumps(body).encode(), "application/json")
+        else:
+            used_id = next(srv.counter)
+            srv.published.append(used_id)
+            if not srv.hide_published:
+                srv.listings.append(listing(len(srv.listings)) | {"id": used_id,
+                    "link": f"https://klubok.com/item-new-{used_id}"})  # fmt: skip
+            body = {"status": "success", "used_id": used_id}
+            self._send(200, json.dumps(body).encode(), "application/json")
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -348,6 +465,7 @@ class Server(ThreadingHTTPServer):
         snapshot: dict[str, Any] | None = None,
         delay: tuple[float, float] = DELAY,
         seed: int | None = None,
+        listings: int = 0,
     ) -> None:
         super().__init__(("127.0.0.1", 0), _Handler)
         self.snapshot = snapshot or catalog.snapshot()
@@ -358,12 +476,28 @@ class Server(ThreadingHTTPServer):
         self.traps: list[str] = []  # запити на адреси «Обновить все» тощо, що дійшли до сервера
         self.uploaded = 0
         self.submits = 0
+        # KLB-003
+        self.listings = [listing(n) for n in range(listings)]
+        self.items_fault: dict[int, int | str] = {}  # offset → HTTP-статус чи "notjson"
+        self.items_count: int | None = None  # None — справжня довжина списку
+        self.shift_reads = 0  # скільки повних читань «зсунуться»
+        self.item_reads: list[int] = []
+        self.too_many: set[str] = set()  # шляхи, що відповідають 429
+        self.submit = "success"  # режим `SUBMITS`
+        self.submit_delay = 5.0  # с, режим "timeout"
+        self.hide_published = False  # виставлене не з'являється в get-items
+        self.published: list[int] = []
+        self.captcha_posts = 0
+        self.user = USER
         self.base = f"http://127.0.0.1:{self.server_address[1]}"
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     def close(self) -> None:
         self.shutdown()
         self.server_close()
+
+
+FOREIGN = {"google": "https://www.google.com", "evil": "https://evil.example"}
 
 
 def klubok_url(url: str, base: str) -> str:
@@ -382,11 +516,13 @@ class FakeSession(form.Session):
         headless: bool = True,
         allow_upload: bool = True,
         context: Any = None,
+        publishing: bool = False,
+        human: bool = False,
     ) -> None:
         """`context` — готовий контекст браузера (тести); без нього — тимчасовий профіль Chrome."""
         if scenario not in SCENARIOS:
             raise ValueError(f"невідомий сценарій підставного Клубку: {scenario}")
-        self._setup(allow_upload)
+        self._setup(allow_upload, publishing=publishing, human=human)
         self.base = base
         self.scenario = scenario
         self.profile = None if context else tempfile.TemporaryDirectory(prefix="fake-klubok-")
@@ -396,7 +532,11 @@ class FakeSession(form.Session):
         self._attach()
 
     def verdict_url(self, url: str) -> str | None:
-        """Адреса для guard; None — запит не на підставний Клубок (блокується тут же)."""
+        """Адреса для guard; None — запит не на підставний Клубок (блокується тут же).
+        `/google/…` і `/evil/…` підставного сервера — «чужі» хости для перевірки guard."""
+        for prefix, host in FOREIGN.items():
+            if url.startswith(f"{self.base}/{prefix}/"):
+                return host + url[len(self.base) + len(prefix) + 1 :]
         if url == self.base or url.startswith((self.base + "/", self.base + "?")):
             return klubok_url(url, self.base)
         return None

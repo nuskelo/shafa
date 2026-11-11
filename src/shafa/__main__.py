@@ -22,6 +22,10 @@
 не пише; `python -m shafa klubok-catalog --from <тека з categors.json і filters.json>` — знімок.
 `python -m shafa klubok-queue --db <копія> --root <Головна> [--today РРРР-ММ-ДД]` — KLB-002: пробний
 прогін черги Клубку (копія бази в пам'яті, файл не змінюється; ≤ 60 рядків).
+`python -m shafa robot --klubok-login` — KLB-003: вхід у Клубок руками (профіль `<дані>/klubok-profile`);
+`--klubok-snapshot --db …` — знімок її оголошень (лише читання сайту); `--klubok-publish --db … --root …
+--limit N [--post P] [--human-click]` — ПУБЛІКАЦІЯ на Клубку з черги (живий сайт, лише з дозволу
+Власника); з `--fake-klubok` — на підставному Клубку й на копії бази (файл не змінюється).
 `python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
 `--pause | --resume | --stop --db …` — керування запущеною публікацією (поточний товар дописується).
 `python -m shafa bot --db … --root … [--check]` — Telegram-бот: пост від Продавчині → прев'ю →
@@ -238,6 +242,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="KLB-001: заповнити форму Клубку (поки лише підставного), не публікувати",
     )  # fmt: skip
     mode.add_argument(
+        "--klubok-login",
+        action="store_true",
+        help="KLB-003: увійти в Клубок руками (окремий профіль)",
+    )
+    mode.add_argument(
+        "--klubok-snapshot", action="store_true",
+        help="KLB-003: перечитати її оголошення на Клубку (лише читання)",
+    )  # fmt: skip
+    mode.add_argument(
+        "--klubok-publish", action="store_true",
+        help="KLB-003: ОПУБЛІКУВАТИ на Клубку з черги (потрібні --limit, живий сайт!)",
+    )  # fmt: skip
+    mode.add_argument(
         "--rehearse", action="store_true",
         help="пробний прогін (QA-003): форма заповнюється, нічого не публікується; помилки — в «Проблеми»",
     )  # fmt: skip
@@ -254,6 +271,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cmd.add_argument("--count", type=int, help="з --rehearse: скільки Карток (типово 5, до 30)")
     cmd.add_argument("--limit", type=int, help="скільки опублікувати (не більше ліміту доби)")
+    cmd.add_argument(
+        "--human-click", action="store_true",
+        help="з --klubok-publish: робот заповнює форму, «Опубликовать» тисне людина",
+    )  # fmt: skip
     # Підставна Шафа (UI-002, D5): лише тести й «мавпа»; у довідці не показується.
     cmd.add_argument("--fake-shafa", action="store_true", help=argparse.SUPPRESS)
     # Підставний Клубок (KLB-001): лише тести й ручний прогін; у довідці не показується.
@@ -284,6 +305,10 @@ def run_control(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
 def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.pause or args.resume or args.stop:
         return run_control(parser, args)
+    if args.human_click and not args.klubok_publish:
+        parser.error("--human-click лише з --klubok-publish")
+    if args.klubok_login or args.klubok_snapshot or args.klubok_publish:
+        return run_klubok(parser, args)
     if args.klubok_dry_fill or args.fake_klubok:
         return run_klubok_dry_fill(parser, args)
 
@@ -541,6 +566,140 @@ def run_rules(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if post is None:
         parser.error(f"Поста з номером {args.post} немає в експорті")
     print(format_rules(post))
+    return 0
+
+
+def run_klubok(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """KLB-003: вхід, знімок, публікація на Клубку. Той самий замок, що й у робота Шафи."""
+    from shafa.klubok import queue as klubok_queue
+    from shafa.robot import klubok_publish, lock
+
+    root = None
+    if args.klubok_publish:
+        low, high = klubok_publish.LIMIT_RANGE
+        if args.limit is None or not low <= args.limit <= high:
+            parser.error(f"--klubok-publish: --limit обов'язковий, від {low} до {high}")
+        if args.post and len(args.post) > 1:
+            parser.error("--klubok-publish: --post — один номер")
+        root = _root(parser, args)
+        try:
+            klubok_queue.daily_limit()
+            klubok_queue.from_post()
+        except klubok_queue.SetupError as error:
+            parser.error(str(error))
+    if (args.klubok_snapshot or args.klubok_publish) and (args.db is None or not args.db.is_file()):
+        parser.error(f"Базу не знайдено: {args.db}")
+    if args.fake_klubok and args.klubok_login:
+        parser.error("--fake-klubok не для входу")
+    mode = "klubok-login" if args.klubok_login else (
+        "klubok-snapshot" if args.klubok_snapshot else "klubok-publish"
+    )  # fmt: skip
+    try:
+        with lock.hold(mode):
+            return _klubok_with_browser(args, root)
+    except lock.Busy as error:
+        print(error)
+        return 2
+
+
+def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
+    import signal
+    import sqlite3
+    import tempfile
+    from contextlib import closing
+
+    from playwright.sync_api import sync_playwright
+
+    from shafa.robot import browser, klubok_fake, klubok_form, klubok_publish
+    from shafa.robot import form as shafa_form
+
+    def log(line: str) -> None:
+        print(line, flush=True)
+
+    if args.klubok_login:
+        with sync_playwright() as p:
+            print("Увійдіть у Клубок у відкритому вікні й закрийте його.", flush=True)
+            why = browser.wait_for_manual_login(
+                p, profile=klubok_form.profile_dir(), url=klubok_form.FORM_URL
+            )
+        print({"closed": "Вікно закрито.", "done": "Вікно закрито кнопкою «Я увійшов».",
+               "timeout": "15 хв минуло — вікно закрито."}[why], flush=True)  # fmt: skip
+        return 0
+
+    stop: list[bool] = []
+
+    def on_sigint(_signum, _frame) -> None:
+        if not stop:
+            print("Ctrl+C: доробляю поточну Картку й зупиняюсь", flush=True)
+        stop.append(True)
+
+    server = temp = None
+    db_path = args.db
+    if args.fake_klubok:  # підставний Клубок — лише на копії бази: файл не змінюється
+        server = klubok_fake.Server(listings=120)
+        temp = tempfile.TemporaryDirectory(prefix="klubok-fake-")
+        db_path = Path(temp.name) / "копія.sqlite"
+        with closing(sqlite3.connect(args.db)) as source, closing(sqlite3.connect(db_path)) as copy:
+            source.backup(copy)
+        log(f"Підставний Клубок, копія бази: {db_path}")
+    conn = db.connect(db_path)
+    previous = signal.signal(signal.SIGINT, on_sigint)
+    try:
+        with sync_playwright() as p:
+            if server is not None:
+                session: klubok_form.Session = klubok_fake.FakeSession(
+                    p, server.base, headless=False, publishing=args.klubok_publish,
+                    human=args.human_click,
+                )  # fmt: skip
+            else:
+                session = klubok_form.LiveSession(
+                    p, publishing=args.klubok_publish, human=args.human_click
+                )
+            try:
+                if args.klubok_snapshot:
+                    return _klubok_snapshot(conn, session, log)
+                opts = klubok_publish.Options(
+                    limit=args.limit, post_id=args.post[0] if args.post else None,
+                    human=args.human_click,
+                )  # fmt: skip
+                result = klubok_publish.run(
+                    conn, root, session, opts, stopping=lambda: bool(stop), log=log,
+                    screens=shafa_form.screens_dir(),
+                )  # fmt: skip
+                print("\n".join(result.lines()), flush=True)
+                return 0 if result.code in (klubok_publish.DONE, klubok_publish.STOPPED) else 1
+            finally:
+                session.close()
+    finally:
+        signal.signal(signal.SIGINT, previous)
+        conn.close()
+        if server is not None:
+            server.close()
+        if temp is not None:
+            temp.cleanup()
+
+
+def _klubok_snapshot(conn, session, log) -> int:
+    import random
+
+    from shafa.klubok import snapshot
+    from shafa.robot import klubok_form, klubok_publish
+
+    opened = session.open_form()
+    if not opened.ok or session.user_id() != klubok_form.KLUBOK_USER:
+        log(klubok_publish.LOGIN_TEXT)
+        return 1
+    try:
+        snapshot.refresh(
+            conn, session.fetch_text,
+            pause=lambda: klubok_publish.nap(
+                random.uniform(*klubok_publish.PAGE_PAUSE), lambda: False
+            ),
+            wait=lambda s: klubok_publish.nap(s, lambda: False), log=log,
+        )  # fmt: skip
+    except snapshot.SnapshotError as error:
+        log(f"Знімок не записано: {error.text}")
+        return 1
     return 0
 
 

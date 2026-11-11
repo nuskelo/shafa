@@ -35,8 +35,12 @@ def test_queued_line_with_place_and_get_writes_nothing(conn, app, root):
 
     page = html(get(app, f"/item/{item_id}"))
 
-    assert "Клубок: у черзі · місце 2" in page
+    # KLB-003 D7: рядка ще немає — «у черзі» без номера (місце рахується лише серед `queued`)
+    assert "Клубок: у черзі" in page and "місце" not in page
     assert count_rows(conn) == 0  # GET нічого не пише
+
+    queue.sync(conn, root, TODAY)
+    assert "Клубок: у черзі · місце 2" in html(get(app, f"/item/{item_id}"))
 
 
 def test_skipped_line_in_plain_words(conn, app, root):

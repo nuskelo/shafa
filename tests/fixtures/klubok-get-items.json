@@ -1,0 +1,24 @@
+{
+  "items": [
+    {"ban_reason": "", "count_favourites": 0, "count_msg": 0, "count_view": 3, "id": 900000101,
+     "img_link": "https://img.klubok.com/img/used/2026/11/01/90000/m/900000101_1.jpg",
+     "is_fixed": false, "is_p": true,
+     "link": "https://klubok.com/item-vigadani-chereviki-testbrand-38-rozmiru-900000101",
+     "moderated": 0, "name": "Вигадані черевики Testbrand 38 розміру", "price": 1000,
+     "promoted": false, "renew_date": "2026-11-17T10:00:00Z", "sold": false},
+    {"ban_reason": "", "count_favourites": 1, "count_msg": 0, "count_view": 0, "id": 900000102,
+     "img_link": "", "is_fixed": false, "is_p": true,
+     "link": "https://klubok.com/item-vigadana-sumka-testbrand-900000102",
+     "moderated": 0, "name": "Вигадана сумка Testbrand", "price": 700,
+     "promoted": false, "renew_date": "2026-11-17T10:00:01Z", "sold": false},
+    {"ban_reason": "", "count_favourites": 0, "count_msg": 0, "count_view": 0, "id": 900000103,
+     "img_link": "https://img.klubok.com/img/used/2026/11/01/90000/m/900000103_1.jpg",
+     "is_fixed": false, "is_p": true,
+     "link": "https://klubok.com/item-vigadani-krosivky-38-5-rozmiru-900000103",
+     "moderated": 0, "name": "Вигадані кросівки 38,5 розміру", "price": 850,
+     "promoted": false, "renew_date": "2026-11-17T10:00:02Z", "sold": false}
+  ],
+  "items_count": 3,
+  "tabs_count": [3, 0, 0, 0],
+  "status": "success"
+}

@@ -41,6 +41,7 @@ PHOTOS_DONE = (PUBLISHED, SKIPPED, SOLD_ASKED, SOLD, REMOVED)  # фото Клу
 POST_GONE, POST_DONE = "klubok_post_gone", "klubok_post_done"
 DUPLICATE, DUP_YES, UNCERTAIN = "klubok_duplicate", "klubok_dup_yes", "klubok_uncertain"
 OFF, SNAPSHOT_OLD, LIMIT_REACHED = "klubok_off", "klubok_snapshot_old", "klubok_limit"
+EMPTY = "klubok_queue_empty"
 
 # Причини простою мовою — для екрана й `klubok-queue` (англійських кодів людина не бачить).
 REASONS = {
@@ -58,6 +59,7 @@ REASONS = {
     OFF: "Клубок вимкнено в налаштуваннях",
     SNAPSHOT_OLD: "список оголошень на Клубку не перечитано за останню добу",
     LIMIT_REACHED: "ліміт публікацій на Клубку на сьогодні вичерпано",
+    EMPTY: "у черзі Клубку нічого немає",
 }
 
 
@@ -138,13 +140,17 @@ def _dup_ok(conn: sqlite3.Connection, item_id: int) -> bool:
     return row is not None and row[0] is not None
 
 
+def rank(card: Card) -> int:
+    """Місце групи в черзі: 0 — зимове, 1 — інше, 2 — лише літнє."""
+    path = fields.card_path(card)
+    if not path:
+        return 1
+    return 0 if fields.winter(card, path) else 2 if fields.summer_only(card, path) else 1
+
+
 def judge(conn: sqlite3.Connection, root: Path, card: Card) -> Verdict:
     """Вердикт однієї Картки-кандидата (нічого не пише)."""
-    path = fields.card_path(card)
-    rank = 1
-    if path:
-        rank = 0 if fields.winter(card, path) else 2 if fields.summer_only(card, path) else 1
-    base = {"item_id": card.id, "post_id": card.post_id, "rank": rank}
+    base = {"item_id": card.id, "post_id": card.post_id, "rank": rank(card)}
     if card.post_id is not None and publish.known_gone(conn, card.post_id):
         return Verdict(**base, state=SKIPPED, code=POST_GONE)
     if post_done(conn, card):
@@ -255,16 +261,19 @@ def snapshot_fresh(conn: sqlite3.Connection, today: datetime) -> bool:
 @dataclass(frozen=True)
 class Taken:
     cards: list[Verdict]
-    code: str | None = None  # чому порожньо: OFF / SNAPSHOT_OLD / LIMIT_REACHED
+    code: str | None = None  # чому порожньо: OFF / SNAPSHOT_OLD / LIMIT_REACHED / EMPTY
 
     @property
     def reason(self) -> str:
         return REASONS.get(self.code or "", "")
 
 
-def take(conn: sqlite3.Connection, root: Path, today: datetime) -> Taken:
+def take(
+    conn: sqlite3.Connection, root: Path, today: datetime, post_id: int | None = None
+) -> Taken:
     """Картки, які можна виставити сьогодні, по порядку черги. Перед видачею кожна ще раз
-    перевіряється на дубль (KLB-003 кличе знову після кожної публікації)."""
+    перевіряється на дубль (KLB-003 кличе знову після кожної публікації). `post_id` — лише Картки
+    цього поста (фільтр до обрізання за лімітом; ліміт доби діє як завжди)."""
     if not enabled():
         return Taken([], OFF)
     if not snapshot_fresh(conn, today):
@@ -274,7 +283,7 @@ def take(conn: sqlite3.Connection, root: Path, today: datetime) -> Taken:
         return Taken([], LIMIT_REACHED)
     out: list[Verdict] = []
     for verdict in sync(conn, root, today):
-        if verdict.state != QUEUED:
+        if verdict.state != QUEUED or (post_id is not None and verdict.post_id != post_id):
             continue
         card = load_card(conn, verdict.item_id)
         fresh = judge(conn, root, card) if card else None
@@ -286,7 +295,27 @@ def take(conn: sqlite3.Connection, root: Path, today: datetime) -> Taken:
         out.append(fresh)
         if len(out) >= left:
             break
-    return Taken(out)
+    return Taken(out, None if out else EMPTY)
+
+
+def place(conn: sqlite3.Connection, root: Path, item_id: int) -> int | None:
+    """D7: місце Картки серед рядків `queued` — у порядку `plan` (зимове → інше → лише літнє, далі
+    дата поста й id), але без `dup.find`, без `fields.ad` і без запису: екран відкриває Картку
+    швидко й при тисячах її оголошень. Рядка `queued` немає — None («у черзі» без номера).
+    `root` — для однаковості з `plan` (фото тут не потрібні)."""
+    del root
+    rows = conn.execute(
+        "SELECT k.item_id FROM klubok_ads k JOIN items i ON i.id = k.item_id "
+        "LEFT JOIN posts p ON p.post_id = i.post_id WHERE k.state = ? "
+        "ORDER BY p.date IS NULL, p.date, i.id",
+        (QUEUED,),
+    ).fetchall()
+    ids = [r[0] for r in rows]
+    if item_id not in ids:
+        return None
+    ranks = {i: rank(card) if (card := load_card(conn, i)) else 1 for i in ids}
+    ordered = sorted(ids, key=lambda i: ranks[i])  # стабільне, як у `plan`
+    return ordered.index(item_id) + 1
 
 
 # --- стани для KLB-003 (D5) ---
@@ -308,11 +337,19 @@ def start(conn: sqlite3.Connection, item_id: int, session_id: int) -> bool:
     )  # fmt: skip
 
 
-def published(conn: sqlite3.Connection, item_id: int, klubok_id: int, url: str) -> bool:
+def published(conn: sqlite3.Connection, item_id: int, klubok_id: int, url: str | None) -> bool:
+    """`url` None — посилання допише наступний знімок (KLB-003 DRIFT-1)."""
     return _move(
         conn, item_id, PUBLISHING, "state = ?, klubok_id = ?, url = ?, published_at = ?",
         (PUBLISHED, klubok_id, url, now()),
     )  # fmt: skip
+
+
+def release(conn: sqlite3.Connection, item_id: int) -> bool:
+    """`publishing` → `queued`: запит публікації точно не пішов (guard його не бачив).
+    `publish_started_at` лишається — спроба в ліміті доби (повторний старт того ж дня
+    перезапише час, тож дві спроби однієї Картки за добу рахуються як одна; похибка ≤ 1)."""
+    return _move(conn, item_id, PUBLISHING, "state = ?", (QUEUED,))
 
 
 def problem(conn: sqlite3.Connection, item_id: int, code: str, text: str) -> bool:
