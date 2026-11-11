@@ -245,6 +245,8 @@ def test_without_login_stops_before_any_card(conn, root, cards, chromium, server
 def test_other_account_is_not_logged_in(conn, root, cards, server, session):
     server.user = "1"
     assert run(conn, root, session).code == kp.LOGIN
+    assert server.item_reads == []  # знімок не читали — вхід перевірено до нього
+    assert row(conn, cards[0]) is None  # жодна Картка не стартувала
 
 
 def test_snapshot_failure_stops_before_any_card(conn, root, cards, server, session):
