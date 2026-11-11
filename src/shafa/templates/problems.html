@@ -1,5 +1,15 @@
 {% extends "list.html" %}
 {% block cards %}
+{% if klubok_problems %}
+<section class="klubok-problems">
+  <h2>Клубок: треба рішення</h2>
+  <ul>
+  {% for kcard, why in klubok_problems %}
+    <li><a href="/item/{{ kcard.id }}?from={{ list_url | urlencode }}">{{ kcard | card_name }}</a>{% if kcard.post_id %} · пост {{ kcard.post_id }}{% endif %} — {{ why }}</li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
 <ul class="problems">
 {% for card in cards %}
   {% set row = rows[card.id] %}

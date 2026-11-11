@@ -245,6 +245,19 @@
 {% if card.status == "published" and shafa_url %}
 <p class="note"><a href="{{ shafa_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Шафі</a></p>
 {% endif %}
+{% if klubok %}
+<div class="note klubok">
+  <p>Клубок: {{ klubok.text }}{% if klubok.url %} · <a href="{{ klubok.url }}" target="_blank" rel="noopener noreferrer">Відкрити на Клубку</a>{% endif %}</p>
+  {% if klubok.dup %}
+  <p>Схоже оголошення: <b>{{ klubok.dup.name or "без назви" }}</b>{% if klubok.dup.url %} · <a href="{{ klubok.dup.url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже на Клубку</a>{% endif %}</p>
+  <form method="post" action="/item/{{ card.id }}" class="decide">
+    {{ hidden() }}
+    <button name="action" value="klubok_dup_other" class="approve">Інша пара — виставити</button>
+    <button name="action" value="klubok_dup_yes" class="reject">Так, дубль — не виставляти</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
 
 {% macro columns() %}
 {% set order = card.fields["photo_order"] %}

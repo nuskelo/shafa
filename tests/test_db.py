@@ -4,8 +4,14 @@ import pytest
 
 from shafa import db
 
+# KLB-002 (версія 18): таблиці Клубку і `sessions.site`
+KLUBOK_DROP = (
+    "DROP TABLE klubok_ads; DROP TABLE klubok_listings; DROP TABLE klubok_listings_read; "
+    "ALTER TABLE sessions DROP COLUMN site;"
+)
+
 # OPS-003 (версія 17): нові таблиці бота на сервері
-OUTBOX_DROP = "DROP TABLE outbox; DROP TABLE server_sync; DROP TABLE owner_cmds;"
+OUTBOX_DROP = KLUBOK_DROP + "DROP TABLE outbox; DROP TABLE server_sync; DROP TABLE owner_cmds;"
 
 # BOT-015 (версія 16): прибрати додане, щоб база стала старшою версією
 QUEUE_DROP = OUTBOX_DROP + (
@@ -22,12 +28,13 @@ LISTINGS_DROP = (
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 17
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 18
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
         "bot_summaries", "site_jobs", "site_cache", "my_listings", "my_listings_read",
         "post_checks", "ai_answers", "channel_posts", "outbox", "server_sync", "owner_cmds",
+        "klubok_ads", "klubok_listings", "klubok_listings_read",
         "sqlite_sequence",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")

@@ -47,6 +47,7 @@ from shafa import (
 from shafa.db import Status
 from shafa.export import parse_export
 from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, list_folders, old_root
+from shafa.klubok import queue as klubok_queue
 from shafa.robot import browser, control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
@@ -91,6 +92,8 @@ STICKY_TITLES = {  # проблеми публікації — простими 
     "photos_missing": "Фото поста не знайдено в папці",  # без запису Картка-Проблема давала 500
 }
 MESSAGES = {
+    "klubok_dup_other": "Добре — пара піде на Клубок як інша.",
+    "klubok_dup_yes": "Добре — на Клубок ця пара не піде: це дубль.",
     "saved": "Збережено",
     "approved": "Схвалено",
     "rejected": f"Картку «{{name}}» відкладено в Архів на {review.ARCHIVE_DAYS} днів.",
@@ -644,7 +647,9 @@ class App:
 
     def _counts(self, conn) -> dict:
         counts = review.counts(conn)
-        counts["sessions"] = conn.execute("SELECT count(*) FROM sessions").fetchone()[0]
+        counts["sessions"] = conn.execute(
+            "SELECT count(*) FROM sessions WHERE site = 'shafa'"
+        ).fetchone()[0]
         return counts
 
     def _chrome(self, conn, request: Request) -> dict:
@@ -1224,7 +1229,8 @@ class App:
             commands = {"pause": "pause", "resume": None, "stop": "stop"}
             if action in commands:
                 open_id = conn.execute(
-                    "SELECT id FROM sessions WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1"
+                    "SELECT id FROM sessions WHERE site = 'shafa' AND ended_at IS NULL "
+                    "ORDER BY id DESC LIMIT 1"
                 ).fetchone()
                 done = publish.request(conn, commands[action])
                 if done and open_id:  # R-A2: час паузи не рахується в «ще ≈»
@@ -1295,6 +1301,7 @@ class App:
                 checks=checks,
                 marks=marks,
                 rows={c.id: problem_row(c) for c in cards} if status == Status.PROBLEM else {},
+                klubok_problems=klubok_problems(conn) if status == Status.PROBLEM else [],
                 on_shafa=on_shafa,
                 my_items=MY_ITEMS,
                 list_url=f"/{status}" + (f"?{urlencode({'q': query})}" if query else ""),
@@ -1527,6 +1534,7 @@ class App:
                 ai_verdict=dup.verdict_text(card.problem_text),
                 duplicate_photo=self._duplicate_file(item_id).is_file(),
                 shafa_url=shafa_link(row["shafa_url"]),
+                klubok=klubok_line(conn, self.root, card),
                 has_shafa_id=row["shafa_id"] is not None
                 or row["problem_code"] in review.NO_RESTORE,
                 my_items=MY_ITEMS,
@@ -1626,6 +1634,10 @@ class App:
                         "Картку не можна буде повернути. Точно в архів?",
                         "Так, в архів", "Ні, назад",
                     )  # fmt: skip
+            if action in KLUBOK_ACTIONS:  # KLB-002 (D6.3): рішення про дубль Клубку
+                klubok_queue.sync_one(conn, self.root, item_id)
+                done = KLUBOK_ACTIONS[action](conn, item_id)
+                return redirect(back(msg=action if done else "stale"))
             if action in review.ACTIONS:
                 message = review.act(conn, item_id, action, self.root, confirmed=sure)
                 if message == review.CONFIRM_RESTORE:  # B10: продану пару — лише після питання
@@ -1813,7 +1825,9 @@ class App:
     def sessions_page(self, request: Request) -> Response:
         conn = self.connect()
         try:
-            sessions = conn.execute("SELECT * FROM sessions ORDER BY id DESC LIMIT 200").fetchall()
+            sessions = conn.execute(
+                "SELECT * FROM sessions WHERE site = 'shafa' ORDER BY id DESC LIMIT 200"
+            ).fetchall()
             return self.page(
                 "sessions.html",
                 **self._chrome(conn, request),
@@ -1829,7 +1843,9 @@ class App:
     def session_page(self, session_id: int, request: Request) -> Response:
         conn = self.connect()
         try:
-            row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE id = ? AND site = 'shafa'", (session_id,)
+            ).fetchone()
             if row is None:
                 return self.error(404, "Такої сесії немає.")
             ids = [
@@ -1923,6 +1939,95 @@ def safe_back(path: str) -> str:
     if not path.startswith("/") or path.startswith("//") or "\\" in path:
         return "/" + Status.REVIEW
     return path
+
+
+KLUBOK_ACTIONS = {
+    "klubok_dup_other": klubok_queue.dup_other,
+    "klubok_dup_yes": klubok_queue.dup_yes,
+}
+
+
+def klubok_link(url: str | None) -> str | None:
+    """Посилання на Клубок — у сторінку лише https://klubok.com/… (не `javascript:`)."""
+    return url if url and url.startswith("https://klubok.com/") else None
+
+
+def _dup_link(conn, klubok_id: int | None) -> str | None:
+    if klubok_id is None:
+        return None
+    row = conn.execute(
+        "SELECT url FROM klubok_listings WHERE id = ? UNION ALL "
+        "SELECT url FROM klubok_ads WHERE klubok_id = ?",
+        (klubok_id, klubok_id),
+    ).fetchone()
+    return klubok_link(row[0]) if row else None
+
+
+def _queue_place(conn, root: Path, item_id: int) -> int | None:
+    """Місце Картки серед тих, що в черзі Клубку (за порядком `plan`), або None."""
+    try:
+        queued = [v.item_id for v in klubok_queue.plan(conn, root) if v.state == "queued"]
+    except klubok_queue.SetupError:
+        return None
+    return queued.index(item_id) + 1 if item_id in queued else None
+
+
+def klubok_line(conn, root: Path, card: review.Card) -> dict | None:
+    """Рядок «Клубок: …» на Картці (D10). GET нічого не пише: без рядка — вердикт `plan`.
+    Показується, коли Клубок увімкнено або в Картки вже є рядок Клубку."""
+    row = conn.execute("SELECT * FROM klubok_ads WHERE item_id = ?", (card.id,)).fetchone()
+    if row is None and not klubok_queue.enabled():
+        return None
+    out: dict = {"text": "", "url": None, "dup": None}
+    if row is None:
+        try:
+            verdict = klubok_queue.plan_one(conn, root, card.id)
+            limit = klubok_queue.from_post()
+        except klubok_queue.SetupError as error:
+            return out | {"text": f"налаштування з помилкою: {error}"}
+        if verdict is None:
+            if card.post_id is not None and card.post_id <= limit:
+                return out | {"text": f"не піде: пост старіший за {limit}"}
+            if card.status == Status.REVIEW:
+                return out | {"text": "піде після схвалення"}
+            return None
+        state, code, text = verdict.state, verdict.code, verdict.reason
+        dup_name = verdict.dup.name if verdict.dup else None
+        dup_url = klubok_link(verdict.dup.url) if verdict.dup else None
+    else:
+        state, code = row["state"], row["problem_code"]
+        text = klubok_queue.REASONS.get(code or "", row["problem_text"] or "")
+        dup_name, dup_url = row["dup_name"], _dup_link(conn, row["dup_klubok_id"])
+    if state == "queued":
+        place = _queue_place(conn, root, card.id)
+        return out | {"text": "у черзі" + (f" · місце {place}" if place else "")}
+    if state == "skipped":
+        return out | {"text": f"не піде: {text}"}
+    if state == "publishing":
+        return out | {"text": "публікується"}
+    if state in ("published", "sold_asked"):
+        when = dmy(row["published_at"]) if row and row["published_at"] else ""
+        return out | {"text": f"виставлено {when}".strip(), "url": klubok_link(row["url"])}
+    if state == "sold":
+        return out | {"text": "продано", "url": klubok_link(row["url"])}
+    if state == "removed":
+        return out | {"text": "знято з Клубку"}
+    if code == klubok_queue.DUPLICATE:
+        return out | {"text": text, "dup": {"name": dup_name, "url": dup_url}}
+    return out | {"text": f"Проблема: {text}"}
+
+
+def klubok_problems(conn) -> list[tuple[review.Card, str]]:
+    """Блок «Клубок: треба рішення» над Проблемами Шафи: Картки з `klubok_ads.state = problem`."""
+    out = []
+    for item_id, code, text in conn.execute(
+        "SELECT item_id, problem_code, problem_text FROM klubok_ads WHERE state = 'problem' "
+        "ORDER BY updated_at, item_id"
+    ).fetchall():
+        card = review.load_card(conn, item_id)
+        if card is not None:
+            out.append((card, klubok_queue.REASONS.get(code or "", text or "")))
+    return out
 
 
 def shafa_link(url: str | None) -> str | None:
@@ -2263,6 +2368,7 @@ def settings_blocks() -> list[tuple[str, list]]:
             site.SEND_SETTING, site.WAIT_SETTING, site.SOLD_SETTING, site.FUSE_SETTING
         ),
         "«Мої речі» на Шафі": (listings_mod.DAYS_SETTING,),
+        "Клубок": (klubok_queue.FLAG, klubok_queue.LIMIT_SETTING, klubok_queue.FROM_SETTING),
     }  # fmt: skip
     taken = {name for names in own.values() for name in names}
     blocks = [("Ліміти й робот", [o for o in options.OPTIONS if o.name not in taken])]

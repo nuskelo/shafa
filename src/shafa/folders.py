@@ -74,6 +74,15 @@ def item_folder(root: Path, folder_name: str) -> Path:
     return root / folder_name
 
 
+def photo_folder(root: Path, folder_name: str) -> Path:
+    """Фото Картки для Клубку (KLB-002): `item_folder`, а якщо такої теки немає й це не старий пост —
+    `<Головна>/Опубліковано/<папка>` (робот Шафи переносить туди опубліковане)."""
+    folder = item_folder(root, folder_name)
+    if folder.is_dir() or is_old(base_name(folder_name)):
+        return folder
+    return root / PUBLISHED_DIR / base_name(folder_name)
+
+
 def natural_key(name: str) -> tuple:
     """Ключ сортування «як у провіднику»: `IMG_9.JPG` перед `IMG_10.JPG`."""
     return tuple(

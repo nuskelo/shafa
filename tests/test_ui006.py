@@ -365,6 +365,7 @@ def test_settings_blocks(root, app):
         "Ліміти й робот",
         "Сайт Viktoria Shoes",
         "«Мої речі» на Шафі",
+        "Клубок",
         "Експорт каналу",
     ]
 

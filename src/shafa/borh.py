@@ -219,6 +219,12 @@ def site_busy(conn: sqlite3.Connection, post_id: int | None) -> bool:
     return row is not None and row[0] not in ("done", "cancelled")
 
 
+def _klubok_needs(conn: sqlite3.Connection, post_id: int | None) -> bool:
+    from shafa.klubok import queue  # queue → publish → borh
+
+    return queue.post_needs_photos(conn, post_id)
+
+
 def purge_photos(conn: sqlite3.Connection, cutoff: str) -> list[str]:
     """Видалити `<дані>/borh/<номер>/` Карток, опублікованих раніше за `cutoff` (UTC, ISO).
 
@@ -243,6 +249,8 @@ def purge_photos(conn: sqlite3.Connection, cutoff: str) -> list[str]:
             continue
         seen.add(base)
         if site_busy(conn, post_id):
+            continue
+        if _klubok_needs(conn, post_id):  # KLB-002 (D7): фото ще знадобляться Клубку
             continue
         if variant_size(name) is not None and _not_done(conn, base, post_id, cutoff):
             continue

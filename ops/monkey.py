@@ -603,7 +603,7 @@ def robot_cycles(
         if number % 10 == 9:
             if count(data, "SELECT COUNT(*) FROM items WHERE status = 'approved'") < 12:
                 top_up(server, data, root, seed + number, 40)
-            if count(data, "SELECT COUNT(*) FROM sessions WHERE stop_code = 'limit' "
+            if count(data, "SELECT COUNT(*) FROM sessions WHERE site = 'shafa' AND stop_code = 'limit' "
                            "AND started_at > datetime('now', '-3 minutes')"):  # fmt: skip
                 new_day(data)
             if not server.alive():
@@ -635,7 +635,9 @@ def run_robot(server: Server, data: Path, root: Path, sequence: str, limit: int,
 
 def last_session(data: Path) -> sqlite3.Row:
     with contextlib.closing(ro(data)) as conn:
-        return conn.execute("SELECT * FROM sessions ORDER BY id DESC LIMIT 1").fetchone()
+        return conn.execute(
+            "SELECT * FROM sessions WHERE site = 'shafa' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
 
 
 def drills(server, data, root, F: Findings, stage: Stage, seed: int) -> list[dict]:
@@ -784,12 +786,16 @@ def invariants(data: Path, server: Server, F: Findings, stage: Stage) -> None:
         )
         check(
             "counters",
-            "SELECT s.id FROM sessions s WHERE s.ended_at IS NOT NULL AND s.published != "
+            "SELECT s.id FROM sessions s WHERE s.site = 'shafa' AND s.ended_at IS NOT NULL AND s.published != "
             "(SELECT COUNT(*) FROM items i WHERE i.session_id = s.id AND i.published_at IS NOT NULL "
             "AND i.shafa_id IS NOT NULL)",
             "sessions.published ≠ числу опублікованих Карток",
         )
-        check("open_session", "SELECT id FROM sessions WHERE ended_at IS NULL", "сесія без кінця")
+        check(
+            "open_session",
+            "SELECT id FROM sessions WHERE site = 'shafa' AND ended_at IS NULL",
+            "сесія без кінця",
+        )
         check(
             "publishing",
             "SELECT id FROM items WHERE status = 'publishing'",

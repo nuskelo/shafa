@@ -187,14 +187,21 @@ def delete_enabled() -> bool:
     return (config.setting(DELETE_SETTING) or "").lower() in ("1", "так", "yes", "true")
 
 
+def started_on(conn: sqlite3.Connection, sql: str, today: datetime) -> list:
+    """Перше поле рядків, чию публікацію почато за місцеву добу `today`. `sql` вибирає
+    (мітка, час початку UTC ISO) з умовою «час >= ?» — запас 2 доби, точна доба — тут (Шафа, Клубок)."""
+    since = (today - timedelta(days=2)).astimezone(UTC).isoformat(timespec="seconds")
+    day = today.astimezone().date()
+    rows = conn.execute(sql, (since,))
+    return [r[0] for r in rows if datetime.fromisoformat(r[1]).astimezone().date() == day]
+
+
 def _started_rows(conn: sqlite3.Connection, today: datetime) -> list[str]:
     """Назви Карток, чию публікацію почато за місцеву добу `today` (дійшли до кліку)."""
-    since = (today - timedelta(days=2)).astimezone(UTC).isoformat(timespec="seconds")
-    rows = conn.execute(
-        "SELECT folder_name, publish_started_at FROM items WHERE publish_started_at >= ?", (since,)
-    )
-    day = today.astimezone().date()
-    return [r[0] for r in rows if datetime.fromisoformat(r[1]).astimezone().date() == day]
+    return started_on(
+        conn, "SELECT folder_name, publish_started_at FROM items WHERE publish_started_at >= ?",
+        today,
+    )  # fmt: skip
 
 
 def started_today(conn: sqlite3.Connection, today: datetime) -> int:
@@ -352,7 +359,7 @@ def recover(conn: sqlite3.Connection) -> list[int]:
     with conn:
         conn.execute(
             "UPDATE sessions SET ended_at = ?, stop_reason = 'обрив (робот не завершив сесію)', "
-            "stop_code = 'crash', command = NULL WHERE ended_at IS NULL",
+            "stop_code = 'crash', command = NULL WHERE ended_at IS NULL AND site = 'shafa'",
             (now(),),
         )
     return ids
@@ -391,14 +398,18 @@ def clear_now() -> None:
 
 
 def command(conn: sqlite3.Connection, session_id: int) -> str | None:
-    row = conn.execute("SELECT command FROM sessions WHERE id = ?", (session_id,)).fetchone()
+    row = conn.execute(
+        "SELECT command FROM sessions WHERE id = ? AND site = 'shafa'", (session_id,)
+    ).fetchone()
     return row[0] if row else None
 
 
 def request(conn: sqlite3.Connection, what: str | None) -> bool:
     """Пауза / Стоп / Продовжити (None) для запущеної сесії. False — сесії немає."""
     with conn:
-        cursor = conn.execute("UPDATE sessions SET command = ? WHERE ended_at IS NULL", (what,))
+        cursor = conn.execute(
+            "UPDATE sessions SET command = ? WHERE ended_at IS NULL AND site = 'shafa'", (what,)
+        )
     return cursor.rowcount > 0
 
 
@@ -434,6 +445,13 @@ def move_when_done(conn: sqlite3.Connection, root: Path, item_id: int) -> str | 
     return move_published(root, row[0])
 
 
+def klubok_needs(conn: sqlite3.Connection, post_id: int | None) -> bool:
+    """KLB-002 (D7): фото Карток поста ще потрібні Клубку — не стирати."""
+    from shafa.klubok import queue  # queue імпортує publish
+
+    return queue.post_needs_photos(conn, post_id)
+
+
 def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> list[str]:
     """Видалити з «Опубліковано» папки Карток, опублікованих понад 3 дні тому.
 
@@ -448,6 +466,8 @@ def purge_published(conn: sqlite3.Connection, root: Path, today: datetime) -> li
         (Status.PUBLISHED, cutoff),
     ).fetchall():
         if borh.site_busy(conn, post_id):  # TD-058: пост ще йде на сайт — фото з папки потрібні
+            continue
+        if klubok_needs(conn, post_id):  # KLB-002 (D7): фото ще знадобляться Клубку
             continue
         if variant_size(name) is not None:  # спільна папка сестер (CORE-014): коли пізніша — теж
             later = conn.execute(
@@ -529,7 +549,7 @@ class Run:
             self.log(f"Картка {item_id} лишилась посеред публікації — у Проблемах")
         with self.conn:
             session_id = self.conn.execute(
-                "INSERT INTO sessions (started_at) VALUES (?)", (now(),)
+                "INSERT INTO sessions (started_at, site) VALUES (?, 'shafa')", (now(),)
             ).lastrowid
         report = Report(session_id)
         stop = Stop("error", "невідома помилка")
@@ -551,7 +571,7 @@ class Run:
         «✅ Сесія N» з бази; інший — `robot.stop` (бот його не шле: ⛔ з кнопкою йде з бази). Пишемо до
         запису в базу: бот, що побачив закриту сесію, уже має цей рядок і не дублює її."""
         row = self.conn.execute(
-            "SELECT started_at FROM sessions WHERE id = ?", (report.session_id,)
+            "SELECT started_at FROM sessions WHERE id = ? AND site = 'shafa'", (report.session_id,)
         ).fetchone()
         span = ""
         if row and row[0]:
@@ -577,7 +597,7 @@ class Run:
         with self.conn:
             self.conn.execute(
                 "UPDATE sessions SET ended_at = ?, published = ?, problems = ?, stop_reason = ?, "
-                "stop_code = ?, item_started_at = NULL, command = NULL WHERE id = ?",
+                "stop_code = ?, item_started_at = NULL, command = NULL WHERE id = ? AND site = 'shafa'",
                 (now(), len(report.published), len(report.problems), report.reason, report.code,
                  report.session_id),
             )  # fmt: skip
@@ -815,7 +835,8 @@ class Run:
         (A13), а панель знає, чим закінчилась остання."""
         with self.conn:
             self.conn.execute(
-                "UPDATE sessions SET item_started_at = NULL WHERE id = ?", (session_id,)
+                "UPDATE sessions SET item_started_at = NULL WHERE id = ? AND site = 'shafa'",
+                (session_id,),
             )
         card = self._card
         if card is not None and (result is True or isinstance(result, Failed)):
@@ -1023,7 +1044,8 @@ class Run:
 
         with self.conn:  # для екрана: «чекаю, поки допишеться поточний товар (~N хв)»
             self.conn.execute(
-                "UPDATE sessions SET item_started_at = ? WHERE id = ?", (now(), report.session_id)
+                "UPDATE sessions SET item_started_at = ? WHERE id = ? AND site = 'shafa'",
+                (now(), report.session_id),
             )
         self._working(report.session_id, "fill", card)
 

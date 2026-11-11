@@ -10,6 +10,7 @@ from pathlib import Path
 
 from shafa import config, places, site, summer
 from shafa.batch import BATCH_SETTING, DAILY_USD, MONEY_SETTING, WAIT_DAYS, WAIT_SETTING
+from shafa.klubok import queue as klubok
 from shafa.robot import listings
 from shafa.robot.publish import (
     DAILY_LIMIT,
@@ -124,6 +125,27 @@ OPTIONS = (
         str(site.FUSE_DEFAULT),
         "int",
     ),
+    Option(
+        klubok.FLAG,
+        "Виставляти пари на Клубок",
+        "Поки вимкнено, на Клубок нічого не йде — у Картці лише видно, чи піде пара туди.",
+        "",
+        "flag",
+    ),
+    Option(
+        klubok.LIMIT_SETTING,
+        "Публікацій на Клубку за добу",
+        f"від {klubok.LIMIT_RANGE[0]} до {klubok.LIMIT_RANGE[1]}; ліміт Шафи окремий",
+        str(klubok.LIMIT_DEFAULT),
+        "int",
+    ),
+    Option(
+        klubok.FROM_SETTING,
+        "На Клубок — пости з номером більше за",
+        "старіші пости на Клубок не йдуть (їх там уже виставлено вручну)",
+        str(klubok.FROM_DEFAULT),
+        "int",
+    ),
 )
 _LIMITS = {
     OLD_SETTING: (0, GROUPS_MAX),
@@ -134,6 +156,8 @@ _LIMITS = {
     listings.DAYS_SETTING: listings.DAYS_RANGE,
     site.WAIT_SETTING: site.WAIT_RANGE,
     site.FUSE_SETTING: site.FUSE_RANGE,
+    klubok.LIMIT_SETTING: klubok.LIMIT_RANGE,
+    klubok.FROM_SETTING: klubok.FROM_RANGE,
 }
 
 

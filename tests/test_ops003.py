@@ -109,7 +109,7 @@ def test_migration_16_to_17_keeps_data_and_second_start_changes_nothing(tmp_path
 
     conn = db.connect(path)
     schema = [tuple(r) for r in conn.execute("SELECT name, sql FROM sqlite_master ORDER BY name")]
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert {"outbox", "server_sync", "owner_cmds"} <= {r[0] for r in schema}
     assert [tuple(r) for r in conn.execute("SELECT post_id, text FROM posts")] == [(7001, "т")]
     assert [tuple(r) for r in conn.execute("SELECT id, state FROM bot_drafts")] == [(4, "preview")]
@@ -119,7 +119,7 @@ def test_migration_16_to_17_keeps_data_and_second_start_changes_nothing(tmp_path
     assert [
         tuple(r) for r in conn.execute("SELECT name, sql FROM sqlite_master ORDER BY name")
     ] == (schema)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     conn.close()
 
 

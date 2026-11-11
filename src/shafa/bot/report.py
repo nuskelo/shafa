@@ -109,7 +109,8 @@ def _shafa(conn: sqlite3.Connection, day: date) -> str:
     sessions = [
         r
         for r in conn.execute(
-            "SELECT * FROM sessions WHERE started_at >= ? ORDER BY id", (_since(day),)
+            "SELECT * FROM sessions WHERE started_at >= ? AND site = 'shafa' ORDER BY id",
+            (_since(day),),
         )
         if _on(r["started_at"], day)
     ]

@@ -359,7 +359,9 @@ def _what(bot: Any, query: dict, raw_id: str) -> None:
     """Зупинка робота: чому і які Проблеми були в цій сесії."""
     session = None
     if raw_id.isdigit():
-        session = bot.conn.execute("SELECT * FROM sessions WHERE id = ?", (int(raw_id),)).fetchone()
+        session = bot.conn.execute(
+            "SELECT * FROM sessions WHERE id = ? AND site = 'shafa'", (int(raw_id),)
+        ).fetchone()
     if session is None:
         _finish(bot, query, TEXTS["gone"])
         return
