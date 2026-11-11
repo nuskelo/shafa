@@ -21,7 +21,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from shafa import config, db
-from shafa.klubok import catalog, fields
+from shafa.klubok import catalog, fields, snapshot
 from shafa.robot import browser, klubok_guard
 from shafa.robot import form as shafa_form
 from shafa.robot.klubok_guard import Forbidden
@@ -33,6 +33,7 @@ FIELD_WAIT = 5.0  # с чекаємо поле чи список форми
 BRAND_WAIT = 6.0  # с чекаємо підказки бренду
 BRAND_TYPE_DELAY = 40  # мс між літерами, як у людини (сторінка чекає 500 мс після останньої)
 SUFFIX = "(Кирилиця)"
+SUBMIT_FETCH = 60.0  # с на відповідь сервера на запит публікації
 LOGIN_PATHS = ("/signup", "/login")  # куди Клубок веде без входу (HYP-4: `/item/add` → `/signup`)
 
 # Чим закінчилась відправка (KLB-003 D4.4)
@@ -83,36 +84,24 @@ class Session:
 
     def _reset_submit(self) -> None:
         self.sent = False  # guard пропустив запит публікації
-        self.submit_response: Any = None
+        self.submit_result: tuple[int, str] | None = None  # (HTTP-статус, тіло)
         self.submit_failed: str | None = None
+        self.fetch_timeout = SUBMIT_FETCH  # с: скільки чекати відповідь сервера на публікацію
 
     def _attach(self) -> None:
         self.context.route("**/*", self._route)
         self.context.on("response", self._on_response)
-        self.context.on("requestfailed", self._on_failed)
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         self.page.on("dialog", lambda dialog: dialog.dismiss())
 
-    def _is_submit(self, request: Any) -> bool:
-        url = self.verdict_url(request.url)
-        return (
-            url is not None
-            and request.method.upper() == "POST"
-            and url.split("?")[0] == klubok_guard.SUBMIT_URL
-        )
-
     def _on_response(self, response: Any) -> None:
         url = self.verdict_url(response.url)
-        if url is None:
-            return
-        if response.status == 429 and klubok_guard.is_klubok(urlsplit(url).hostname):
+        if (
+            url is not None
+            and response.status == 429
+            and klubok_guard.is_klubok(urlsplit(url).hostname)
+        ):
             self.too_many.append(url.split("?")[0])
-        if self.sent and self._is_submit(response.request):
-            self.submit_response = response
-
-    def _on_failed(self, request: Any) -> None:
-        if self.sent and self._is_submit(request):
-            self.submit_failed = request.failure or "запит обірвано"
 
     def verdict_url(self, url: str) -> str | None:
         """Адреса, яку оцінює guard; None — запит узагалі не туди (блок). Живий сайт — як є."""
@@ -131,9 +120,10 @@ class Session:
             request.method, url, request.headers.get("content-type", ""), self.allow_upload,
             publishing=self.publishing, ticket=self.ticket,
         )  # fmt: skip
-        if allowed:
+        if allowed and reason == klubok_guard.SUBMITTED:
+            self._send_submit(route)
+        elif allowed:
             self.uploads += reason == "завантаження фото"
-            self.sent = self.sent or reason == klubok_guard.SUBMITTED
             route.continue_()
         else:
             path = urlsplit(url).path
@@ -145,6 +135,23 @@ class Session:
                 reason += " (очікувано: сторінка після відповіді)"
             self.blocked.append((url.split("?")[0], reason))
             route.abort()
+
+    def _send_submit(self, route: Any) -> None:
+        """Запит публікації (за квитком): відповідь береться тут, до сторінки. Сторінка одразу
+        після неї йде на `/payment/…` — тоді тіло відповіді в Chrome вже не прочитати."""
+        self.sent = True
+        try:
+            response = route.fetch(timeout=self.fetch_timeout * 1000)
+            self.submit_result = (response.status, response.text())
+        except Exception as error:  # noqa: BLE001 — запит пішов, відповіді немає
+            self.submit_failed = f"{type(error).__name__}: {str(error)[:150]}"
+            with contextlib.suppress(Exception):
+                route.abort()
+            return
+        if response.status == 429:
+            self.too_many.append(klubok_guard.SUBMIT_URL)
+        with contextlib.suppress(Exception):  # сторінку могли закрити — відповідь у нас уже є
+            route.fulfill(response=response)
 
     def unexpected_blocks(self) -> list[tuple[str, str]]:
         """Заблоковане, крім очікуваних переходів після відповіді й сторінки входу."""
@@ -179,8 +186,8 @@ class Session:
         `stop` — людина закрила вікно чи інше «далі чекати нема сенсу» (лише до відправки)."""
         deadline = time.monotonic() + limit
         while True:
-            if self.submit_response is not None:
-                return self._parse(self.submit_response)
+            if self.submit_result is not None:
+                return self._parse(*self.submit_result)
             if self.submit_failed is not None:
                 return Submitted(UNCERTAIN, why=f"запит обірвано: {self.submit_failed}")
             if time.monotonic() >= deadline or (not self.sent and stop()):
@@ -188,20 +195,19 @@ class Session:
             try:
                 self.page.wait_for_timeout(250)
             except _playwright_error():  # вікно закрили
-                if self.submit_response is None and self.submit_failed is None:
+                if self.submit_result is None and self.submit_failed is None:
                     break
         if self.sent:
             return Submitted(UNCERTAIN, why=f"немає відповіді за {limit:.0f} с")
         return Submitted(NOT_SENT, why=f"запит публікації не пішов за {limit:.0f} с")
 
     @staticmethod
-    def _parse(response: Any) -> "Submitted":
-        status = response.status
+    def _parse(status: int, text: str) -> "Submitted":
         if status != 200:
             return Submitted(UNCERTAIN, why=f"HTTP {status}", http=status)
         try:
-            data = json.loads(response.text())
-        except (ValueError, _playwright_error()):
+            data = json.loads(text)
+        except ValueError:
             return Submitted(UNCERTAIN, why="відповідь не JSON")
         if not isinstance(data, dict):
             return Submitted(UNCERTAIN, why="відповідь не JSON-об'єкт")
@@ -289,7 +295,7 @@ class Session:
         self.context.close()
 
 
-KLUBOK_USER = "198135"  # її акаунт: `#user_id` форми (D2) і `user_id` у `get-items` (D3)
+KLUBOK_USER = snapshot.USER  # її акаунт: `#user_id` форми (D2) і `user_id` у `get-items` (D3)
 FORM_URL = "https://klubok.com/item/add"
 
 

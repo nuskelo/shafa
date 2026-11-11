@@ -337,7 +337,8 @@ def start(conn: sqlite3.Connection, item_id: int, session_id: int) -> bool:
     )  # fmt: skip
 
 
-def published(conn: sqlite3.Connection, item_id: int, klubok_id: int, url: str) -> bool:
+def published(conn: sqlite3.Connection, item_id: int, klubok_id: int, url: str | None) -> bool:
+    """`url` None — посилання допише наступний знімок (KLB-003 DRIFT-1)."""
     return _move(
         conn, item_id, PUBLISHING, "state = ?, klubok_id = ?, url = ?, published_at = ?",
         (PUBLISHED, klubok_id, url, now()),

@@ -56,6 +56,13 @@ KINDS = {
     "catalog.start": Kind("📚"),
     "catalog.done": Kind("📚"),
     "catalog.error": Kind("⚠️", loud=True),
+    # Клубок (`robot/klubok_publish.py`, KLB-003)
+    "klubok.start": Kind("🧶"),
+    "klubok.post": Kind("🧶"),
+    "klubok.problem": Kind("⚠️"),
+    "klubok.end": Kind("🧶"),
+    "klubok.stop": Kind("⛔", loud=True),
+    "klubok.missing": Kind("⚠️", loud=True),
     # пости каналу (`scan.py`, `changes.py`, `robot/publish.py`, `site.py`)
     "post.new": Kind("📥"),
     "post.changed": Kind("✏️"),
