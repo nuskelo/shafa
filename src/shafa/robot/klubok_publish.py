@@ -268,8 +268,8 @@ class Run:
         session.issue_ticket(item_id)
         if self.opts.human:
             self.log(
-                f"Пост {verdict.post_id}: перевірте форму й натисніть «Опубликовать» — "
-                f"чекаю {self.opts.human_wait / 60:.0f} хв"
+                f"Пост {verdict.post_id}: перевірте форму й натисніть «Опубликовать» "
+                f"унизу форми — чекаю {self.opts.human_wait / 60:.0f} хв"
             )
             return session.wait_submit(self.opts.human_wait)
         session.click_submit()
@@ -298,6 +298,8 @@ class Run:
         else:
             text = f"{UNCERTAIN_TEXT} ({sent.why})"
             code = UNCERTAIN
+            if sent.detail:
+                self.log(f"  невідома відповідь Клубку: {sent.detail}")
             stop = TOO_MANY if sent.http == 429 or self.session.too_many else UNCERTAIN
         queue.problem(conn, item_id, code, text)
         self.result.problems.append((item_id, post_id, code, text))

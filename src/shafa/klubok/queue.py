@@ -373,6 +373,64 @@ def recover(conn: sqlite3.Connection) -> list[int]:
     return ids
 
 
+# --- KLB-007: людина підтверджує невпевнену публікацію ---
+
+
+class ConfirmError(Exception):
+    """Підтвердити не можна: текст для людини, база не змінилась."""
+
+
+def confirm(conn: sqlite3.Connection, post_id: int, klubok_id: int, today: datetime) -> str:
+    """`problem` `klubok_uncertain` → `published`: оголошення `klubok_id` є в знімку її оголошень.
+    Один рядок на пост, id вільний, знімок свіжий; сама зміна — один UPDATE з умовою на стан."""
+    rows = conn.execute(
+        "SELECT k.item_id, k.state, k.problem_code, i.folder_name FROM klubok_ads k "
+        "JOIN items i ON i.id = k.item_id WHERE i.post_id = ? ORDER BY k.item_id",
+        (post_id,),
+    ).fetchall()
+    if not rows:
+        raise ConfirmError(f"Пост {post_id}: у черзі Клубку Картки немає")
+    waiting = [r for r in rows if r["state"] == PROBLEM and r["problem_code"] == UNCERTAIN]
+    if len(waiting) > 1:
+        names = ", ".join(f"{r['item_id']} ({r['folder_name']})" for r in waiting)
+        raise ConfirmError(f"Пост {post_id}: кілька Карток чекають підтвердження: {names}")
+    if not waiting:
+        seen = ", ".join(f"{r['state']}/{r['problem_code'] or '-'}" for r in rows)
+        raise ConfirmError(
+            f"Пост {post_id}: потрібна Картка в Проблемах з кодом {UNCERTAIN}, а є: {seen}"
+        )
+    item_id = waiting[0]["item_id"]
+    if not snapshot_fresh(conn, today):
+        raise ConfirmError(
+            "Знімок оголошень старший за добу чи його немає — спершу --klubok-snapshot"
+        )
+    listing = conn.execute(
+        "SELECT name, url, sold FROM klubok_listings WHERE id = ?", (klubok_id,)
+    ).fetchone()
+    if listing is None:
+        raise ConfirmError(f"Оголошення {klubok_id} немає в знімку — спершу --klubok-snapshot")
+    if listing["sold"]:
+        raise ConfirmError(f"Оголошення {klubok_id} у знімку позначене проданим")
+    taken = conn.execute(
+        "SELECT item_id FROM klubok_ads WHERE klubok_id = ?", (klubok_id,)
+    ).fetchone()
+    if taken is not None:
+        raise ConfirmError(f"Оголошення {klubok_id} уже прив'язане до Картки {taken['item_id']}")
+    try:
+        with conn:
+            cursor = conn.execute(
+                "UPDATE klubok_ads SET state = ?, klubok_id = ?, url = ?, published_at = ?, "
+                "problem_code = NULL, problem_text = NULL, updated_at = ? "
+                "WHERE item_id = ? AND state = ? AND problem_code = ?",
+                (PUBLISHED, klubok_id, listing["url"], now(), now(), item_id, PROBLEM, UNCERTAIN),
+            )
+    except sqlite3.IntegrityError:
+        raise ConfirmError(f"Оголошення {klubok_id} уже прив'язане до іншої Картки") from None
+    if cursor.rowcount != 1:
+        raise ConfirmError(f"Пост {post_id}: Картка змінилась, спробуйте ще раз")
+    return f"Пост {post_id}: Картка {item_id} — опубліковано на Клубку, id {klubok_id}"
+
+
 # --- рішення людини про дубль (D6.3) ---
 
 
