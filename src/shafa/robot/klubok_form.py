@@ -47,6 +47,7 @@ class Submitted:
     score: str | None = None
     why: str = ""
     http: int | None = None
+    detail: str = ""  # для журналу сесії (KLB-007): тип і значення `used_id`, початок відповіді
 
 
 def _playwright_error() -> type[Exception]:
@@ -202,26 +203,40 @@ class Session:
         return Submitted(NOT_SENT, why=f"запит публікації не пішов за {limit:.0f} с")
 
     @staticmethod
+    def _klubok_id(value: Any) -> int | None:
+        """`used_id`: число чи рядок лише з цифр, > 0 (KLB-007: наживо прийшов рядок); `bool` — ні."""
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if value > 0 else None
+        if isinstance(value, str) and value.isascii() and value.isdigit():
+            return int(value) or None
+        return None
+
+    @staticmethod
     def _parse(status: int, text: str) -> "Submitted":
+        head = f"відповідь: {text[:300]!r}"
         if status != 200:
-            return Submitted(UNCERTAIN, why=f"HTTP {status}", http=status)
+            return Submitted(UNCERTAIN, why=f"HTTP {status}", http=status, detail=head)
         try:
             data = json.loads(text)
         except ValueError:
-            return Submitted(UNCERTAIN, why="відповідь не JSON")
+            return Submitted(UNCERTAIN, why="відповідь не JSON", detail=head)
         if not isinstance(data, dict):
-            return Submitted(UNCERTAIN, why="відповідь не JSON-об'єкт")
+            return Submitted(UNCERTAIN, why="відповідь не JSON-об'єкт", detail=head)
         used_id = data.get("used_id")
-        if data.get("status") == "success" and isinstance(used_id, int) and used_id > 0:
-            return Submitted(SUCCESS, klubok_id=used_id)
+        klubok_id = Session._klubok_id(used_id)
+        if data.get("status") == "success" and klubok_id is not None:
+            return Submitted(SUCCESS, klubok_id=klubok_id)
         if data.get("status") == "Error":
             return Submitted(
                 CAPTCHA, score=str(data.get("score", "?"))[:20],
                 why=str(data.get("message") or "")[:200],
             )  # fmt: skip
         return Submitted(
-            UNCERTAIN, why=f"невідома відповідь: status={str(data.get('status'))[:40]}"
-        )
+            UNCERTAIN, why=f"невідома відповідь: status={str(data.get('status'))[:40]}",
+            detail=f"used_id: {type(used_id).__name__} {str(used_id)[:40]!r}; {head}",
+        )  # fmt: skip
 
     def user_id(self) -> str | None:
         """`#user_id` форми — хто увійшов (D2)."""
@@ -312,7 +327,7 @@ class LiveSession(Session):
         profile = profile_dir()
         profile.mkdir(parents=True, exist_ok=True)
         self.context = playwright.chromium.launch_persistent_context(
-            profile, channel="chrome", headless=False, viewport={"width": 1400, "height": 1000},
+            profile, channel="chrome", headless=False, no_viewport=True,  # KLB-007: вікно = екран
             args=list(browser.BACKGROUND_ARGS), handle_sigint=False,
         )  # fmt: skip
         self._attach()
