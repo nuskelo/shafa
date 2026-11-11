@@ -46,9 +46,9 @@ def read_row(conn):
     return conn.execute("SELECT read_at, count FROM klubok_listings_read").fetchone()
 
 
-def test_full_snapshot_1787_in_30_pages(conn, server):
+def test_full_snapshot_1787_in_one_request(conn, server):
     assert refresh(conn, server) == 1787
-    assert len(server.item_reads) == 30 and server.item_reads[-1] == 1740
+    assert server.item_reads == [0] and server.item_limits == [snapshot.PAGE_ALL]
     assert len(listings(conn)) == 1787
     assert read_row(conn)["count"] == 1787
 
@@ -77,11 +77,13 @@ def test_only_klubok_links_and_photos(conn):
 
 @pytest.mark.parametrize(("fault", "code"), [(500, snapshot.FAILED), ("notjson", snapshot.FAILED),
                                              (429, snapshot.TOO_MANY)])  # fmt: skip
-def test_error_on_a_page_writes_nothing(conn, server, fault, code):
+@pytest.mark.parametrize("offset", [0, 600])  # весь список одним запитом / сторінка запасного шляху
+def test_error_on_a_page_writes_nothing(conn, server, fault, code, offset):
     refresh(conn, server)
     before, before_read = listings(conn), tuple(read_row(conn))
     server.listings.pop(0)
-    server.items_fault[600] = fault
+    server.items_limit_max = None if offset == 0 else snapshot.PAGE
+    server.items_fault[offset] = fault
 
     with pytest.raises(snapshot.SnapshotError) as error:
         refresh(conn, server)
@@ -90,21 +92,97 @@ def test_error_on_a_page_writes_nothing(conn, server, fault, code):
     assert listings(conn) == before and tuple(read_row(conn)) == before_read
 
 
-def test_shifted_list_is_read_once_more_after_a_minute(conn, server):
-    server.shift_reads = 1
+def test_renew_all_ties_are_read_whole_in_one_request(conn, server):
+    """KLB-006: після «Обновить все» сторінки нестабільні (як живий: 1782 різних з 1787)."""
+    server.renew_all()
     waits = []
     assert refresh(conn, server, waits) == 1787
-    assert waits == [snapshot.RETRY_WAIT]
-    assert len(server.item_reads) == 60  # два повні читання
+    assert server.item_limits == [snapshot.PAGE_ALL] and waits == []
+    assert len(listings(conn)) == 1787
 
 
-def test_shifted_twice_is_failed_and_writes_nothing(conn, server):
-    server.shift_reads = 2
+def test_renew_all_pages_are_really_unstable(server):
+    """Сторінками по 60 той самий список дає повтори й пропуски — без цього тест вище нічого б не
+    доводив."""
+    server.renew_all()
+    fetch = http_fetch(server)
+    ids = []
+    for offset in range(0, 1787, snapshot.PAGE):
+        ids += [item["id"] for item in json.loads(fetch(snapshot.items_path(offset))[1])["items"]]
+    assert len(ids) == 1787 and len(set(ids)) < 1787
+
+
+def unstable_first_pass(server):
+    """Сайт віддає не більше 60; перший посторінковий прохід — з нестабільним порядком, далі — ні."""
+    server.renew_all()
+    server.items_limit_max = snapshot.PAGE
+    fetch = http_fetch(server)
+
+    def wrapped(path):
+        if len(server.item_reads) >= 1 + 30:  # весь список + перший прохід
+            server.unstable_ties = False
+        return fetch(path)
+
+    return wrapped
+
+
+def test_capped_list_is_merged_by_id_over_passes(conn, server):
+    waits, lines = [], []
+    snap = snapshot.read(unstable_first_pass(server), lambda: None, waits.append, lines.append)
+    assert len(snap.items) == 1787 == len({item["id"] for item in snap.items})
+    assert waits == [snapshot.RETRY_WAIT]  # два проходи
+    assert server.item_limits == [snapshot.PAGE] * (1 + 60)
+    assert "одним запитом 60 різних з 1787" in lines[0]
+
+
+def test_no_pass_is_whole_but_the_union_is(server):
+    """Кожен прохід губить інше оголошення (на його місці — повтор сусіда); разом — усі."""
+    server.items_limit_max = snapshot.PAGE
+    fetch = http_fetch(server)
+    lose = {1: 600, 2: 1200, 3: 1740}  # прохід → сторінка, де губиться перше оголошення
+
+    def lossy(path):
+        before = len(server.item_reads)
+        status, text = fetch(path)
+        attempt = (before - 1) // 30 + 1 if before else 0
+        if lose.get(attempt) == server.item_reads[-1]:
+            data = json.loads(text)
+            data["items"][0] = data["items"][1]
+            text = json.dumps(data)
+        return status, text
+
+    waits = []
+    snap = snapshot.read(lossy, lambda: None, waits.append, lambda line: None)
+    assert len({item["id"] for item in snap.items}) == 1787
+    assert waits == [snapshot.RETRY_WAIT]  # зійшлось після другого проходу
+
+
+def test_merge_keeps_the_fresher_record(server):
+    server.items_limit_max = snapshot.PAGE
+    fetch = http_fetch(server)
+    first = server.listings[0]["id"]
+
+    def renamed(path):
+        if len(server.item_reads) == 1:  # після запиту «весь список» назва змінилась
+            server.listings[0] = {**server.listings[0], "name": "Нова назва 38"}
+        return fetch(path)
+
+    snap = snapshot.read(renamed, lambda: None, log=lambda line: None)
+    assert {item["id"]: item for item in snap.items}[first]["name"] == "Нова назва 38"
+
+
+def test_not_converged_after_all_passes_writes_nothing(conn, server):
+    refresh(conn, server)
+    before, before_read = listings(conn), tuple(read_row(conn))
+    server.items_limit_max = snapshot.PAGE
+    server.items_count = 1790
     waits = []
     with pytest.raises(snapshot.SnapshotError) as error:
         refresh(conn, server, waits)
-    assert error.value.code == snapshot.FAILED and waits == [snapshot.RETRY_WAIT]
-    assert listings(conn) == {} and read_row(conn) is None
+    assert error.value.code == snapshot.FAILED and "1787 різних з 1790" in error.value.text
+    assert waits == [snapshot.RETRY_WAIT] * (snapshot.PASSES - 1)
+    assert len(server.item_reads) == 1 + 1 + snapshot.PAGE_BUDGET  # межа запитів на знімок
+    assert listings(conn) == before and tuple(read_row(conn)) == before_read
 
 
 def test_items_count_mismatch_is_incomplete(conn, server):
@@ -167,6 +245,7 @@ def test_snapshot_fills_link_of_ads_published_by_program(conn, server, root):
 
 def test_too_many_pages_is_failed(conn, server, monkeypatch):
     monkeypatch.setattr(snapshot, "MAX_PAGES", 3)
+    server.items_limit_max = snapshot.PAGE
     with pytest.raises(snapshot.SnapshotError) as error:
         refresh(conn, server)
     assert error.value.code == snapshot.FAILED and listings(conn) == {}

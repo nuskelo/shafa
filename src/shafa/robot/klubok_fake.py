@@ -8,7 +8,8 @@
 тимчасовий, не профіль робота. Дерево категорій і фільтри — зі знімка `klubok.catalog`.
 
 KLB-003: `GET /api/get-items` посторінково зі штучних оголошень (`listing`), помилки сторінок і
-«зсув» списку посеред читання; `/item/add` без входу → 301 `/signup`; `POST /api/add-edit-used` —
+«зсув» списку посеред читання; KLB-006: `renew_all` — однакова `renew_date` і випадковий порядок
+при рівності (`unstable_ties`), `items_limit_max` — сайт віддає не більше N за запит; `/item/add` без входу → 301 `/signup`; `POST /api/add-edit-used` —
 режими `SUBMITS` (успіх, «низька оцінка», тайм-аут, HTTP 500, не JSON, інший статус, кнопка не
 надсилає); підставна reCAPTCHA на «чужому» хості: шлях `/google/…` підставного сервера guard бачить
 як `https://www.google.com/…` (так перевіряється дозвіл reCAPTCHA), `/evil/…` — як чужий сайт; 429.
@@ -382,12 +383,18 @@ class _Handler(BaseHTTPRequestHandler):
                 200, b'{"status": "success", "items": [], "items_count": 0}', "application/json"
             )
             return
+        if srv.items_limit_max is not None:
+            limit = min(limit, srv.items_limit_max)
+        srv.item_limits.append(limit)
         start = offset
         if srv.shift_reads and offset > 0:  # «Обновить все» посеред читання: список зсунувся на 1
             start = offset - 1
             if offset + limit >= len(srv.listings):
                 srv.shift_reads -= 1
-        page_items = srv.listings[start : start + limit]
+        ordered = srv.listings
+        if srv.unstable_ties:  # як живий: `ORDER BY renew_date` без другого ключа (KLB-006)
+            ordered = sorted(ordered, key=lambda item: (item["renew_date"], srv.random.random()))
+        page_items = ordered[start : start + limit]
         count = len(srv.listings) if srv.items_count is None else srv.items_count
         body = {"items": page_items, "items_count": count, "tabs_count": [count, 0, 0, 0],
                 "status": "success"}  # fmt: skip
@@ -482,6 +489,11 @@ class Server(ThreadingHTTPServer):
         self.items_count: int | None = None  # None — справжня довжина списку
         self.shift_reads = 0  # скільки повних читань «зсунуться»
         self.item_reads: list[int] = []
+        # KLB-006
+        self.item_limits: list[int] = []
+        self.items_limit_max: int | None = None  # сайт віддає не більше стількох за запит
+        self.unstable_ties = False  # однакова `renew_date` — порядок між запитами випадковий
+
         self.too_many: set[str] = set()  # шляхи, що відповідають 429
         self.submit = "success"  # режим `SUBMITS`
         self.submit_delay = 5.0  # с, режим "timeout"
@@ -495,6 +507,13 @@ class Server(ThreadingHTTPServer):
     def close(self) -> None:
         self.shutdown()
         self.server_close()
+
+    def renew_all(self, groups: int = 29) -> None:
+        """«Обновить все»: `renew_date` однакова до секунди в групах (11.11: 29 значень на 1787)."""
+        total = len(self.listings)
+        for n, item in enumerate(self.listings):
+            item["renew_date"] = f"2026-11-17T17:06:{n * groups // total:02d}Z"
+        self.unstable_ties = True
 
 
 FOREIGN = {"google": "https://www.google.com", "evil": "https://evil.example"}
