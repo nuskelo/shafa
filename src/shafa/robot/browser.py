@@ -330,22 +330,30 @@ def wait_for_manual_login(
     limit: float = LOGIN_WAIT,
     flag: Path | None = None,
     clock: Callable[[], float] = time.monotonic,
+    *,
+    profile: Path | None = None,
+    url: str = NEW_URL,
 ) -> str:
     """Відкрити профіль для ручного входу Власника; чекати, поки вікно закриють.
 
     Без захисту мережі: вхід — це надсилання логіна, але його робить людина, не робот.
     Повертає, чим закінчилось: `closed` (вікно закрили), `done` (кнопка «Я увійшов» на екрані),
     `timeout` (минуло `limit`). В останніх двох браузер закривається штатно — cookies входу
-    записуються на диск.
+    записуються на диск. `profile`/`url` — інший сайт (KLB-003: профіль і форма Клубку);
+    без них — профіль робота Шафи й її форма.
     """
     flag = flag or login_done_flag()
     flag.unlink(missing_ok=True)  # стара кнопка з попереднього разу не рахується
-    context = launch(playwright)
+    if profile is None:
+        context = launch(playwright)
+    else:
+        profile.mkdir(parents=True, exist_ok=True)
+        context = open_profile(playwright.chromium, profile)
     closed: list[bool] = []
     context.on("close", lambda _context: closed.append(True))
     page = context.pages[0] if context.pages else context.new_page()
     with contextlib.suppress(Exception):  # вікно закрили, поки сторінка вантажилась
-        page.goto(NEW_URL)
+        page.goto(url)
     why = wait_window(context, closed, flag, limit, clock)
     flag.unlink(missing_ok=True)
     if not closed:
