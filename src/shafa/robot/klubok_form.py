@@ -1,21 +1,26 @@
-"""KLB-001: робот заповнює форму додавання Клубку — БЕЗ публікації.
+"""KLB-001: робот заповнює форму додавання Клубку; KLB-003: та сама сесія публікує за квитком.
 
 `Session` — браузер із `klubok_guard` (клік, мережа, клавіші). `KlubokDriver` — поля форми з
 `fields.KlubokAd`; після заповнення `verify` звіряє глобальний `formData` (назва, ціна, стать,
-стан, розміри, колір, бренд, категорія, порядок фото) з тим, що мало бути. Кліку «Опубликовать» у
-цьому модулі немає і бути не може: `klubok_guard` блокує і кнопку, і відправку. Живий Клубок —
-KLB-003; тут усе працює лише проти підставного (`klubok_fake`).
+стан, розміри, колір, бренд, категорія, порядок фото) з тим, що мало бути. Звичайний `click` ніколи
+не тисне «Опубликовать» (`klubok_guard.click_allowed`); публікація — лише в сесії з
+`publishing=True`: `issue_ticket` після звірки → `click_submit` (чи людина, `--human-click`) →
+`wait_submit`. `LiveSession` — живий Клубок з профілем `<дані>/klubok-profile/`.
 """
 
 import contextlib
+import json
 import re
 import sqlite3
+import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
-from shafa import db
+from shafa import config, db
 from shafa.klubok import catalog, fields
 from shafa.robot import browser, klubok_guard
 from shafa.robot import form as shafa_form
@@ -28,6 +33,19 @@ FIELD_WAIT = 5.0  # с чекаємо поле чи список форми
 BRAND_WAIT = 6.0  # с чекаємо підказки бренду
 BRAND_TYPE_DELAY = 40  # мс між літерами, як у людини (сторінка чекає 500 мс після останньої)
 SUFFIX = "(Кирилиця)"
+LOGIN_PATHS = ("/signup", "/login")  # куди Клубок веде без входу (HYP-4: `/item/add` → `/signup`)
+
+# Чим закінчилась відправка (KLB-003 D4.4)
+SUCCESS, CAPTCHA, UNCERTAIN, NOT_SENT = "success", "captcha", "uncertain", "not_sent"
+
+
+@dataclass(frozen=True)
+class Submitted:
+    outcome: str  # SUCCESS / CAPTCHA / UNCERTAIN / NOT_SENT
+    klubok_id: int | None = None
+    score: str | None = None
+    why: str = ""
+    http: int | None = None
 
 
 def _playwright_error() -> type[Exception]:
@@ -51,15 +69,50 @@ class Session:
     context: Any
     page: Any
 
-    def _setup(self, allow_upload: bool) -> None:
+    def _setup(self, allow_upload: bool, publishing: bool = False, human: bool = False) -> None:
+        """`publishing` — сесія публікації KLB-003 (квиток, reCAPTCHA); `human` — «Опубликовать»
+        тисне людина (`--human-click`), робот кнопку не чіпає ніколи."""
         self.allow_upload = allow_upload
+        self.publishing = publishing
+        self.human = human
         self.blocked: list[tuple[str, str]] = []
         self.uploads = 0
+        self.ticket: klubok_guard.Ticket | None = None
+        self.too_many: list[str] = []  # адреси Клубку, що відповіли 429
+        self._reset_submit()
+
+    def _reset_submit(self) -> None:
+        self.sent = False  # guard пропустив запит публікації
+        self.submit_response: Any = None
+        self.submit_failed: str | None = None
 
     def _attach(self) -> None:
         self.context.route("**/*", self._route)
+        self.context.on("response", self._on_response)
+        self.context.on("requestfailed", self._on_failed)
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         self.page.on("dialog", lambda dialog: dialog.dismiss())
+
+    def _is_submit(self, request: Any) -> bool:
+        url = self.verdict_url(request.url)
+        return (
+            url is not None
+            and request.method.upper() == "POST"
+            and url.split("?")[0] == klubok_guard.SUBMIT_URL
+        )
+
+    def _on_response(self, response: Any) -> None:
+        url = self.verdict_url(response.url)
+        if url is None:
+            return
+        if response.status == 429 and klubok_guard.is_klubok(urlsplit(url).hostname):
+            self.too_many.append(url.split("?")[0])
+        if self.sent and self._is_submit(response.request):
+            self.submit_response = response
+
+    def _on_failed(self, request: Any) -> None:
+        if self.sent and self._is_submit(request):
+            self.submit_failed = request.failure or "запит обірвано"
 
     def verdict_url(self, url: str) -> str | None:
         """Адреса, яку оцінює guard; None — запит узагалі не туди (блок). Живий сайт — як є."""
@@ -75,14 +128,118 @@ class Session:
             route.abort()
             return
         allowed, reason = klubok_guard.request_verdict(
-            request.method, url, request.headers.get("content-type", ""), self.allow_upload
-        )
+            request.method, url, request.headers.get("content-type", ""), self.allow_upload,
+            publishing=self.publishing, ticket=self.ticket,
+        )  # fmt: skip
         if allowed:
             self.uploads += reason == "завантаження фото"
+            self.sent = self.sent or reason == klubok_guard.SUBMITTED
             route.continue_()
         else:
+            path = urlsplit(url).path
+            if (
+                self.ticket is not None
+                and self.ticket.used
+                and klubok_guard.AFTER_SUBMIT.match(path)
+            ):
+                reason += " (очікувано: сторінка після відповіді)"
             self.blocked.append((url.split("?")[0], reason))
             route.abort()
+
+    def unexpected_blocks(self) -> list[tuple[str, str]]:
+        """Заблоковане, крім очікуваних переходів після відповіді й сторінки входу."""
+        return [
+            (url, why) for url, why in self.blocked
+            if "очікувано" not in why and urlsplit(url).path not in LOGIN_PATHS
+        ]  # fmt: skip
+
+    # --- KLB-003: публікація ---
+
+    def issue_ticket(self, item_id: int) -> klubok_guard.Ticket:
+        """Квиток на одну Картку — лише в режимі публікації й після звірки форми."""
+        if not self.publishing:
+            raise Forbidden("Квиток публікації — лише в сесії публікації")
+        self._reset_submit()
+        self.ticket = klubok_guard.Ticket(item_id)
+        return self.ticket
+
+    def drop_ticket(self) -> None:
+        self.ticket = None
+
+    def click_submit(self) -> None:
+        """Клік «Опубликовать» роботом: лише `#btn-submit`, живий квиток, не `--human-click`."""
+        button = self.page.locator(f"#{klubok_guard.SUBMIT_BUTTON}")
+        element_id = button.evaluate("e => e.id")
+        if not klubok_guard.submit_click_allowed(element_id, self.ticket, self.human):
+            raise Forbidden("Клік «Опубликовать» без квитка (чи в режимі «тисне людина»)")
+        button.click(timeout=FIELD_WAIT * 1000 * 6)
+
+    def wait_submit(self, limit: float, stop: Callable[[], bool] = lambda: False) -> "Submitted":
+        """Чекати відповідь `add-edit-used` до `limit` с. Що б не сталось — результат, не виняток.
+        `stop` — людина закрила вікно чи інше «далі чекати нема сенсу» (лише до відправки)."""
+        deadline = time.monotonic() + limit
+        while True:
+            if self.submit_response is not None:
+                return self._parse(self.submit_response)
+            if self.submit_failed is not None:
+                return Submitted(UNCERTAIN, why=f"запит обірвано: {self.submit_failed}")
+            if time.monotonic() >= deadline or (not self.sent and stop()):
+                break
+            try:
+                self.page.wait_for_timeout(250)
+            except _playwright_error():  # вікно закрили
+                if self.submit_response is None and self.submit_failed is None:
+                    break
+        if self.sent:
+            return Submitted(UNCERTAIN, why=f"немає відповіді за {limit:.0f} с")
+        return Submitted(NOT_SENT, why=f"запит публікації не пішов за {limit:.0f} с")
+
+    @staticmethod
+    def _parse(response: Any) -> "Submitted":
+        status = response.status
+        if status != 200:
+            return Submitted(UNCERTAIN, why=f"HTTP {status}", http=status)
+        try:
+            data = json.loads(response.text())
+        except (ValueError, _playwright_error()):
+            return Submitted(UNCERTAIN, why="відповідь не JSON")
+        if not isinstance(data, dict):
+            return Submitted(UNCERTAIN, why="відповідь не JSON-об'єкт")
+        used_id = data.get("used_id")
+        if data.get("status") == "success" and isinstance(used_id, int) and used_id > 0:
+            return Submitted(SUCCESS, klubok_id=used_id)
+        if data.get("status") == "Error":
+            return Submitted(
+                CAPTCHA, score=str(data.get("score", "?"))[:20],
+                why=str(data.get("message") or "")[:200],
+            )  # fmt: skip
+        return Submitted(
+            UNCERTAIN, why=f"невідома відповідь: status={str(data.get('status'))[:40]}"
+        )
+
+    def user_id(self) -> str | None:
+        """`#user_id` форми — хто увійшов (D2)."""
+        try:
+            return self.page.evaluate(
+                "() => { const e = document.querySelector('#user_id'); return e ? e.value : null; }"
+            )
+        except _playwright_error():
+            return None
+
+    def fetch_text(self, path: str, timeout: float = 30.0) -> tuple[int, str]:
+        """GET зсередини сторінки (cookies сесії, крізь guard: `context.request` іде повз `route`).
+        Статус 0 — запит не вдався (guard, мережа, тайм-аут)."""
+        result = self.page.evaluate(
+            """async ([path, ms]) => {
+              const c = new AbortController(); const t = setTimeout(() => c.abort(), ms);
+              try {
+                const r = await fetch(path, {credentials: 'same-origin', signal: c.signal});
+                return [r.status, await r.text()];
+              } catch (e) { return [0, String(e)]; } finally { clearTimeout(t); }
+            }""",
+            [path, int(timeout * 1000)],
+        )
+        return int(result[0]), str(result[1])
 
     def click(self, locator: Any, why: str = "") -> None:
         info = locator.evaluate(
@@ -120,7 +277,7 @@ class Session:
         ):  # навігація, яку не пустив guard, — «немає форми»
             self.page.goto(self.form_url(), wait_until="load")
         url = self.page.url
-        if self.page.locator("#login").count():
+        if self.page.locator("#login").count() or urlsplit(url).path in LOGIN_PATHS:
             return browser.Opened(browser.NO_LOGIN, url)
         try:
             self.page.wait_for_selector(FORM_SELECTOR, timeout=FORM_WAIT * 1000)
@@ -130,6 +287,32 @@ class Session:
 
     def close(self) -> None:
         self.context.close()
+
+
+KLUBOK_USER = "198135"  # її акаунт: `#user_id` форми (D2) і `user_id` у `get-items` (D3)
+FORM_URL = "https://klubok.com/item/add"
+
+
+def profile_dir() -> Path:
+    return config.data_dir() / "klubok-profile"
+
+
+class LiveSession(Session):
+    """Живий Клубок: видимий Chrome з профілем Клубку, guard публікації. Ctrl+C не закриває Chrome
+    (`handle_sigint=False`): сесія доробляє поточну Картку сама."""
+
+    def __init__(self, playwright: Any, publishing: bool = False, human: bool = False) -> None:
+        self._setup(allow_upload=True, publishing=publishing, human=human)
+        profile = profile_dir()
+        profile.mkdir(parents=True, exist_ok=True)
+        self.context = playwright.chromium.launch_persistent_context(
+            profile, channel="chrome", headless=False, viewport={"width": 1400, "height": 1000},
+            args=list(browser.BACKGROUND_ARGS), handle_sigint=False,
+        )  # fmt: skip
+        self._attach()
+
+    def form_url(self) -> str:
+        return FORM_URL
 
 
 def pick_brand(brand: str, options: list[str]) -> str | None:
