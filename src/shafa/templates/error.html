@@ -2,15 +2,30 @@
 <html lang="uk">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Шафа-помічник</title>
 <link rel="stylesheet" href="/static/style.css">
 <script src="/static/theme.js"></script>
 <link rel="icon" href="/static/icon.svg">
+<script src="/static/app.js"></script>
 </head>
 <body>
-<main class="error">
-  <p class="message">{{ message }}</p>
-  <p>{% if back_url is defined and back_url %}<a class="button" href="{{ back_url }}">Повернутися</a> · {% endif %}<a href="/">На головну</a></p>
-</main>
+{# KLB-010 (F9): звичайна сторінка з шапкою (без вкладок — сторінка могла зламатись на них) #}
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="/review">Шафа-помічник</a>
+    <nav class="sites" aria-label="Сайт">
+      <a href="/review" class="site">Шафа</a>
+      <a href="/klubok/review" class="site">Клубок</a>
+    </nav>
+    {% include "theme_button.html" %}
+  </div>
+</header>
+<div class="wrap">
+  <main class="error">
+    <p class="message">{{ message }}</p>
+    <p>{% if back_url is defined and back_url %}<a class="button" href="{{ back_url }}">Повернутися</a> · {% endif %}<a href="/">На головну</a></p>
+  </main>
+</div>
 </body>
 </html>

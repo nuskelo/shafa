@@ -238,7 +238,8 @@ def test_without_login_stops_before_any_card(conn, root, cards, chromium, server
     finally:
         s.close()
     assert result.code == kp.LOGIN and "--klubok-login" in result.reason
-    assert row(conn, cards[0]) is None and server.submits == 0
+    got = row(conn, cards[0])  # KLB-010: кінець сесії перераховує чергу — лише `queued`
+    assert (got is None or got["state"] == "queued") and server.submits == 0
     assert said[-1][2]["loud"] is True
 
 
@@ -246,7 +247,8 @@ def test_other_account_is_not_logged_in(conn, root, cards, server, session):
     server.user = "1"
     assert run(conn, root, session).code == kp.LOGIN
     assert server.item_reads == []  # знімок не читали — вхід перевірено до нього
-    assert row(conn, cards[0]) is None  # жодна Картка не стартувала
+    got = row(conn, cards[0])  # жодна Картка не стартувала (KLB-010: черга — лише `queued`)
+    assert got is None or got["state"] == "queued"
 
 
 def test_snapshot_failure_stops_before_any_card(conn, root, cards, server, session):

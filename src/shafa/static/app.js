@@ -23,7 +23,26 @@ try {
   }
 } catch (error) { /* старий браузер — лишаємо як є */ }
 
+// KLB-010 (N6): фото не завантажилось (стерто з диска, немає на Клубку) — заглушка «немає фото»
+// замість зламаної картинки. Подія `error` картинки не спливає — ловимо на етапі захоплення.
+document.addEventListener("error", (event) => {
+  const img = event.target;
+  if (!(img instanceof HTMLImageElement) || img.dataset.noshot) return;
+  img.dataset.noshot = "1";
+  const stub = document.createElement("span");
+  // `.noshot` — лише всередині `.shot` (позиціонований батько); інакше — звичайна вбудована заглушка
+  stub.className = img.closest("a.big") ? "empty noshot-big"
+    : img.closest(".shot") ? "noshot" : "noshot-inline";
+  stub.textContent = "немає фото";
+  img.replaceWith(stub);
+}, true);
+
 document.addEventListener("DOMContentLoaded", () => {
+
+  // KLB-010 (F5): на телефоні «Як буде на Клубку» — згорнутим рядком (розгортається торканням)
+  if (window.matchMedia("(max-width: 640px)").matches) {
+    document.querySelectorAll("details[data-close-narrow]").forEach((d) => { d.open = false; });
+  }
 
   const viewer = document.getElementById("viewer");
   const photoLinks = Array.from(document.querySelectorAll("a.photo"));

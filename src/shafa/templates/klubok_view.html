@@ -1,0 +1,17 @@
+{# KLB-010 (F5): «Як буде на Клубку» — компактно над полями; на телефоні згорнуто одним рядком. #}
+<details class="kad" open data-close-narrow aria-label="Як буде на Клубку">
+  <summary><b>Як буде на Клубку</b>{% if ksummary %}<span class="kad-sum">: {{ ksummary }}</span>{% endif %}</summary>
+  {% if view.skip and not todo %}<p class="skip">Не піде на Клубок: {{ view.skip }}</p>{% endif %}
+  <dl>
+    {% for line in view.lines %}
+    <dt>{{ line.label }}</dt>
+    <dd{% if line.warn %} class="warn"{% endif %}>{{ line.value }}{% if line.warn and not view.skip %} — {{ line.warn }}{% endif %}</dd>
+    {% endfor %}
+    {% if view.ok %}
+    <dt>Фото</dt>
+    <dd>{{ view.photos | length }}{% if view.spare %} (запасне фото з Експорту — фото Картки Шафи стерто){% endif %}</dd>
+    {% endif %}
+    {% if kwave %}<dt>Хвиля</dt><dd>{{ wave_text(kwave, kkind) }}</dd>{% endif %}
+  </dl>
+  {% if view.text %}<details class="more-info"><summary>Опис оголошення</summary><div class="post">{{ view.text }}</div></details>{% endif %}
+</details>

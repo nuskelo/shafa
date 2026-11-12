@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from shafa import ai, db, fill, review
+from shafa import ai, db, fill, folders, review
 from shafa.db import Status
 from shafa.robot import listings as listings_mod
 from shafa.robot.publish import card_listing
@@ -40,6 +40,7 @@ SHAFA_DAILY_LIMIT=100
 SHAFA_DAILY_NEW=30
 SHAFA_DAILY_OLD=0
 SHAFA_ROOT_DIR={root}
+SHAFA_KLUBOK=1
 """
 
 
@@ -224,6 +225,86 @@ class Seed:
                 )
         self.add(Status.PUBLISHING)
         self.sessions()
+        self.klubok()
+
+    def klubok_card(self, status: str, fields: list | None = None) -> int:
+        """TD-076: Картка «лише Клубок» — папка `klubok-<N>`, фото в `<дані>/klubok-old/<N>/`."""
+        post_id = self.post + 1
+        name = folders.klubok_folder_name(post_id)
+        make_photo(folders.klubok_spare(post_id) / "1.jpg", (64, 48), (120, 90, 140))
+        fields = [
+            ai.Field("photo_order", ["1.jpg"]) if f.name == "photo_order" else f
+            for f in (fields or blank("Черевики Ecco 38"))
+        ]
+        item_id = self.add(status, fields=fields, photos=(), folder=name)
+        with self.conn:
+            self.conn.execute("UPDATE items SET only_klubok = 1 WHERE id = ?", (item_id,))
+            self.conn.execute("INSERT INTO photos VALUES (?, 1, '1.jpg')", (item_id,))
+            self.wave(post_id, 1)
+        return item_id
+
+    def wave(self, post_id: int, wave: int) -> None:
+        self.conn.execute(
+            "INSERT OR IGNORE INTO klubok_waves VALUES (?, ?, 'зима', ?)", (post_id, wave, db.now())
+        )
+
+    def ad(self, item_id: int, state: str, **cols) -> None:
+        cols = {k: v for k, v in cols.items() if v is not None}
+        names = ["item_id", "state", "created_at", "updated_at", *cols]
+        stamp = db.now()
+        with self.conn:
+            post = self.conn.execute(
+                "SELECT post_id FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
+            self.wave(post[0], 1)
+            self.conn.execute(
+                f"INSERT INTO klubok_ads ({', '.join(names)}) "
+                f"VALUES ({', '.join('?' * len(names))})",
+                (item_id, state, stamp, stamp, *cols.values()),
+            )
+
+    def klubok(self) -> None:
+        """TD-076: усе, що показують вкладки Клубку: «лише Клубок» на перевірці (звичайна, жовта,
+        без розділу), схвалена в черзі, рядки черги для Карток Шафи (у черзі, дубль, «перевірте»,
+        виставлено, не піде), свіжий знімок її оголошень."""
+        self.klubok_card(Status.REVIEW)
+        yellow = [
+            ai.Field(f.name, f.value, True, "ШІ не впевнене") if f.name == "sizes" else f
+            for f in blank("Чоботи Geox 39")
+        ]
+        self.klubok_card(Status.REVIEW, yellow)
+        self.klubok_card(
+            Status.REVIEW,
+            [ai.Field("section", None) if f.name == "section" else f for f in blank("Сумка")],
+        )
+        shafa = self.items[str(Status.APPROVED)][1:]  # без Nike-хвоста екрана; до «лише Клубок»
+        published = self.items[str(Status.PUBLISHED)][:2]
+        queued = self.klubok_card(Status.APPROVED)
+        self.ad(queued, "queued", queued_at=db.now())
+        rows = [
+            {"state": "queued", "queued_at": db.now()},
+            {"state": "problem", "problem_code": "klubok_duplicate",
+             "problem_text": "Схоже, ця пара вже є на Клубку", "dup_klubok_id": 500_000_001,
+             "dup_name": f"Черевики {HTML_TRAP} 38"},
+            {"state": "problem", "problem_code": "klubok_uncertain",
+             "problem_text": "Немає певної відповіді Клубку"},
+            {"state": "skipped", "problem_code": "klubok_no_price"},
+        ]  # fmt: skip
+        for item_id, cols in zip(shafa, rows, strict=False):  # малий засів тестів — скільки є
+            self.ad(item_id, **cols)
+        for number, item_id in enumerate(published):
+            self.ad(item_id, "published", klubok_id=500_000_100 + number, published_at=db.now(),
+                    url=f"https://klubok.com/item-x-{500_000_100 + number}" if number == 0 else None)  # fmt: skip
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO klubok_listings (id, name, price, sizes, url, sold, added_at) "
+                "VALUES (500000001, ?, 1200, '[\"38\"]', 'https://klubok.com/item-y', 0, ?)",
+                (f"Черевики {HTML_TRAP} 38", db.now()),
+            )
+            self.conn.execute(
+                "INSERT OR REPLACE INTO klubok_listings_read (id, read_at, count) VALUES (1, ?, 1)",
+                (datetime.now(UTC).isoformat(timespec="seconds"),),
+            )
 
     def pool(self, similar: int = 4) -> list[int]:
         """Схвалені для робота: «Це інший товар» (щоб однакові назви не були дублями), крім

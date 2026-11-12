@@ -145,6 +145,15 @@ def spare_photo(post_id: int | None) -> Path | None:
     return path if path.is_file() else None
 
 
+def klubok_price(card: Card) -> int | None:
+    """KLB-010 (F7): ціна на Клубку — у «лише Клубок» поле Картки (ціна поста, можна правити),
+    у Картки Шафи — ціна з поста (без +15 % Шафи)."""
+    value = card.fields["price"].value
+    if card.only_klubok and isinstance(value, int) and value > 0:
+        return value
+    return rules.price_from_text(card.post_text or "") or None
+
+
 def ad(card: Card, root: Path) -> KlubokAd | Skip:
     f = {name: view.value for name, view in card.fields.items()}
     section = f["section"] or ""
@@ -161,7 +170,7 @@ def ad(card: Card, root: Path) -> KlubokAd | Skip:
             f"Категорії {leaf_id} немає у знімку Клубку або дерево змінилось — оновіть знімок",
         )
 
-    price = rules.price_from_text(card.post_text or "")
+    price = klubok_price(card)
     if not price:
         return Skip("klubok_no_price", "У тексті поста немає ціни")
 

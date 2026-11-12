@@ -2,7 +2,7 @@
 {% block cards %}
 {% if klubok_problems %}
 <section class="klubok-problems">
-  <h2>Клубок: треба рішення</h2>
+  <h2>Клубок: Проблеми</h2>
   <ul>
   {% for kcard, why in klubok_problems %}
     <li><a href="/klubok/item/{{ kcard.id }}?from=%2Fklubok%2Fdecide">{{ kcard | card_name }}</a>{% if kcard.post_id %} · пост {{ kcard.post_id }}{% endif %} — {{ why }}</li>

@@ -315,7 +315,8 @@
   </section>
   {% endif %}
   {% else %}
-  <section class="right" aria-label="Поля для Шафи">
+  <section class="right" aria-label="{{ "Поля Картки" if site == "klubok" else "Поля для Шафи" }}">
+    {% if site == "klubok" and view %}{% include "klubok_view.html" %}{% endif %}
     {% for f in layout.yellow %}{{ field(f) }}{% endfor %}
     {% for row in layout.rows %}
     <div class="frow{% if row | length > 1 %} two{% endif %}">
@@ -365,12 +366,21 @@
 {% if editable %}
 <div class="actionbar" role="region" aria-label="Дії з Карткою Клубку">
   <div class="actionbar-in">
+    {# KLB-010 (F5): ті самі кнопки й порядок, що в Шафи #}
+    <form method="post" action="{{ item_action }}" class="ai-retry">
+      <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">
+      <button name="action" value="ai_retry" title="Новий бланк одразу, ≈ 0,05 $; ваші правки лишаються">Попросити ШІ заповнити заново</button>
+      <details class="more-info">
+        <summary>Ще</summary>
+        <button name="action" value="refill" title="Пакетом, ≈ 0,015 $; ваші правки лишаються">Попросити ШІ пакетом</button>
+        <p>Дешевше, але результат до години — Картка на цей час зникне зі списку.</p>
+      </details>
+    </form>
     <span class="spacer"></span>
     <div class="bar-main">
-      <button form="fields" name="action" value="reject_klubok" class="reject" title="Картка піде в Архів на 7 днів">Не виставляти</button>
+      <button form="fields" name="action" value="reject_klubok" class="reject" title="Картка піде в Архів Клубку на 7 днів">Не виставляти (в Архів)</button>
       <button form="fields" name="action" value="save" class="save">Зберегти</button>
-      <button form="fields" name="action" value="approve_klubok" class="approve"{% if not view.ok or kblock %} disabled title="{{ kblock or view.skip }}"{% endif %}><span aria-hidden="true">✓</span> Схвалити для Клубку</button>
-      {% if nav.next_url %}<a class="button" href="{{ nav.next_url }}">Далі <span aria-hidden="true">→</span></a>{% endif %}
+      <button form="fields" name="action" value="approve_klubok" class="approve"{% if todo %} disabled title="{{ todo }}"{% endif %}><span aria-hidden="true">✓</span> Схвалити і далі</button>
     </div>
   </div>
 </div>

@@ -109,7 +109,8 @@ h1 { font-size: 1.75rem; line-height: 1.2; letter-spacing: -0.02em; margin: 0; f
 h2 { font-size: 1.1rem; margin: 1.2rem 0 0.4rem; }
 .wrap { max-width: 1320px; margin: 0 auto; padding: 24px 24px 56px; display: flex; flex-direction: column; gap: 24px; }
 main { min-width: 0; }
-main.error { max-width: 40rem; padding-top: 4rem; }
+main.error { max-width: 40rem; padding-top: 2rem; }
+main.error .message { margin-top: 0; }
 
 /* ───────── Верх: назва, вкладки, «Ще», тема, «Вийти» ───────── */
 .top { background: var(--card); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
@@ -161,7 +162,7 @@ html[data-theme="dark"] .tab.current .count.alert { color: #1f0c09; }
 .menu {
   position: absolute;
   z-index: 10;
-  left: 0;
+  right: 0; /* N7: меню «Ще» — по правому краю, не за межі екрана */
   top: calc(100% + 6px);
   min-width: 15rem;
   padding: 6px;
@@ -174,6 +175,7 @@ html[data-theme="dark"] .tab.current .count.alert { color: #1f0c09; }
 }
 .menu a { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border-radius: 8px; color: var(--text); text-decoration: none; }
 .menu a:hover { background: var(--sub); }
+.menu .hint.waiting-ai { display: block; padding: 8px 12px 4px; white-space: normal; }
 .quit { margin: 0; }
 .quit button { min-height: 40px; padding: 0 14px; background: transparent; border-color: var(--line-strong); color: var(--text-2); }
 .theme-toggle { margin-left: auto; min-height: 40px; min-width: 40px; padding: 0 10px; gap: 8px; background: transparent; border-color: var(--line-strong); color: var(--text-2); font-weight: 500; }
@@ -353,6 +355,7 @@ a.tilecard:hover { border-color: var(--accent); color: var(--text); }
 
 /* ───────── Картка ───────── */
 .top-card .top-in { min-height: 60px; gap: 4px 12px; }
+.card-head h1 { overflow-wrap: anywhere; } /* назва без пробілів (400 «а») не розпирає сторінку */
 .back-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px 0 8px; border-radius: var(--radius); background: var(--sub); color: var(--text); font-weight: 650; text-decoration: none; }
 .back-link:hover { background: var(--sub-hover); color: var(--text); }
 .place { color: var(--muted); font-weight: 600; padding: 0 4px; }
@@ -389,6 +392,7 @@ p.changed-note { margin: 6px 0 0; padding: 0; border: 0; background: none; color
 .thumbs .photo { display: block; border: 2px solid transparent; border-radius: 10px; overflow: hidden; background: var(--sub); }
 .thumbs .photo[aria-current="true"] { border-color: var(--accent); }
 .photo img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--sub); }
+.noshot-inline { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; min-height: 48px; background: var(--sub); color: var(--muted); font-size: 0.75rem; text-align: center; }
 .noshot-big { display: flex; align-items: center; justify-content: center; aspect-ratio: 4 / 3; margin: 0; background: var(--sub); border-radius: var(--radius-lg); color: var(--muted); }
 .post-box { padding: 16px 18px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-lg); }
 .post-box h2 { margin: 0 0 8px; font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
@@ -583,13 +587,13 @@ p.robot-error { margin: 0 0 1rem; padding: 0.6rem 0.9rem; border: 1px solid var(
 .robot-notes p { margin: 0; }
 .robot-notes ul { margin: 0.2rem 0 0; padding-left: 1.2rem; }
 
-/* Вужчий ноутбук: верх у два ряди — назва, тема і «Вийти» зверху, вкладки під ними */
+/* KLB-010 (F1): верх в один рядок на 1440 і 1024 (обидва сайти). Вужчий ноутбук — без назви біля
+   значка й щільніші вкладки; телефон — свої правила нижче. */
 @media (max-width: 1399px) {
-  .top-in { padding-top: 10px; padding-bottom: 6px; gap: 6px 12px; }
-  .brand { order: 0; }
-  .theme-toggle { order: 1; }
-  .quit { order: 2; }
-  .tabs { order: 3; flex-basis: 100%; margin-left: -11px; }
+  .top-in { gap: 6px 8px; padding-left: 16px; padding-right: 16px; }
+  .brand { font-size: 0; gap: 0; }
+  .tab { padding: 0 8px; gap: 5px; }
+  .site { padding: 0 10px; }
 }
 
 /* ───────── Планшет ───────── */
@@ -638,7 +642,18 @@ p.robot-error { margin: 0 0 1rem; padding: 0.6rem 0.9rem; border: 1px solid var(
   .card-cols > .right { order: 2; }
   .card-cols > .left > .post-box { order: 3; }
   .top-card .top-in { gap: 6px; }
-  .top-card .mini-wrap { flex-basis: 100%; order: 5; }
+  /* KLB-010 (F8): 2 рядки — «← список · 3 з 8 · тема», далі «Назад · Далі · стан» */
+  .top-card .back-link { order: 0; }
+  .top-card .place { order: 1; }
+  .top-card .spacer { display: none; }
+  .top-card .theme-toggle { order: 2; margin-left: auto; }
+  .top-card .step { order: 3; }
+  .top-card .step-link { min-height: 40px; padding: 0 10px; }
+  .top-card .mini-wrap { order: 4; flex: 1 1 0; min-width: 0; max-width: 100%; overflow: hidden; }
+  .top-card .status.mini { flex-wrap: nowrap; overflow: hidden; gap: 4px 10px; padding: 6px 10px; }
+  .top-card .mini-item { white-space: nowrap; }
+  .top-card .mini-item.robot { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .top-card .mini .fake { display: none; }
   .status.mini { border-radius: var(--radius); }
   .actionbar-in { padding: 8px 12px; gap: 8px; }
   .actionbar .spacer { display: none; }
@@ -853,15 +868,33 @@ html[data-theme="dark"] .sp-actions .sp-stop { color: #1f0c09; }
 .sp > .stale-note { margin: 0; color: var(--yellow-text); }
 
 /* ───────── KLB-009: вкладка «Клубок» ───────── */
-.kad { margin: 0 0 1rem; padding: 0.8rem 1rem; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); }
-.kad h2 { margin: 0 0 0.5rem; font-size: 1.05rem; }
-.kad dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; }
+/* KLB-010 (F5): «Як буде на Клубку» — компактно у правій колонці над полями */
+.kad { margin: 0 0 18px; padding: 10px 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--sub); font-size: 0.9rem; }
+.kad > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 4px; min-height: 28px; }
+.kad > summary::-webkit-details-marker { display: none; }
+.kad > summary::before { content: "▸"; color: var(--accent-text); margin-right: 4px; }
+.kad[open] > summary::before { content: "▾"; }
+.kad[open] .kad-sum { display: none; }
+.kad > summary b { flex: none; white-space: nowrap; }
+.kad .kad-sum { flex: 1 1 auto; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.kad dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 6px 0 0; }
 .kad dt { color: var(--muted); }
 .kad dd { margin: 0; overflow-wrap: anywhere; }
 .kad dd.warn, .kad .skip { color: var(--yellow-text); font-weight: 600; }
-.kad .skip { margin: 0 0 0.6rem; padding: 0.5rem 0.7rem; border-radius: var(--radius); background: var(--yellow); border: 1px solid var(--yellow-line); }
-.kad details { margin-top: 0.6rem; }
+.kad .skip { margin: 6px 0 0; padding: 0.4rem 0.7rem; border-radius: var(--radius); background: var(--yellow); border: 1px solid var(--yellow-line); }
+.kad details { margin-top: 0.4rem; }
 .kad .post { white-space: pre-wrap; }
+.kstate { margin: 0 0 4px; padding: 10px 14px; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); display: flex; flex-direction: column; gap: 6px; }
+.kstate p { margin: 0; }
+.kstate form.decide { margin-top: 4px; }
+/* «Проблеми» Клубку: наша пара — схоже оголошення — рішення в рядку */
+.kdup-theirs { flex: 1 1 260px; min-width: 0; display: flex; gap: 12px; align-items: center; padding: 8px; border: 1px dashed var(--line-strong); border-radius: var(--radius); }
+.kdup-theirs .shot { position: relative; flex: none; width: 88px; height: 88px; border-radius: var(--radius); overflow: hidden; background: var(--sub); }
+.kdup-theirs .shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.kdup-theirs > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.kdup-theirs .kind { font-size: 0.82rem; color: var(--muted); }
+.kdup-theirs .name { overflow-wrap: anywhere; font-weight: 600; }
+.kdup-theirs p { margin: 0; }
 .kad form.decide { margin-top: 0.6rem; }
 .krows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .krow { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
@@ -871,6 +904,7 @@ html[data-theme="dark"] .sp-actions .sp-stop { color: #1f0c09; }
 .krow .why { color: var(--yellow-text); font-size: 0.92rem; }
 .krow .num { font-weight: 700; color: var(--muted); min-width: 2.5ch; text-align: right; }
 .kgroup h2 { font-size: 1.05rem; margin: 1rem 0 0.5rem; }
+.kgroup + .kgroup { margin-top: 8px; }
 .ksync { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 1rem; }
 @media (max-width: 640px) {
   .sites { order: 1; }

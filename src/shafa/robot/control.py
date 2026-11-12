@@ -49,6 +49,10 @@ CRASH_TEXT = (
     "Робот зупинився посеред роботи{done}. Натисніть «Старт», щоб продовжити. "
     "Повториться — скажіть Власнику."
 )
+CRASH_LIMIT = (  # KLB-010 (N9): ліміт доби вичерпано — «Старт» сьогодні не допоможе
+    "Робот зупинився посеред роботи{done}. На сьогодні ліміт вичерпано — завтра після 00:00 "
+    "натисніть «Старт». Повториться — скажіть Власнику."
+)
 
 LAST = {  # причина зупинки останньої сесії — простими словами
     "done": "Черга закінчилась",
@@ -554,7 +558,9 @@ def state(
         text = (
             CRASH_CLOSED
             if "TargetClosed" in reason
-            else CRASH_TEXT.format(done=f" (опубліковано {done})" if done else "")
+            else (CRASH_LIMIT if today >= day_limit else CRASH_TEXT).format(
+                done=f" (опубліковано {done})" if done else ""
+            )
         )
         if reason:
             details.append(reason)

@@ -89,11 +89,66 @@ def card_facts(card: Card) -> Facts:
     )
 
 
+# KLB-010: підтип речі для Картки без бренду — взуття (`listings.SHOE_TYPES`) і сумки/гаманці.
+BAG_TYPES = (
+    ("рюкзаки", re.compile(r"^(?:рюкзак|ранец|ранц)")),
+    ("гаманці", re.compile(r"^(?:гаман|портмоне|кошел)")),
+    ("клатчі", re.compile(r"^клатч")),
+    ("барсетки", re.compile(r"^барсет")),
+    ("косметички", re.compile(r"^косметич")),
+    ("ремені", re.compile(r"^(?:ремін|ремен|пояс)")),
+    ("сумки", re.compile(r"^(?:сумк|сумоч|шопер|тоут)")),
+)
+NO_BRAND_PRICE_GAP = 0.25  # без бренду — ціни ±25 % (з брендом — `listings.PRICE_GAP`, 40 %)
+_NOT_MODEL = re.compile(r"(?:см|cm|мм|mm|грн|uah|р|г)$")  # устілка, ціна, «38р»
+
+
+def subtype(title: str) -> str | None:
+    """Підтип за першим упізнаним словом назви: рюкзаки / сумки / … / черевики / кросівки…"""
+    for word in re.findall(r"\w+", title.casefold().replace("ʼ", "'").replace("’", "'")):
+        for name, pattern in (*BAG_TYPES, *listings.SHOE_TYPES):
+            if pattern.match(word):
+                return name
+    return None
+
+
+def model_numbers(title: str) -> set[str]:
+    """KLB-010: номери моделі в назві («237», «530», «gel-1130» → «1130») — цифри токенів, крім
+    розміру («38,5 розміру», «38-39»), року (19xx/20xx), устілки й ціни («24 см», «900грн») і
+    одно-двоцифрових чисел без літер."""
+    text = _TITLE_SIZE.sub(" ", title.casefold())
+    found = set()
+    for token in re.findall(r"[\w-]*\d[\w-]*", text):
+        token = token.strip("-")
+        if _NOT_MODEL.search(token) or re.fullmatch(r"(?:19|20)\d\d", token):
+            continue
+        if token.isdigit() and len(token) < 3:  # «38», «5» — розмір чи кількість, не модель
+            continue
+        found.add(re.sub(r"\D", "", token))  # «gel-1130» і «1130» — та сама модель
+    return found
+
+
+def _prices_near(ours: int | None, theirs: int | None) -> bool:
+    if not ours or not theirs:
+        return True
+    return abs(ours - theirs) <= NO_BRAND_PRICE_GAP * max(ours, theirs)
+
+
 def same(ours: Facts, theirs: Facts, *, brand_in_name: bool) -> bool:
     """Чи схоже оголошення `theirs` на Картку `ours`. `brand_in_name` — бренду в оголошенні немає,
-    шукаємо бренд Картки в його назві."""
+    шукаємо бренд Картки в його назві. KLB-010: різні номери моделі — не дубль; Картка без бренду —
+    лише той самий підтип і ціна ±25 %."""
     if ours.group is not None and theirs.group is not None and ours.group != theirs.group:
         return False
+    a, b = model_numbers(ours.name), model_numbers(theirs.name)
+    if a and b and not a & b:
+        return False
+    if not ours.brand:
+        kind = subtype(ours.name)
+        if kind is None or kind != subtype(theirs.name):
+            return False
+        if not _prices_near(ours.price, theirs.price):
+            return False
     if ours.brand:
         if brand_in_name:
             if brand_key(ours.brand) not in brand_key(theirs.name):

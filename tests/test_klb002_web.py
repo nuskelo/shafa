@@ -108,9 +108,9 @@ def test_problems_page_has_klubok_block_and_shafa_counter_unchanged(conn, app, r
 
     page = html(get(app, "/problem"))
 
-    assert "Клубок: треба рішення" in page
+    assert "Клубок: Проблеми" in page
     assert f'href="/klubok/item/{item_id}?from=' in page  # KLB-009: рішення — у вкладці «Клубок»
     assert "перевірте на Клубку, чи опубліковано" in page
     assert web.review.counts(conn)[Status.PROBLEM] == 0  # лічильник Шафи не змінився
     other = add(conn, root, 7302)
-    assert "Клубок: треба рішення" not in html(get(app, "/review")) and other
+    assert "Клубок: Проблеми" not in html(get(app, "/review")) and other

@@ -1,26 +1,12 @@
-{# KLB-009: Картка у вкладці «Клубок» — що буде на Клубку, стан і рішення. Форми — на /klubok/item/N. #}
+{# KLB-009: стан Картки на Клубку й рішення. «Як буде на Клубку» — у правій колонці (klubok_view.html). #}
 {% if kerror %}<p class="robot-error">{{ kerror }}</p>{% endif %}
-{% if kblock %}<p class="robot-error">{{ kblock }}</p>{% endif %}
-<section class="kad" aria-label="Як буде на Клубку">
-  <h2>Як буде на Клубку</h2>
-  {% if view.skip %}<p class="skip">Не піде на Клубок: {{ view.skip }}</p>{% endif %}
-  <dl>
-    {% for line in view.lines %}
-    <dt>{{ line.label }}</dt>
-    <dd{% if line.warn %} class="warn"{% endif %}>{{ line.value }}{% if line.warn %} — {{ line.warn }}{% endif %}</dd>
-    {% endfor %}
-    {% if view.ok %}
-    <dt>Фото</dt>
-    <dd>{{ view.photos | length }} у такому порядку: {{ view.photos | join(", ") }}{% if view.spare %} (запасне фото з Експорту — фото Картки стерто){% endif %}</dd>
-    {% endif %}
-    {% if kwave %}<dt>Хвиля</dt><dd>{{ wave_text(kwave) }}</dd>{% endif %}
-  </dl>
-  {% if view.text %}<details><summary>Опис оголошення</summary><div class="post">{{ view.text }}</div></details>{% endif %}
-
+{% if todo %}<p class="robot-error">{{ todo }}</p>{% endif %}
+{% if kline or not card.only_klubok or (kad and kad["state"] == "problem") %}
+<section class="kstate" aria-label="Клубок">
   {% if kline %}
   <p>Клубок: {{ kline.text }}{% if klubok_url %} · <a href="{{ klubok_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Клубку</a>{% endif %}</p>
   {% endif %}
-  {% if not card.only_klubok %}<p><a href="/item/{{ card.id }}">Відкрити в Шафі</a> — поля правляться там.</p>{% endif %}
+  {% if not card.only_klubok %}<p class="meta"><a href="/item/{{ card.id }}">Відкрити в Шафі</a> — поля правляться там.</p>{% endif %}
 
   {% if kad and kad["state"] == "problem" %}
   {% if kad["problem_code"] == "klubok_duplicate" %}
@@ -35,7 +21,7 @@
   <form method="post" action="{{ item_action }}" class="decide">
     <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">
     <label for="klubok_id">Знайшли — вставте номер оголошення на Клубку (або посилання на нього):</label>
-    <input id="klubok_id" name="klubok_id" required inputmode="numeric" placeholder="37977926">
+    <input id="klubok_id" name="klubok_id" required inputmode="numeric" placeholder="напр. 37977926">
     <button name="action" value="klubok_confirm" class="approve">Так, опубліковано</button>
   </form>
   <p class="meta">Перед цим натисніть «Перечитати мої оголошення» на панелі — програма звіряє номер з вашим списком.</p>
@@ -49,3 +35,4 @@
   {% endif %}
   {% endif %}
 </section>
+{% endif %}
