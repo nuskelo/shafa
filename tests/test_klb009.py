@@ -64,10 +64,11 @@ def test_switch_on_both_sites_and_klubok_tabs(conn, root, app):
     shafa = html(get(app, "/review"))
     assert 'href="/klubok/review"' in shafa and ">Клубок</a>" in shafa
     page = html(get(app, "/klubok/review"))
-    for key, title in (("review", "На перевірку"), ("queue", "У черзі"),
-                       ("decide", "Треба рішення"), ("published", "Виставлено"),
-                       ("skipped", "Не піде")):  # fmt: skip
+    for key, title in (("review", "На перевірку"), ("queue", "Схвалені"),
+                       ("decide", "Проблеми"), ("published", "Опубліковані"),
+                       ("archive", "Архів"), ("sessions", "Сесії")):  # fmt: skip  # KLB-010: як у Шафи
         assert f'href="/klubok/{key}"' in page and title in page
+    assert location(get(app, "/klubok/skipped")) == "/klubok/archive"  # стара адреса «Не піде»
     assert location(get(app, "/klubok")) == "/klubok/review"
     assert get(app, "/klubok/nonsense").status == 404
 
@@ -78,7 +79,7 @@ def test_review_tab_shows_only_klubok_cards_shafa_does_not(conn, root, app):
     page = html(get(app, "/klubok/review"))
     assert f"/klubok/item/{only}?" in page and "Черевики Ecco 38 розміру старі" in page
     assert f"/klubok/item/{shafa_card}?" not in page
-    assert "хвиля 1" in page and "1200 грн" in page  # ціна Клубку — з поста
+    assert "Хвиля 1 · зима" in page and "1200 грн" in page  # ціна Клубку — з поста
     assert "Черевики Ecco 38 розміру старі" not in html(get(app, "/review"))  # Шафа без змін
 
 
@@ -92,7 +93,7 @@ def test_search_like_shafa(conn, root, app):
 def test_get_pages_write_nothing(conn, root, app):
     klubok_card(conn, root, 301)
     add(conn, root, 7301)
-    for tab in ("review", "queue", "decide", "published", "skipped"):
+    for tab in ("review", "queue", "decide", "published", "archive", "sessions"):
         html(get(app, f"/klubok/{tab}"))
     html(get(app, "/klubok/panel"))
     assert ads(conn) == 0
@@ -104,9 +105,10 @@ def test_get_pages_write_nothing(conn, root, app):
 def test_card_shows_how_it_will_be_on_klubok(conn, root, app):
     item_id = klubok_card(conn, root, 301)
     page = html(get(app, f"/klubok/item/{item_id}"))
-    assert "Як буде на Клубку" in page and "1200 грн (з поста)" in page
+    assert "Як буде на Клубку" in page and "1200 грн" in page
     assert "Женское" in page  # шлях категорії Клубку
-    assert 'value="approve_klubok"' in page and "Схвалити для Клубку" in page
+    assert 'value="approve_klubok"' in page and "Схвалити і далі" in page  # KLB-010: як у Шафи
+    assert "Попросити ШІ заповнити заново" in page and "Не виставляти (в Архів)" in page
     assert f'action="/klubok/item/{item_id}"' in page
     assert 'value="approve"' not in page  # кнопок Шафи немає
     assert get(app, f"/item/{item_id}").status == 404  # Шафа її як і раніше не показує
@@ -143,7 +145,10 @@ def test_reject_klubok_archived_not_in_queue(conn, root, app):
 def test_approve_refused_when_klubok_would_skip(conn, root, app):
     item_id = klubok_card(conn, root, 301, text="Черевики Ecco 38 розміру")  # без ціни
     page = html(get(app, f"/klubok/item/{item_id}"))
-    assert "Не піде на Клубок: у пості немає ціни" in page
+    # KLB-010 (F6): одна причина, одним реченням, без «піде після схвалення» поруч
+    assert '<p class="robot-error">Схвалити не можна: у пості немає ціни</p>' in page
+    assert "Не піде на Клубок" not in page and "немає ціни в пості" not in page
+    assert "піде після схвалення" not in page
     assert "disabled" in page.split('value="approve_klubok"')[1].split(">")[0]
     post(app, f"/klubok/item/{item_id}", action="approve_klubok")
     assert status_of(conn, item_id) == Status.REVIEW
@@ -267,25 +272,27 @@ def test_published_tab_links_only_to_klubok(conn, root, app):
     evil = add(conn, root, 7302, status=Status.PUBLISHED, **OTHER_PAIR)
     ad_row(conn, evil, queue.PUBLISHED, url="javascript:alert(1)", klubok_id=6)
     page = html(get(app, "/klubok/published"))
-    assert 'href="https://klubok.com/item-x-5"' in page and "виставлено 09.11.2026" in page
-    assert "javascript:" not in page
+    assert "виставлено 09.11.2026" in page and "javascript:" not in page
+    assert 'href="https://klubok.com/item-x-5"' in html(get(app, f"/klubok/item/{good}"))
+    assert "javascript:" not in html(get(app, f"/klubok/item/{evil}"))
 
 
 def test_skipped_grouped_by_reason(conn, root, app):
     for n, code in ((7301, "klubok_no_price"), (7302, "klubok_no_price"), (7303, queue.POST_GONE)):
         item_id = add(conn, root, n, title=f"Черевики {n} 38 розміру")
         ad_row(conn, item_id, queue.SKIPPED, problem_code=code)
-    page = html(get(app, "/klubok/skipped"))
+    page = html(get(app, "/klubok/archive"))
     assert "у пості немає ціни · 2" in page and "пост видалено з каналу — пару продано · 1" in page
     assert page.index("у пості немає ціни") < page.index("пост видалено з каналу")
 
 
-def test_sync_button_writes_queue(conn, root, app):
-    item_id = add(conn, root, 7301)
-    assert "Ще 1 схвалених" in html(get(app, "/klubok/queue"))
-    assert "msg=klubok_synced" in location(post(app, "/klubok/sync", back="/klubok/queue"))
-    assert row(conn, item_id)["state"] == queue.QUEUED
-    assert "Ще 1 схвалених" not in html(get(app, "/klubok/queue"))
+def test_no_sync_button_queue_is_always_fresh(conn, root, app):
+    """KLB-010 (F3): ні кнопки «Перерахувати чергу», ні «+N» — черга пишеться у фоні."""
+    add(conn, root, 7301)
+    page = html(get(app, "/klubok/queue"))
+    assert "Перерахувати чергу" not in page and "схвалених пар не перераховано" not in page
+    assert "<small>+" not in html(get(app, "/klubok/panel"))
+    assert post(app, "/klubok/sync", back="/klubok/queue").status == 404
 
 
 def test_safe_klubok_list_and_next():
@@ -367,7 +374,7 @@ def test_start_disabled_with_reason(conn, root, app, spawner, monkeypatch, why):
             conn.execute("UPDATE klubok_ads SET state = 'skipped'")
         with conn:
             conn.execute("UPDATE items SET status = 'review'")
-        text = "У черзі Клубку нічого"
+        text = "Схвалених для Клубку немає"
     state = klubok_control.state(conn, app.lock_file, NOW)
     assert not state.can_start and text in state.why_not
     assert text in html(get(app, "/klubok/review"))

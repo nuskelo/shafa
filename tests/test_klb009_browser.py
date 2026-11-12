@@ -37,7 +37,7 @@ def test_browser_klubok_tabs_and_card(conn, root, live, chromium, tmp_path, widt
         base = f"http://127.0.0.1:{live.port}"
         paths = [("review", "/klubok/review"), ("queue", "/klubok/queue"),
                  ("decide", "/klubok/decide"), ("published", "/klubok/published"),
-                 ("skipped", "/klubok/skipped"), ("item", f"/klubok/item/{review_id}"),
+                 ("archive", "/klubok/archive"), ("item", f"/klubok/item/{review_id}"),
                  ("dup", f"/klubok/item/{dup}"), ("shafa", "/review")]  # fmt: skip
         for name, path in paths:
             shot = shoot(page, base, path, name, width, tmp_path)
@@ -51,13 +51,13 @@ def test_browser_klubok_tabs_and_card(conn, root, live, chromium, tmp_path, widt
         page.wait_for_url(f"{base}/klubok/review")
         assert page.locator("nav.sites .site.current").inner_text() == "Клубок"
         assert page.locator(".tabs .tab.current").inner_text().startswith("На перевірку")
-        # «Схвалити для Клубку» → пара в «У черзі»
+        # «Схвалити і далі» → пара у «Схвалених» Клубку
         page.goto(f"{base}/klubok/item/{review_id}")
         page.click("button[value=approve_klubok]")
         page.wait_for_load_state("networkidle")
         state = conn.execute("SELECT state FROM klubok_ads WHERE item_id = ?", (review_id,))
         assert state.fetchone()[0] == queue.QUEUED
         page.goto(f"{base}/klubok/queue")
-        assert page.locator(f"a.name[href^='/klubok/item/{review_id}?']").count() == 1
+        assert page.locator(f"a.tilecard[href^='/klubok/item/{review_id}?']").count() == 1
     finally:
         page.close()

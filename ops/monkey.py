@@ -34,7 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 WIDTHS = (1400, 390)
 TABS = ("/review", "/approved", "/problem", "/published", "/sessions", "/archived", "/settings",
         "/refill", "/klubok/review", "/klubok/queue", "/klubok/decide", "/klubok/published",
-        "/klubok/skipped")  # fmt: skip
+        "/klubok/archive", "/klubok/sessions", "/klubok/queue?w=1")  # fmt: skip
 VARIANTS = ("/review?f=warn", "/review?f=ok", "/problem?f=warn", "/approved?f=ok")
 JUNK = (
     "", " ", "0", "-1", "999999999999", "а" * 400, "<script>window.__xss=3</script>",
