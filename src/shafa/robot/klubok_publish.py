@@ -34,7 +34,7 @@ from pathlib import Path
 
 from shafa import config, events
 from shafa.db import now
-from shafa.klubok import queue, snapshot
+from shafa.klubok import queue, refresh, snapshot
 from shafa.robot import klubok_form as form
 from shafa.robot import publish
 from shafa.robot.klubok_guard import Forbidden
@@ -424,6 +424,10 @@ class Run:
             events.emit("klubok.stop", f"⛔ {text}", loud=True, data={"code": result.code})
         else:
             events.emit("klubok.end", text, data={"session": result.session_id})
+        try:  # KLB-010: черга одразу актуальна (знімок, виставлене) — без «Перерахувати чергу»
+            refresh.refresh(conn, self.root, self.today())
+        except Exception as error:  # noqa: BLE001 — кінець сесії вже записано
+            self.log(f"Черга Клубку не перерахована: {type(error).__name__}: {error}")
 
     def _final_snapshot(self) -> None:
         """Знімок у кінці: посилання на виставлене й «чи видно його в її списку». Не вдався — лише лог."""

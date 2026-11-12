@@ -557,6 +557,7 @@ def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         fake_shafa=args.fake_shafa,
     )  # fmt: skip
     server = web.make_server(app, args.port)
+    app.klubok_sync.start()  # KLB-010: хвилі й черга Клубку — у фоні
     url = f"http://{web.HOST}:{app.port}/"
     print(f"Екран перевірки: {url}\nЗупинити — Ctrl+C")
     if not args.fake_shafa and app.start_bot() == "bot_started":  # бот — разом з екраном
@@ -702,7 +703,7 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
                 )
             try:
                 if args.klubok_snapshot:
-                    return _klubok_snapshot(conn, session, log)
+                    return _klubok_snapshot(conn, root, session, log)
                 opts = klubok_publish.Options(
                     limit=args.limit, post_id=args.post[0] if args.post else None,
                     human=args.human_click,
@@ -724,10 +725,10 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
             temp.cleanup()
 
 
-def _klubok_snapshot(conn, session, log) -> int:
+def _klubok_snapshot(conn, root, session, log) -> int:
     import random
 
-    from shafa.klubok import snapshot
+    from shafa.klubok import refresh, snapshot
     from shafa.robot import klubok_form, klubok_publish
 
     opened = session.open_form()
@@ -745,6 +746,7 @@ def _klubok_snapshot(conn, session, log) -> int:
     except snapshot.SnapshotError as error:
         log(f"Знімок не записано: {error.text}")
         return 1
+    refresh.refresh(conn, root)  # KLB-010: дублі за свіжим знімком — у черзі одразу
     return 0
 
 
@@ -1223,7 +1225,7 @@ def run_klubok_import(parser: argparse.ArgumentParser, args: argparse.Namespace)
     from datetime import datetime
 
     from shafa import app
-    from shafa.klubok import importer, preview
+    from shafa.klubok import importer, preview, refresh
 
     export = args.export / "result.json" if args.export.is_dir() else args.export
     if not export.is_file():
@@ -1239,16 +1241,21 @@ def run_klubok_import(parser: argparse.ArgumentParser, args: argparse.Namespace)
         print(error)
         return 2
     try:
+        today = datetime.now().astimezone()
         report = importer.run(
-            conn, posts, export.parent, root, args.wave,
-            apply=not args.dry_run, today=datetime.now().astimezone(),
-        )  # fmt: skip
+            conn, posts, export.parent, root, args.wave, apply=not args.dry_run, today=today
+        )
+        lines = report.lines()
+        if not args.dry_run:  # KLB-010: черга одразу актуальна — без «Перерахувати чергу»
+            count = refresh.refresh(conn, root, today)
+            if count is not None:
+                lines.append(f"Черга Клубку перерахована: {count} пар")
     except importer.ImportFailed as error:
         print(error)
         return 2
     finally:
         conn.close()
-    print("\n".join(report.lines()))
+    print("\n".join(lines))
     return 0
 
 

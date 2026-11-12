@@ -57,6 +57,7 @@ from shafa.folders import (
     old_root,
 )
 from shafa.klubok import queue as klubok_queue
+from shafa.klubok import refresh as klubok_refresh
 from shafa.klubok import screen as klubok_screen
 from shafa.robot import browser, control, klubok_control, klubok_publish, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
@@ -512,6 +513,10 @@ class App:
         self.klubok_process = None
         self.klubok_started_at = 0.0
         self.klubok_spawned_at: datetime | None = None
+        # KLB-010: черга Клубку завжди актуальна — перерахунок у фоні (старт, налаштування)
+        self.klubok_sync = klubok_refresh.Background(
+            self.connect, lambda: self.root, lambda line: print(line, file=sys.stderr)
+        )
         # ШІ: одна робота за раз (Оновити, збір результатів, «спробуй ще раз») — без подвійних оплат.
         self.ai_client, self.run, self.clock, self.today = ai_client, run, clock, today
         self.ai_lock = threading.Lock()
@@ -770,6 +775,7 @@ class App:
         changed = new_root.is_dir() and new_root != self.root
         if new_root.is_dir():
             self.root = new_root  # екран — одразу
+        self.klubok_sync.start()  # KLB-010: межа, ліміт, «виставляти» — черга одразу за ними
         return redirect(f"/settings?msg={'settings_root' if changed else 'settings_saved'}")
 
     def quit_page(self, request: Request) -> Response:

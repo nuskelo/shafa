@@ -2,8 +2,11 @@
 
 import pytest
 
-from shafa.klubok import dup, queue
-from test_klb002_queue import TODAY, add, snapshot, states
+from shafa import events, review
+from shafa.db import Status
+from shafa.klubok import dup, queue, refresh, waves
+from test_klb002_queue import TODAY, ad_row, add, row, snapshot, states
+from test_klb008 import klubok_card
 
 
 @pytest.fixture(autouse=True)
@@ -60,3 +63,84 @@ def test_other_model_of_same_brand_goes_to_queue(conn, root):
     )  # fmt: skip
     snapshot(conn, listings=[("Кросівки New Balance 530 оригінал 44,5 розміру", 1200)])
     assert states(queue.plan(conn, root, TODAY))[item_id] == (queue.QUEUED, None)
+
+
+# --- F10: хвилі ---
+
+MITTENS = "Нові зимові рукавиці Snowlife Швейцарія. На 6-10 років. Дуже теплі. 650грн"
+SLIPPERS = (
+    "Нові натуральні тапочки балетки. Вказаний розмір 4/5. Ідуть на 36. Всередині хутро. 700грн"
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "kind", "wave"),
+    [
+        (MITTENS, "одяг", None),
+        (SLIPPERS, "домашнє", 4),
+        ("Хутряні тапочки UGG в новому стані. 37 розмір", "домашнє", 4),
+        ("Хутряна жилетка Zana Італія.", "одяг", None),
+        ("Кросівки Nike в ідеальному стані, гарно під джинси. 41 розмір", "спорт", 4),
+        ("Зимові черевики на хутрі Ecco. 38 розмір", "зима", 1),
+        ("Шкіряна сумка з шарфом у подарунок", "сумки", 1),
+    ],
+)
+def test_wave_kind(text, kind, wave):
+    assert (waves.kind(text), waves.wave_of(waves.kind(text))) == (kind, wave)
+
+
+def test_reclassify_moves_slippers_and_archives_mittens_once(conn, root, monkeypatch):
+    said = []
+    monkeypatch.setattr(events, "emit", lambda *a, **k: said.append((a, k)))
+    mittens = klubok_card(conn, root, 3800, text=MITTENS)
+    slippers = klubok_card(conn, root, 4045, text=SLIPPERS)
+
+    done = refresh.reclassify(conn)
+
+    assert done.dropped == [3800] and done.archived == [mittens]
+    assert done.moved == [(4045, "зима/1", "домашнє/4")]
+    card = conn.execute(
+        "SELECT status, problem_code FROM items WHERE id = ?", (mittens,)
+    ).fetchone()
+    assert tuple(card) == (Status.ARCHIVED, review.NOT_FOR_KLUBOK)
+    assert conn.execute("SELECT status FROM items WHERE id = ?", (slippers,)).fetchone()[0] == (
+        Status.REVIEW
+    )
+    assert queue.wave(conn, 3800) is None and queue.wave(conn, 4045) == 4
+    assert said[0][0][0] == "klubok.waves"
+    assert refresh.reclassify(conn) == refresh.Reclassified()  # повтор — нічого
+
+
+def test_reclassify_leaves_card_already_on_klubok(conn, root):
+    mittens = klubok_card(conn, root, 3800, text=MITTENS, status=Status.APPROVED)
+    ad_row(conn, mittens, queue.PUBLISHED, klubok_id=7)
+    assert refresh.reclassify(conn).archived == []
+
+
+# --- F3: черга завжди актуальна ---
+
+
+def test_refresh_writes_queue_without_button(conn, root):
+    item_id = add(conn, root, 7301)
+    assert queue.unsynced(conn) == 1
+    assert refresh.refresh(conn, root, TODAY) == 1
+    assert queue.unsynced(conn) == 0 and row(conn, item_id)["state"] == queue.QUEUED
+
+
+def test_refresh_does_nothing_to_queue_when_klubok_off(conn, root, monkeypatch):
+    monkeypatch.delenv(queue.FLAG)
+    add(conn, root, 7301)
+    assert refresh.refresh(conn, root, TODAY) is None and queue.unsynced(conn) == 1
+
+
+def test_background_refresh_merges_requests(conn, root, tmp_path):
+    from shafa import db
+
+    path = conn.execute("PRAGMA database_list").fetchone()[2]
+    add(conn, root, 7301)
+    bg = refresh.Background(lambda: db.connect(path), lambda: root, print)
+    bg.start()
+    bg.start()
+    bg.wait()
+    bg.wait()
+    assert queue.unsynced(conn) == 0

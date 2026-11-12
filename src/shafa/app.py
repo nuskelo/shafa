@@ -146,6 +146,7 @@ def start(
             on_quit=on_quit,
         )  # fmt: skip
         server = holder["server"] = web.make_server(app, port)
+        app.klubok_sync.start()  # KLB-010: хвилі й черга Клубку — у фоні, екран не чекає
         url = f"http://{web.HOST}:{app.port}/"
         url_file.write_text(url, encoding="utf-8")
         print(f"Екран перевірки: {url}")
