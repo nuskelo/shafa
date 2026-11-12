@@ -344,3 +344,25 @@ def test_spare_photo_note_only_for_shafa_etalon_and_no_verdict_when_published(co
     page = html(get(app, f"/klubok/item/{published}"))
     assert "Не піде на Клубок" not in page and "Як буде на Клубку" not in page  # N5
     assert "Ціна на Клубку, грн" in page  # F7: Картка Шафи на вкладці Клубку
+
+
+def test_shafa_crashed_at_daily_limit_does_not_say_press_start(conn, root, tmp_path, monkeypatch):
+    """N9 (спільна кривизна): «зупинився посеред роботи» при вичерпаному ліміті — «завтра»."""
+    from datetime import UTC, datetime
+
+    from shafa.robot import control
+
+    monkeypatch.setenv("SHAFA_DAILY_LIMIT", "1")
+    now = datetime(2026, 11, 12, 12, 0, tzinfo=UTC)
+    item_id = add(conn, root, 7301, status=Status.PUBLISHED)
+    with conn:
+        conn.execute(
+            "UPDATE items SET publish_started_at = ?, shafa_id = 1 WHERE id = ?",
+            (now.isoformat(), item_id),
+        )
+        conn.execute(
+            "INSERT INTO sessions (started_at, site) VALUES (?, 'shafa')", (now.isoformat(),)
+        )
+    state = control.state(conn, tmp_path / "robot.lock", day_limit=1, now=now)
+    assert state.code == "crashed"
+    assert "завтра після 00:00" in state.text and "щоб продовжити" not in state.text
