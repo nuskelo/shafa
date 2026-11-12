@@ -46,7 +46,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from shafa import ai, batch, config, db, fill, photos, review, rules, web
-from shafa.export import Post, read_export
+from shafa.export import ExportError, Post, read_channel_export, read_export
 from shafa.folders import list_folders
 from shafa.scan import ScanResult, scan
 
@@ -1166,7 +1166,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.export.is_file():
         parser.error(f"Файл Експорту не знайдено: {args.export}")
 
-    posts = read_export(args.export)
+    try:
+        posts = read_channel_export(args.export)
+    except ExportError as error:  # KLB-010 (N1): Експорт іншого чату — нічого не пишемо
+        print(error)
+        return 2
     folders = list_folders(root, config.setting("TELEGRAM_CHANNEL_ID"))
     conn = db.connect(args.db)
     try:
@@ -1234,7 +1238,11 @@ def run_klubok_import(parser: argparse.ArgumentParser, args: argparse.Namespace)
     path = args.db or app.db_path()
     if not path.is_file():
         parser.error(f"Базу не знайдено: {path}")
-    posts = read_export(export)
+    try:
+        posts = read_channel_export(export)
+    except ExportError as error:  # KLB-010 (N1)
+        print(error)
+        return 2
     try:
         conn = preview.open_copy(path) if args.dry_run else db.connect(path)
     except (preview.CopyError, RuntimeError) as error:
@@ -1271,7 +1279,11 @@ def run_import_old(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
         numbers = borh.read_list(args.list)
     except (borh.ListError, UnicodeDecodeError) as error:
         parser.error(f"Файл-список: {error}")
-    posts = read_export(export)
+    try:
+        posts = read_channel_export(export)
+    except ExportError as error:  # KLB-010 (N1)
+        print(error)
+        return 2
     path = args.db or app.db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = db.connect(path)

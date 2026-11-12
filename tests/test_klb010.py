@@ -144,3 +144,69 @@ def test_background_refresh_merges_requests(conn, root, tmp_path):
     bg.wait()
     bg.wait()
     assert queue.unsynced(conn) == 0
+
+
+# --- N1: Експорт іншого чату ---
+
+
+def export_bytes(chat_id, name="Канал"):
+    import json
+
+    return json.dumps(
+        {"name": name, "type": "private_channel", "id": chat_id, "messages": []}
+    ).encode("utf-8")
+
+
+@pytest.mark.parametrize("setting", ["2394827824", "-1002394827824"])
+def test_export_of_channel_is_accepted(monkeypatch, tmp_path, setting):
+    from shafa import export
+
+    monkeypatch.setenv(export.CHANNEL_SETTING, setting)
+    export.check_chat(export_bytes(2394827824), tmp_path)
+
+
+def test_export_of_other_chat_is_refused_with_explanation(monkeypatch, tmp_path):
+    from shafa import export
+
+    monkeypatch.setenv(export.CHANNEL_SETTING, "2394827824")
+    with pytest.raises(export.WrongChat, match="іншого чату.*Вікторія Шуз - фото.*3636774420"):
+        export.check_chat(export_bytes(3636774420, "Вікторія Шуз - фото"), tmp_path)
+
+
+def test_without_setting_first_export_chat_is_remembered(monkeypatch, tmp_path):
+    from shafa import export
+
+    monkeypatch.delenv(export.CHANNEL_SETTING, raising=False)
+    export.check_chat(export_bytes(2394827824), tmp_path)
+    export.check_chat(export_bytes(2394827824), tmp_path)
+    with pytest.raises(export.WrongChat):
+        export.check_chat(export_bytes(3636774420), tmp_path)
+
+
+@pytest.mark.parametrize("command", ["klubok-import", "import-old", "scan"])
+def test_cli_refuses_other_chat_and_writes_nothing(
+    conn, root, tmp_path, monkeypatch, capsys, command
+):
+    from shafa import export
+    from shafa.__main__ import main
+
+    monkeypatch.setenv(export.CHANNEL_SETTING, "2394827824")
+    source = tmp_path / "exp" / "result.json"
+    source.parent.mkdir()
+    source.write_bytes(export_bytes(3636774420, "Вікторія Шуз - фото"))
+    numbers = tmp_path / "list.txt"
+    numbers.write_text("41\n", encoding="utf-8")
+    db_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    args = (
+        {
+            "klubok-import": ["klubok-import", "--export", str(source), "--wave", "1"],
+            "import-old": ["import-old", "--export", str(source), "--list", str(numbers)],
+            "scan": ["scan", "--export", str(source)],
+        }[command]
+        + ["--db", db_path]
+        + (["--root", str(root)] if command != "import-old" else [])
+    )
+    before = conn.execute("SELECT count(*) FROM posts").fetchone()[0]
+    assert main(args) == 2
+    assert "іншого чату" in capsys.readouterr().out
+    assert conn.execute("SELECT count(*) FROM posts").fetchone()[0] == before

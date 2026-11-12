@@ -45,7 +45,7 @@ from shafa import (
     site,
 )
 from shafa.db import Status
-from shafa.export import parse_export
+from shafa.export import WrongChat, check_chat, parse_export
 from shafa.folders import (
     PUBLISHED_DIR,
     base_name,
@@ -227,6 +227,8 @@ MESSAGES = {
     "sold_released": "Добре: «Продано» для {n} пар надішле бот, поки програма відкрита.",
     "sold_none": "Відкладених «Продано» немає.",
     "export_bad": "Це не експорт каналу Telegram (потрібен файл result.json)",
+    "export_wrong_chat": "Це Експорт іншого чату, не каналу — нічого не записано. Telegram Desktop → "
+    "канал → «Експорт історії чату» (формат JSON).",
     "export_done": "Експорт завантажено: постів {posts}, нових {added}. "
     "Папок {folders}, у «Проблемах» {problems}.",
 }
@@ -826,7 +828,10 @@ class App:
         """«Завантажити експорт каналу» (TD-021): `result.json` → пости в базу і зіставлення папок."""
         data = request.files.get("export") or b""
         try:
+            check_chat(data)  # KLB-010 (N1): лише Експорт Каналу
             posts = parse_export(data)
+        except WrongChat:
+            return redirect("/settings?msg=export_wrong_chat")
         except ValueError:
             return redirect("/settings?msg=export_bad")
         conn = self.connect()
