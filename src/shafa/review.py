@@ -331,14 +331,19 @@ def keywords_for_section(keywords: list[str], section: str | None) -> list[str]:
     return result
 
 
-def _code_values(text: str, condition: str | None) -> dict[str, Any]:
+KLUBOK_PRICE_LABEL = "Ціна на Клубку, грн"  # KLB-010 (F7): Картка «лише Клубок» — ціна поста
+
+
+def _code_values(text: str, condition: str | None, klubok: bool = False) -> dict[str, Any]:
     price = rules.price_from_text(text)
     condition = condition or rules.condition(text)
+    if price and not klubok:  # на Шафі +15 %; на Клубок іде ціна з поста
+        price = rules.shafa_price(price)
     return {
         "membrane": rules.membrane(text),
         "insole": rules.insole_lengths(text),
         "description": rules.clean_description(text, condition),
-        "price": rules.shafa_price(price) if price else None,
+        "price": price or None,
         "condition": condition,
     }
 
@@ -414,21 +419,22 @@ def _apply_edited_text(fields: dict[str, FieldView], edits: dict[str, Any], post
     )  # fmt: skip
 
 
-def _check_price(fields: dict[str, FieldView], edits: dict[str, Any], post_text: str) -> None:
-    """Ціна далеко від «ціна поста +15 %» — жовта (UX-003), доки вона не натисне «Так, вірно».
+def _check_price(
+    fields: dict[str, FieldView], edits: dict[str, Any], post_text: str, klubok: bool = False
+) -> None:
+    """Ціна далеко від «ціна поста +15 %» (у «лише Клубок» — від ціни поста) — жовта (UX-003),
+    доки вона не натисне «Так, вірно».
 
     Формулу ціни не чіпаємо: тут лише перевірка введеного (її правка чи дивний пост)."""
     field = fields["price"]
     posted = rules.price_from_text(post_text)
     if not isinstance(field.value, int) or not posted or edits.get(PRICE_OK) == field.value:
         return
-    expected = rules.shafa_price(posted)
+    expected = posted if klubok else rules.shafa_price(posted)
     if abs(field.value - expected) <= expected * PRICE_SPREAD:
         return
-    reason = (
-        f"Ціна {field.value} грн дуже відрізняється від поста "
-        f"({posted} грн → на Шафі {expected}). Перевірте."
-    )
+    where = f"{posted} грн" if klubok else f"{posted} грн → на Шафі {expected}"
+    reason = f"Ціна {field.value} грн дуже відрізняється від поста ({where}). Перевірте."
     fields["price"] = replace(field, yellow=True, reason=reason)
 
 
@@ -456,7 +462,10 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         r["field"]: json.loads(r["value"])
         for r in conn.execute("SELECT field, value FROM edits WHERE item_id = ?", (item_id,))
     }
-    code = _code_values(row["post_text"], edits.get("condition")) if row["post_text"] else {}
+    klubok = bool(row["only_klubok"])
+    code = (
+        _code_values(row["post_text"], edits.get("condition"), klubok) if row["post_text"] else {}
+    )
 
     fields = {}
     for spec in SPECS:
@@ -491,7 +500,10 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
 
     _check_against_shafa(fields, row["post_text"] or "")
     _apply_edited_text(fields, edits, row["post_text"] or "")
-    _check_price(fields, edits, row["post_text"] or "")
+    if klubok:
+        price = fields["price"]
+        fields["price"] = replace(price, spec=replace(price.spec, label=KLUBOK_PRICE_LABEL))
+    _check_price(fields, edits, row["post_text"] or "", klubok)
 
     photos = [
         Photo(r["position"], r["file_name"])
