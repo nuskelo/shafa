@@ -355,6 +355,7 @@ a.tilecard:hover { border-color: var(--accent); color: var(--text); }
 
 /* ───────── Картка ───────── */
 .top-card .top-in { min-height: 60px; gap: 4px 12px; }
+.card-head h1 { overflow-wrap: anywhere; } /* назва без пробілів (400 «а») не розпирає сторінку */
 .back-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px 0 8px; border-radius: var(--radius); background: var(--sub); color: var(--text); font-weight: 650; text-decoration: none; }
 .back-link:hover { background: var(--sub-hover); color: var(--text); }
 .place { color: var(--muted); font-weight: 600; padding: 0 4px; }
@@ -648,7 +649,7 @@ p.robot-error { margin: 0 0 1rem; padding: 0.6rem 0.9rem; border: 1px solid var(
   .top-card .theme-toggle { order: 2; margin-left: auto; }
   .top-card .step { order: 3; }
   .top-card .step-link { min-height: 40px; padding: 0 10px; }
-  .top-card .mini-wrap { order: 4; flex: 1 1 0; min-width: 0; }
+  .top-card .mini-wrap { order: 4; flex: 1 1 0; min-width: 0; max-width: 100%; overflow: hidden; }
   .top-card .status.mini { flex-wrap: nowrap; overflow: hidden; gap: 4px 10px; padding: 6px 10px; }
   .top-card .mini-item { white-space: nowrap; }
   .top-card .mini-item.robot { min-width: 0; overflow: hidden; text-overflow: ellipsis; }

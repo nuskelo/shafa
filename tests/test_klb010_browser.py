@@ -133,3 +133,16 @@ def test_broken_photo_stub_does_not_cover_the_card(conn, root, live, chromium): 
         chip.click(timeout=3000)
     finally:
         page.close()
+
+
+def test_long_unbroken_title_does_not_scroll_card_sideways(conn, root, live, chromium):  # noqa: F811
+    """Знахідка мавпи: назва з 400 літер без пробілів розпирала Картку на 390 (обидва сайти)."""
+    shafa = add(conn, root, 7601, status=Status.REVIEW, title="а" * 400)
+    only = klubok_card(conn, root, 302, title="б" * 400)
+    page = chromium.new_page(viewport={"width": 390, "height": 844}, is_mobile=True)
+    try:
+        for path in (f"/item/{shafa}", f"/klubok/item/{only}"):
+            page.goto(f"http://127.0.0.1:{live.port}{path}")
+            assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
+    finally:
+        page.close()
