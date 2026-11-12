@@ -57,6 +57,7 @@ from shafa.folders import (
     list_folders,
     old_root,
 )
+from shafa.klubok import dupcheck as klubok_dupcheck
 from shafa.klubok import fields as klubok_fields
 from shafa.klubok import queue as klubok_queue
 from shafa.klubok import refresh as klubok_refresh
@@ -107,6 +108,7 @@ STICKY_TITLES = {  # проблеми публікації — простими 
 MESSAGES = {
     "klubok_dup_other": "Добре — пара піде на Клубок як інша.",
     "klubok_dup_yes": "Добре — на Клубок ця пара не піде: це дубль.",
+    "klubok_undo_dup": "Добре — пара піде на Клубок як інша.",  # KLB-011: з Архіву
     # KLB-009: вкладка «Клубок»
     "klubok_approved": "Схвалено — пара у «Схвалених» Клубку",
     "klubok_approved_next": "Схвалено. Ось наступна",
@@ -521,8 +523,9 @@ class App:
         self.klubok_spawned_at: datetime | None = None
         # KLB-010: черга Клубку завжди актуальна — перерахунок у фоні (старт, налаштування)
         self.klubok_sync = klubok_refresh.Background(
-            self.connect, lambda: self.root, lambda line: print(line, file=sys.stderr)
-        )
+            self.connect, lambda: self.root, lambda line: print(line, file=sys.stderr),
+            dups=klubok_dupcheck.background,  # KLB-011: дублі — фото, ШІ, лише тоді людина
+        )  # fmt: skip
         # ШІ: одна робота за раз (Оновити, збір результатів, «спробуй ще раз») — без подвійних оплат.
         self.ai_client, self.run, self.clock, self.today = ai_client, run, clock, today
         self.ai_lock = threading.Lock()
@@ -1431,6 +1434,7 @@ class App:
                 current=tab,
                 rows=found,
                 groups=klubok_screen.groups(found) if tab == "archive" else [],
+                auto=klubok_screen.auto_summary(conn) if tab == "decide" else None,
                 marks={r.card.id: klubok_mark(r, tab, self.root) for r in found},
                 wave=wave,
                 wave_pills=pills,
@@ -2430,6 +2434,7 @@ def safe_back(path: str) -> str:
 KLUBOK_ACTIONS = {
     "klubok_dup_other": klubok_queue.dup_other,
     "klubok_dup_yes": klubok_queue.dup_yes,
+    "klubok_undo_dup": klubok_queue.undo_auto_dup,  # KLB-011: дубль програми → у чергу
 }
 
 

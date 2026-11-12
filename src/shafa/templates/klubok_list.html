@@ -19,8 +19,19 @@
       {% if card.fields["section"].value %}<span class="details">{{ card.fields["section"].value | replace(" / ", " · ") }}</span>{% endif %}
       <span class="meta">{{ meta(row) }}</span>
       {% if current == "published" and link(row.url) %}<span class="tag">Є посилання на Клубок</span>{% endif %}
+      {% if row.auto == "other" %}<span class="tag" title="{{ row.note }}">Інша пара (ШІ)</span>{% endif %}
     </span>
   </a>
+  {% if row.auto == "dup" %}
+  <div class="kauto">
+    {% if row.note %}<p class="meta">{{ row.note }}</p>{% endif %}
+    {% if row.listing and link(row.listing.url) %}<a href="{{ link(row.listing.url) }}" target="_blank" rel="noopener noreferrer">Її оголошення на Клубку</a>{% endif %}
+    <form method="post" action="/klubok/item/{{ card.id }}">
+      <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}"><input type="hidden" name="stay" value="list">
+      <button name="action" value="klubok_undo_dup" class="approve">Ні, це інша пара — виставити</button>
+    </form>
+  </div>
+  {% endif %}
 </li>
 {% endmacro %}
 {% block main %}
@@ -54,6 +65,9 @@
   </div>
 </div>
 
+{% if current == "decide" and auto and (auto.dups or auto.others) %}
+<p class="kauto-sum">Програма вирішила: {{ plural(auto.dups, "дубль", "дублі", "дублів") }}, {{ plural(auto.others, "інша пара", "інші пари", "інших пар") }} · вам лишилось {{ auto.left }}</p>
+{% endif %}
 {% if not rows %}
 <p class="empty">{% if query %}Нічого не знайдено.{% elif wave %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
 {% elif current == "archive" %}
@@ -77,6 +91,7 @@
       </div>
       <a class="name" href="{{ open_url }}">{{ card | card_name }}</a>
       {% if row.price %}<p class="meta">Наша ціна: <b>{{ row.price }} грн</b></p>{% endif %}
+      {% if row.note %}<p class="meta">{{ row.note }}</p>{% endif %}
       {% if row.code == "klubok_duplicate" and row.listing %}
       <p class="todo">Чи це та сама пара? Якщо так — не виставляємо (дубль на Клубку блокує акаунт).</p>
       {% endif %}
