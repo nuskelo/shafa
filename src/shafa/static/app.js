@@ -272,7 +272,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!key || value === undefined) return;
         document.querySelectorAll(`.tabs a[href="/${key}"] .count, .tabs .menu a[href="/${key}"] .count`).forEach((count) => {
           if (count.textContent !== value) count.textContent = value;
-          if (key === "problem") count.classList.toggle("alert", value !== "0");
+          if (key === "problem" || key === "klubok/decide") count.classList.toggle("alert", value !== "0");
         });
       });
     }

@@ -118,6 +118,11 @@ main.error { max-width: 40rem; padding-top: 4rem; }
 .brand::before { content: "Ш"; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 10px; background: var(--accent); color: var(--on-accent); font-size: 1rem; font-weight: 800; }
 .brand:hover { color: var(--text); }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; flex: 1 1 auto; align-items: center; }
+/* KLB-009: перемикач «Шафа | Клубок» — той самий стиль, що й вкладки */
+.sites { display: inline-flex; gap: 2px; padding: 3px; border-radius: calc(var(--radius) + 3px); background: var(--sub); }
+.site { display: inline-flex; align-items: center; min-height: 38px; padding: 0 14px; border-radius: var(--radius); color: var(--text-2); font-weight: 600; text-decoration: none; }
+.site:hover { color: var(--text); }
+.site.current { background: var(--card); color: var(--accent-text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
 .tab {
   display: inline-flex;
   align-items: center;
@@ -846,3 +851,34 @@ html[data-theme="dark"] .sp-actions .sp-stop { color: #1f0c09; }
 .sp .fake { margin: 0; }
 .sp.stale { padding: 8px; border-radius: var(--radius-lg); background: var(--yellow-soft); outline: 1px solid var(--yellow-line); }
 .sp > .stale-note { margin: 0; color: var(--yellow-text); }
+
+/* ───────── KLB-009: вкладка «Клубок» ───────── */
+.kad { margin: 0 0 1rem; padding: 0.8rem 1rem; border-radius: var(--radius); border: 1px solid var(--line); background: var(--card); }
+.kad h2 { margin: 0 0 0.5rem; font-size: 1.05rem; }
+.kad dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; }
+.kad dt { color: var(--muted); }
+.kad dd { margin: 0; overflow-wrap: anywhere; }
+.kad dd.warn, .kad .skip { color: var(--yellow-text); font-weight: 600; }
+.kad .skip { margin: 0 0 0.6rem; padding: 0.5rem 0.7rem; border-radius: var(--radius); background: var(--yellow); border: 1px solid var(--yellow-line); }
+.kad details { margin-top: 0.6rem; }
+.kad .post { white-space: pre-wrap; }
+.kad form.decide { margin-top: 0.6rem; }
+.krows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.krow { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }
+.krow .shot img, .krow .shot .noshot { width: 64px; height: 48px; object-fit: cover; border-radius: 6px; display: block; }
+.krow .name { font-weight: 600; color: var(--text); text-decoration: none; }
+.krow .meta { color: var(--muted); font-size: 0.9rem; }
+.krow .why { color: var(--yellow-text); font-size: 0.92rem; }
+.krow .num { font-weight: 700; color: var(--muted); min-width: 2.5ch; text-align: right; }
+.kgroup h2 { font-size: 1.05rem; margin: 1rem 0 0.5rem; }
+.ksync { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 1rem; }
+@media (max-width: 640px) {
+  .sites { order: 1; }
+  .site { min-height: 34px; padding: 0 10px; }
+  .krow { grid-template-columns: 48px minmax(0, 1fr); }
+  .krow .shot img, .krow .shot .noshot { width: 48px; height: 36px; }
+  .krow .num { display: none; }
+  .krow .act { grid-column: 1 / -1; }
+  .kad dl { grid-template-columns: minmax(0, 1fr); }
+  .kad dd { margin-bottom: 4px; }
+}

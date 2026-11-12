@@ -1,0 +1,52 @@
+<section class="sp" aria-label="Робот Клубку" aria-live="polite">
+  {% if fake %}<p class="fake">ПІДСТАВНИЙ КЛУБОК — тест, нічого не публікується на справжній сайт</p>{% endif %}
+  {% set working = kpanel.code in ("running", "pausing", "paused", "stopping") %}
+  {% set why_line = kpanel.why_not if "start" in kpanel.buttons else "" %}
+  {% set note = kpanel.progress or why_line %}
+  <div class="sp-robot robot robot-{{ kpanel.code }}{% if ktone == 'ok' %} is-running{% elif ktone == 'warn' %} is-warn{% elif ktone == 'bad' %} is-error{% endif %}">
+    <div class="sp-main">
+      <div class="sp-head">
+        <span class="dot dot-{{ ktone }}" aria-hidden="true"></span>
+        <h2 class="sp-title">{{ kpanel.text }}</h2>
+        {% if note %}<span class="sp-note">{{ note }}</span>{% endif %}
+        <details class="more-info sp-more" data-key="klubok">
+          <summary>Детальніше</summary>
+          <p class="why">«Старт» — робот виставить на Клубок пари з «У черзі», не більше ліміту доби (Налаштування, блок «Клубок»). Між парами він робить паузу 1–3 хв, як людина.</p>
+          <p class="why">Пауза — робот допише поточну пару й зачекає; «Продовжити» поверне до роботи. Стоп — допише поточну пару й завершить сесію.</p>
+          <p class="why">«Перечитати мої оголошення» — робот прочитає ваш список на Клубку (щоб не було дублів). На початку кожної сесії він робить це сам.</p>
+          <p class="why">Робот один на обидва сайти: поки працює робот Шафи, «Старт» Клубку недоступний, і навпаки.</p>
+          {% for line in kpanel.details %}<p class="why">{{ line }}</p>{% endfor %}
+        </details>
+      </div>
+      <div class="sp-stats" role="list" aria-label="Сьогодні на Клубку">
+        <div class="stat stat-key" role="listitem"><span class="stat-label">Сьогодні на Клубку</span><span class="stat-num">{{ kpanel.started }} <small>з {{ kpanel.day_limit }}</small></span></div>
+        <a class="stat stat-link" role="listitem" href="/klubok/queue"><span class="stat-label">У черзі</span><span class="stat-num">{{ kpanel.queued }}{% if kpanel.unsynced %} <small>+{{ kpanel.unsynced }}</small>{% endif %}</span></a>
+      </div>
+      {% set lines = [] %}
+      {% if kpanel.doing %}{% set _ = lines.append(("robot-doing", kpanel.doing)) %}{% endif %}
+      {% if kpanel.previous %}{% set _ = lines.append(("robot-previous", kpanel.previous)) %}{% endif %}
+      {% if why_line and why_line != note %}{% set _ = lines.append(("why", why_line)) %}{% endif %}
+      {% if kpanel.code == "running" %}{% set _ = lines.append(("", "Не закривайте вікно Chrome робота і кришку ноутбука, поки робот працює.")) %}{% endif %}
+      {% if not working %}{% set _ = lines.append(("robot-last", kpanel.listings)) %}{% endif %}
+      <div class="sp-foot">
+        {% for kind, text in lines %}<span class="sp-line {{ kind }}">{{ text }}</span>
+        {% endfor %}
+        {% if kpanel.last and not working %}<span class="sp-line robot-last">{{ kpanel.last }}</span>{% endif %}
+      </div>
+    </div>
+    <form method="post" action="/klubok/robot" class="sp-actions">
+      <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="back" value="{{ back }}">
+      {% if "start" in kpanel.buttons %}
+      <button name="action" value="start" class="approve sp-start"{% if not kpanel.can_start %} disabled title="{{ kpanel.why_not }}"{% endif %}>Старт</button>
+      {% endif %}
+      {% if "resume" in kpanel.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
+      {% if "pause" in kpanel.buttons %}<button name="action" value="pause">Пауза</button>{% endif %}
+      {% if "snapshot" in kpanel.buttons %}<button name="action" value="snapshot">Перечитати мої оголошення</button>{% endif %}
+      {% if "login" in kpanel.buttons %}<button name="action" value="login">Увійти в Клубок</button>{% endif %}
+      {% if "login_done" in kpanel.buttons %}<button name="action" value="login_done">Вхід виконано — закрити вікно</button>{% endif %}
+      {% if "stop" in kpanel.buttons %}<button name="action" value="stop" class="reject sp-stop">Стоп</button>{% endif %}
+    </form>
+  </div>
+</section>
+{% if counts %}<span hidden data-counts="{% for key, value in counts.items() %}{{ key }}={{ value }};{% endfor %}"></span>{% endif %}

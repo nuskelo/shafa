@@ -1,0 +1,51 @@
+{# KLB-009: Картка у вкладці «Клубок» — що буде на Клубку, стан і рішення. Форми — на /klubok/item/N. #}
+{% if kerror %}<p class="robot-error">{{ kerror }}</p>{% endif %}
+{% if kblock %}<p class="robot-error">{{ kblock }}</p>{% endif %}
+<section class="kad" aria-label="Як буде на Клубку">
+  <h2>Як буде на Клубку</h2>
+  {% if view.skip %}<p class="skip">Не піде на Клубок: {{ view.skip }}</p>{% endif %}
+  <dl>
+    {% for line in view.lines %}
+    <dt>{{ line.label }}</dt>
+    <dd{% if line.warn %} class="warn"{% endif %}>{{ line.value }}{% if line.warn %} — {{ line.warn }}{% endif %}</dd>
+    {% endfor %}
+    {% if view.ok %}
+    <dt>Фото</dt>
+    <dd>{{ view.photos | length }} у такому порядку: {{ view.photos | join(", ") }}{% if view.spare %} (запасне фото з Експорту — фото Картки стерто){% endif %}</dd>
+    {% endif %}
+    {% if kwave %}<dt>Хвиля</dt><dd>{{ wave_text(kwave) }}</dd>{% endif %}
+  </dl>
+  {% if view.text %}<details><summary>Опис оголошення</summary><div class="post">{{ view.text }}</div></details>{% endif %}
+
+  {% if kline %}
+  <p>Клубок: {{ kline.text }}{% if klubok_url %} · <a href="{{ klubok_url }}" target="_blank" rel="noopener noreferrer">Відкрити на Клубку</a>{% endif %}</p>
+  {% endif %}
+  {% if not card.only_klubok %}<p><a href="/item/{{ card.id }}">Відкрити в Шафі</a> — поля правляться там.</p>{% endif %}
+
+  {% if kad and kad["state"] == "problem" %}
+  {% if kad["problem_code"] == "klubok_duplicate" %}
+  {% if kline and kline.dup %}<p>Схоже оголошення: <b>{{ kline.dup.name or "без назви" }}</b>{% if kline.dup.url %} · <a href="{{ kline.dup.url }}" target="_blank" rel="noopener noreferrer">Відкрити схоже на Клубку</a>{% endif %}</p>{% endif %}
+  <form method="post" action="{{ item_action }}" class="decide">
+    <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">
+    <button name="action" value="klubok_dup_other" class="approve">Інша пара — виставити</button>
+    <button name="action" value="klubok_dup_yes" class="reject">Так, дубль — не виставляти</button>
+  </form>
+  {% elif kad["problem_code"] == "klubok_uncertain" %}
+  <p>Робот натиснув «Опубликовать», але певної відповіді Клубку не отримав. Відкрийте свої оголошення на Клубку й пошукайте цю пару.</p>
+  <form method="post" action="{{ item_action }}" class="decide">
+    <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">
+    <label for="klubok_id">Знайшли — вставте номер оголошення на Клубку (або посилання на нього):</label>
+    <input id="klubok_id" name="klubok_id" required inputmode="numeric" placeholder="37977926">
+    <button name="action" value="klubok_confirm" class="approve">Так, опубліковано</button>
+  </form>
+  <p class="meta">Перед цим натисніть «Перечитати мої оголошення» на панелі — програма звіряє номер з вашим списком.</p>
+  <form method="post" action="{{ item_action }}" class="decide">
+    <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">
+    <button name="action" value="klubok_retry">Ні, не опубліковано — повернути в чергу</button>
+  </form>
+  {% else %}
+  <p>Що зробити: скажіть Власнику — він подивиться журнал робота.</p>
+  <details><summary>Подробиці для Власника</summary><p>{{ kad["problem_code"] }}: {{ kad["problem_text"] or "" }}</p></details>
+  {% endif %}
+  {% endif %}
+</section>

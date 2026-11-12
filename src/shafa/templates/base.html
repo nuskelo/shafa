@@ -14,6 +14,23 @@
 <header class="top">
   <div class="top-in">
     <a class="brand" href="/review">Шафа-помічник</a>
+    <nav class="sites" aria-label="Сайт">
+      <a href="/review" class="site{% if site != "klubok" %} current{% endif %}"{% if site != "klubok" %} aria-current="true"{% endif %}>Шафа</a>
+      <a href="/klubok/review" class="site{% if site == "klubok" %} current{% endif %}"{% if site == "klubok" %} aria-current="true"{% endif %}>Клубок</a>
+    </nav>
+    {% if site == "klubok" %}
+    <nav class="tabs" aria-label="Розділи Клубку">
+      {% for key, title in ktabs.items() %}
+      <a{% if key == current %} aria-current="page"{% endif %} href="/klubok/{{ key }}" class="tab{% if key == current %} current{% endif %}">{{ title }} <span class="count{% if key == "decide" and kcounts[key] %} alert{% endif %}">{{ kcounts[key] }}</span></a>
+      {% endfor %}
+      <details class="more{% if current == "settings" %} current{% endif %}">
+        <summary class="tab">Ще</summary>
+        <div class="menu">
+          <a href="/settings">Налаштування</a>
+        </div>
+      </details>
+    </nav>
+    {% else %}
     <nav class="tabs" aria-label="Розділи">
       {% for status in ("review", "approved", "problem", "published") %}
       <a{% if status == current %} aria-current="page"{% endif %} href="/{{ status }}" class="tab{% if status == current %} current{% endif %}">{{ tabs[status] }} <span class="count{% if status == "problem" and counts[status] %} alert{% endif %}">{{ counts[status] }}</span></a>
@@ -28,6 +45,7 @@
         </div>
       </details>
     </nav>
+    {% endif %}
     {% include "theme_button.html" %}
     {% if can_quit %}
     <form method="get" action="/quit" class="quit">
@@ -39,9 +57,15 @@
 {% endblock %}
 <div class="wrap">
 {% block status %}
+  {% if site == "klubok" %}
+  <div id="robot" data-panel="/klubok/panel?back={{ back | urlencode }}">
+{% include "klubok_panel.html" %}
+  </div>
+  {% else %}
   <div id="robot" data-panel="/robot/panel?back={{ back | urlencode }}">
 {% include "panel.html" %}
   </div>
+  {% endif %}
 {% endblock %}
   {% if message %}
   <p class="message">{{ message }}</p>
