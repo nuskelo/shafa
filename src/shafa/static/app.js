@@ -30,7 +30,9 @@ document.addEventListener("error", (event) => {
   if (!(img instanceof HTMLImageElement) || img.dataset.noshot) return;
   img.dataset.noshot = "1";
   const stub = document.createElement("span");
-  stub.className = img.closest("a.big") ? "empty noshot-big" : "noshot";
+  // `.noshot` — лише всередині `.shot` (позиціонований батько); інакше — звичайна вбудована заглушка
+  stub.className = img.closest("a.big") ? "empty noshot-big"
+    : img.closest(".shot") ? "noshot" : "noshot-inline";
   stub.textContent = "немає фото";
   img.replaceWith(stub);
 }, true);

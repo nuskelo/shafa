@@ -108,3 +108,28 @@ def test_phone_has_no_horizontal_scroll_and_card_top_is_two_rows(conn, root, liv
             assert page.locator(".kad").get_attribute("open") is None  # F5: згорнуто
     finally:
         page.close()
+
+
+def test_broken_photo_stub_does_not_cover_the_card(conn, root, live, chromium):  # noqa: F811
+    """N6: зламане фото → «немає фото» (без зламаної картинки), а кнопки Картки клікаються."""
+    item_id = add(conn, root, 7501, status=Status.REVIEW)
+    (root / "7501" / "IMG_2.JPG").write_bytes(b"")  # порожній файл — мініатюра не відкриється
+    with conn:
+        conn.execute("INSERT INTO photos VALUES (?, 2, 'IMG_2.JPG')", (item_id,))
+    page = chromium.new_page(viewport={"width": 1400, "height": 900})
+    try:
+        page.goto(f"http://127.0.0.1:{live.port}/item/{item_id}")
+        page.wait_for_load_state("networkidle")
+        assert page.locator(".noshot-inline").count() == 1
+        assert page.evaluate("[...document.images].every(i => !i.src || i.naturalWidth > 0)")
+        chip = page.locator(".right button.chip").first  # як «мавпа»: «Новий» у полі «Стан»
+        chip.scroll_into_view_if_needed()
+        box = chip.bounding_box()
+        hit = page.evaluate(
+            "([x, y]) => document.elementFromPoint(x, y)?.closest('button')?.textContent",
+            [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2],
+        )
+        assert hit == chip.text_content()
+        chip.click(timeout=3000)
+    finally:
+        page.close()
