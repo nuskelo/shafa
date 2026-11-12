@@ -54,6 +54,7 @@ def test_migration_17_to_18_keeps_data(tmp_path, monkeypatch):
     raw = sqlite3.connect(path)
     before = _dump(raw)
     raw.close()
+    monkeypatch.setattr(db, "SCHEMA_VERSION", 18)  # лише крок 17 → 18 (19 — KLB-008)
 
     conn = db.connect(path)
 
@@ -86,9 +87,9 @@ def test_newer_base_refused(tmp_path):
     path = tmp_path / "v19.sqlite"
     db.connect(path).close()
     raw = sqlite3.connect(path)
-    raw.execute("PRAGMA user_version = 19")
+    raw.execute("PRAGMA user_version = 99")
     raw.close()
-    with pytest.raises(RuntimeError, match="Невідома версія бази 19"):
+    with pytest.raises(RuntimeError, match="Невідома версія бази 99"):
         db.connect(path)
 
 
@@ -108,7 +109,7 @@ def test_interrupted_step_leaves_17_and_next_start_migrates(tmp_path, monkeypatc
 
     monkeypatch.undo()
     conn = db.connect(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 18
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert KLUBOK_TABLES <= _tables(conn)
     conn.close()
 
@@ -125,7 +126,7 @@ def test_migrate_in_memory_copy_leaves_file(tmp_path, monkeypatch):
     source.close()
     db.migrate(memory)
 
-    assert memory.execute("PRAGMA user_version").fetchone()[0] == 18
+    assert memory.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
     assert KLUBOK_TABLES <= _tables(memory)
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     memory.close()
