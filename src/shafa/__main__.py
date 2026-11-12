@@ -25,6 +25,9 @@
 `python -m shafa klubok-import --export <тека Експорту> --wave 1|4 [--dry-run] [--db …] [--root …]` —
 KLB-008: старі пости хвилі в чергу Клубку (еталон Шафи чи нова Картка «лише Клубок»); `--dry-run` —
 копія бази в пам'яті, нічого не пише (≤ 60 рядків).
+`python -m shafa klubok-dups [--dry-run] [--no-ai] [--limit N] [--db …] [--root …]` — KLB-011: дублі
+Клубку з «Проблем» вирішує програма (фото → ШІ → людина); `--dry-run` — копія бази в пам'яті, база
+не змінюється (фото кешуються в `<дані>/klubok-photos`, ШІ питається); `--limit` — запитів ШІ.
 `python -m shafa robot --klubok-login` — KLB-003: вхід у Клубок руками (профіль `<дані>/klubok-profile`);
 `--klubok-snapshot --db …` — знімок її оголошень (лише читання сайту); `--klubok-publish --db … --root …
 --limit N [--post P] [--human-click]` — ПУБЛІКАЦІЯ на Клубку з черги (живий сайт, лише з дозволу
@@ -241,6 +244,15 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--wave", type=int, required=True, choices=(1, 4), help="хвиля: 1 чи 4")
     cmd.add_argument("--dry-run", action="store_true", help="лише звіт, нічого не пише")
     cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
+    _add_root(cmd)
+    cmd = commands.add_parser(
+        "klubok-dups", help="дублі Клубку: фото → ШІ → лише тоді людина (KLB-011)"
+    )
+    cmd.add_argument("--dry-run", action="store_true", help="лише звіт, база не змінюється")
+    cmd.add_argument("--no-ai", action="store_true", help="лише фото, ШІ не питати")
+    cmd.add_argument("--limit", type=int, default=None, help="найбільше запитів ШІ (типово 40)")
+    cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
+    cmd.add_argument("--photos", type=Path, help=argparse.SUPPRESS)  # тека кешу фото
     _add_root(cmd)
     cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
@@ -1139,6 +1151,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_klubok_queue(parser, args)
     if args.command == "klubok-import":
         return run_klubok_import(parser, args)
+    if args.command == "klubok-dups":
+        return run_klubok_dups(parser, args)
     if args.command == "robot":
         return run_robot(parser, args)
     if args.command == "bot":
@@ -1268,6 +1282,35 @@ def run_klubok_import(parser: argparse.ArgumentParser, args: argparse.Namespace)
         conn.close()
     print("\n".join(lines))
     return 0
+
+
+def run_klubok_dups(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from shafa import app
+    from shafa.klubok import dupcheck, photo_dup, preview
+
+    root = _root(parser, args)
+    path = args.db or app.db_path()
+    if not path.is_file():
+        parser.error(f"Базу не знайдено: {path}")
+    limit = dupcheck.AI_LIMIT if args.limit is None else args.limit
+    if limit < 0:
+        parser.error("--limit: не менше 0")
+    try:
+        conn = preview.open_copy(path) if args.dry_run else db.connect(path)
+    except (preview.CopyError, RuntimeError) as error:
+        print(error)
+        return 2
+    try:
+        photos = photo_dup.Photos(args.photos or photo_dup.cache_dir())
+        judge = None if args.no_ai else dupcheck.make_judge(conn)
+        report = dupcheck.check(conn, root, photos, judge, limit, write=not args.dry_run)
+    finally:
+        conn.close()
+    lines = report.lines()
+    if args.dry_run:
+        lines.insert(0, "Пробний прогін: база не змінюється.")
+    print("\n".join(lines))
+    return 1 if report.stopped else 0
 
 
 def run_import_old(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
