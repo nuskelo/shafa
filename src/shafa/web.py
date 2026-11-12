@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, NamedTuple
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -56,6 +57,7 @@ from shafa.folders import (
     list_folders,
     old_root,
 )
+from shafa.klubok import fields as klubok_fields
 from shafa.klubok import queue as klubok_queue
 from shafa.klubok import refresh as klubok_refresh
 from shafa.klubok import screen as klubok_screen
@@ -106,17 +108,18 @@ MESSAGES = {
     "klubok_dup_other": "Добре — пара піде на Клубок як інша.",
     "klubok_dup_yes": "Добре — на Клубок ця пара не піде: це дубль.",
     # KLB-009: вкладка «Клубок»
-    "klubok_approved": "Схвалено для Клубку — пара в черзі",
-    "klubok_approved_next": "Схвалено для Клубку. Ось наступна",
-    "klubok_approved_done": "Схвалено для Клубку. На перевірку більше нічого немає",
+    "klubok_approved": "Схвалено — пара у «Схвалених» Клубку",
+    "klubok_approved_next": "Схвалено. Ось наступна",
+    "klubok_approved_done": "Схвалено. На перевірку більше нічого немає",
     "klubok_rejected": "Добре — на Клубок ця пара не піде (Архів на 7 днів)",
     "klubok_rejected_next": "Добре — на Клубок ця пара не піде. Ось наступна",
     "klubok_rejected_done": "Добре — на Клубок ця пара не піде. На перевірку більше нічого немає",
-    "klubok_cannot_approve": "Схвалити для Клубку не можна — причина жовтим у блоці «Як буде на Клубку»",
+    "klubok_cannot_approve": "Схвалити не можна — причина вгорі Картки",
     "klubok_retry": "Добре — пара знову в черзі Клубку",
     "klubok_confirmed": "Добре — позначено як виставлене на Клубку",
     "klubok_robot_busy": "Робот зараз працює — зачекайте, поки він закінчить",
     "klubok_synced": "Чергу Клубку перераховано",
+    "klubok_ai_refill": "Картку відправлено ШІ пакетом — повернеться «На перевірку» до години",
     "klubok_setup": "Налаштування Клубку з помилкою — Налаштування, блок «Клубок»",
     "klubok_started": "Робот Клубку запускається — за хвилину відкриється окреме вікно Chrome. "
     "Не закривайте його, поки робот працює",
@@ -354,7 +357,7 @@ LINK_CODES = (
 SECURITY_HEADERS = {
     # Сторінки беруть лише свої файли: жодних зовнішніх скриптів, стилів, шрифтів, фото.
     "Content-Security-Policy": (
-        "default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'; "
+        "default-src 'none'; img-src 'self' https://img.klubok.com; style-src 'self'; script-src 'self'; "
         "connect-src 'self'; "
         "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     ),
@@ -366,6 +369,7 @@ SECURITY_HEADERS = {
 
 _ITEM = re.compile(r"/item/(\d+)")
 _KLUBOK_ITEM = re.compile(r"/klubok/item/(\d+)")
+_KLUBOK_SESSION = re.compile(r"/klubok/session/(\d+)")
 ONLY_KLUBOK_TEXT = "Ця Картка — лише для Клубку, у Шафі її немає."
 _SESSION = re.compile(r"/session/(\d+)")
 _PHOTO = re.compile(r"/(photo|thumb)/(\d+)/(\d+)")
@@ -1332,14 +1336,18 @@ class App:
         name = path.removeprefix("/klubok").strip("/")
         if name == "" and get:
             return redirect("/klubok/review")
-        if name in klubok_screen.TABS and get:
+        if name == "skipped" and get:  # KLB-010: «Не піде» — тепер «Ще ▸ Архів»
+            return redirect("/klubok/archive")
+        if name in KLUBOK_LISTS and get:
             return self.klubok_tab(name, request)
+        if name == "sessions" and get:
+            return self.sessions_page(request, site="klubok")
+        if (match := _KLUBOK_SESSION.fullmatch(path)) and get:
+            return self.session_page(int(match[1]), request, site="klubok")
         if name == "panel" and get:
             return self.klubok_panel(request)
         if name == "robot" and post:
             return self.klubok_robot_post(request)
-        if name == "sync" and post:
-            return self.klubok_sync_post(request)
         if match := _KLUBOK_ITEM.fullmatch(path):
             if get:
                 return self.klubok_card_page(int(match[1]), request)
@@ -1367,11 +1375,16 @@ class App:
 
     def _klubok_chrome(self, conn, request: Request) -> dict:
         kstate = self.klubok_state(conn)
+        shafa = self._panel_context(conn)
         return {
+            "ai": shafa["ai"],
+            "bot": shafa["bot"],
+            "tones": shafa["tones"],
             "site": "klubok",
             "tabs": TAB_TITLES,
             "counts": self._counts(conn),
             "kcounts": klubok_screen.counts(conn),
+            "ktitles": klubok_screen.TITLES,
             "kpanel": kstate,
             "ktone": KLUBOK_TONES.get(kstate.code, "warn"),
             "can_quit": self.on_quit is not None,
@@ -1384,8 +1397,11 @@ class App:
         conn = self.connect()
         try:
             kstate = self.klubok_state(conn)
-            template = "klubok_panel_mini.html" if request.arg("mini") else "klubok_panel.html"
+            mini = bool(request.arg("mini"))
+            template = "klubok_panel_mini.html" if mini else "klubok_panel.html"
+            shafa = self._panel_context(conn) if mini else {}  # ШІ й Бот — як у Шафи (KLB-010)
             html = self.env.get_template(template).render(
+                **{k: shafa[k] for k in ("ai", "bot", "tones") if k in shafa},
                 token=self.token, local=local_time, back=safe_back(request.arg("back")),
                 fake=self.fake_shafa, kpanel=kstate, ktone=KLUBOK_TONES.get(kstate.code, "warn"),
                 counts=self._klubok_counts(conn),
@@ -1398,48 +1414,46 @@ class App:
         conn = self.connect()
         try:
             query = request.arg("q").strip()
-            found = klubok_screen.rows(conn, tab, query)
-            try:
-                unsynced = klubok_queue.unsynced(conn)
-            except klubok_queue.SetupError:
-                unsynced = 0
-            list_url = f"/klubok/{tab}" + (f"?{urlencode({'q': query})}" if query else "")
+            wave = _wave_arg(request.arg("w")) if tab in klubok_screen.WAVE_FILTER else None
+            every = klubok_screen.rows(conn, tab, query)
+            found = [r for r in every if wave is None or r.wave == wave]
+            list_url = klubok_list_url(tab, query, wave)
+            pills = []
+            if tab in klubok_screen.WAVE_FILTER and every:
+                pills = [(None, "Усі", len(every), klubok_list_url(tab, query, None))]
+                pills += [
+                    (n, f"Хвиля {n}", count, klubok_list_url(tab, query, n))
+                    for n, count in klubok_screen.wave_counts(every).items()
+                ]
             return self.page(
                 "klubok_list.html",
                 **self._klubok_chrome(conn, request),
                 current=tab,
                 rows=found,
-                groups=klubok_screen.groups(found) if tab == "skipped" else [],
+                groups=klubok_screen.groups(found) if tab == "archive" else [],
+                marks={r.card.id: klubok_mark(r, tab, self.root) for r in found},
+                wave=wave,
+                wave_pills=pills,
                 query=query,
                 list_url=list_url,
-                reset_url=f"/klubok/{tab}",
-                unsynced=unsynced,
+                reset_url=klubok_list_url(tab, "", wave),
                 message=self._message(conn, request),
                 link=klubok_link,
             )
         finally:
             conn.close()
 
-    def klubok_sync_post(self, request: Request) -> Response:
-        back = safe_klubok_list((request.form.get("back") or [""])[0]) or "/klubok/queue"
-        conn = self.connect()
-        try:
-            klubok_queue.sync(conn, self.root, self.today())
-        except klubok_queue.SetupError:
-            return redirect(with_msg(back, "klubok_setup"))
-        finally:
-            conn.close()
-        return redirect(with_msg(back, "klubok_synced"))
-
     def _klubok_nav(self, conn, card: review.Card, from_: str) -> "Nav":
         """Верх Картки Клубку: список, звідки прийшли, «3 з 8», «Далі →» — у тому ж списку."""
         url = urlsplit(from_)
         tab = url.path.removeprefix("/klubok/")
-        nav = Nav(from_, klubok_screen.TABS.get(tab, "Клубок"))
-        query = (parse_qs(url.query).get("q") or [""])[0]
+        nav = Nav(from_, klubok_screen.TITLES.get(tab, "Клубок"))
+        args = parse_qs(url.query)
+        query = (args.get("q") or [""])[0]
+        wave = _wave_arg((args.get("w") or [""])[0])
         ids = (
-            [r.card.id for r in klubok_screen.rows(conn, tab, query)]
-            if tab in klubok_screen.TABS
+            [r.card.id for r in klubok_screen.rows(conn, tab, query, wave)]
+            if tab in KLUBOK_LISTS
             else []
         )
         following = ids[:1]
@@ -1462,6 +1476,9 @@ class App:
             return "/klubok/review"
         row = conn.execute("SELECT state FROM klubok_ads WHERE item_id = ?", (card.id,)).fetchone()
         tabs = {state: tab for tab, state in klubok_screen.STATES.items()}
+        tabs[klubok_queue.SKIPPED] = "archive"
+        if card.status == Status.ARCHIVED and card.only_klubok:
+            return "/klubok/archive"
         return f"/klubok/{tabs.get(row[0], 'queue') if row else 'queue'}"
 
     def klubok_card_page(
@@ -1484,8 +1501,12 @@ class App:
                 "SELECT * FROM klubok_ads WHERE item_id = ?", (item_id,)
             ).fetchone()
             editable = bool(card.only_klubok) and card.status == Status.REVIEW
-            view = klubok_screen.ad_view(card, self.root)
+            on_klubok = ad_row is not None and ad_row["state"] in klubok_queue.ON_KLUBOK
+            # N5: виставлена пара — без вердикту «піде / не піде» (вона вже на Клубку)
+            view = None if on_klubok else klubok_screen.ad_view(card, self.root)
             block = klubok_block(card) if editable else None
+            if not card.only_klubok:  # F7: на вкладці Клубку — ціна Клубку (з поста), лише читання
+                card.fields["price"] = klubok_shafa_price(card)
             from_ = self._klubok_from(conn, request, card)
             return self.page(
                 "card.html",
@@ -1494,11 +1515,14 @@ class App:
                 card=card,
                 item_action=f"/klubok/item/{item_id}",
                 view=view,
-                kline=klubok_line(conn, self.root, card),
+                kline=None if editable else klubok_line(conn, self.root, card),
                 kad=ad_row,
-                kwave=klubok_queue.wave(conn, card.post_id),
+                kwave=klubok_screen.card_wave(conn, card)[0],
+                kkind=klubok_screen.card_wave(conn, card)[1],
                 klubok_url=klubok_link(ad_row["url"]) if ad_row is not None else None,
-                kblock=MESSAGES.get(block) if block else None,
+                todo=klubok_todo(block, view) if editable else None,
+                kblock=None,
+                ksummary=klubok_summary(view),
                 kerror=error,
                 deletion_date=review.deletion_date,
                 no_restore_reason=None,
@@ -1511,7 +1535,7 @@ class App:
                 nav=self._klubok_nav(conn, card, from_),
                 layout=card_layout(card, bad, None),
                 attention=attention(card) if editable else None,
-                price_hint=price_hint(card),
+                price_hint=klubok_price_hint(card),
                 insole_hint=insole_hint(card),
                 gender=gender_buttons(card),
                 was=was_values(card),
@@ -1523,6 +1547,7 @@ class App:
         action = (request.form.get("action") or [""])[0]
         from_ = safe_klubok_list((request.form.get("from") or [""])[0])
         following = safe_klubok_next((request.form.get("next") or [""])[0])
+        stay = (request.form.get("stay") or [""])[0] == "list" and from_ is not None
         conn = self.connect()
         try:
             card = review.load_card(conn, item_id)
@@ -1533,6 +1558,14 @@ class App:
                 return klubok_item_url(item_id, from_, **params)
 
             editable = bool(card.only_klubok) and card.status == Status.REVIEW
+            if action == "ai_retry":  # KLB-010: ті самі кнопки, що в Шафи
+                if not editable:
+                    return redirect(back(msg="stale"))
+                return redirect(back(msg=self.ai_retry(conn, item_id)))
+            if action == "refill":
+                if not editable or not fill.mark_refill(conn, [item_id]):
+                    return redirect(back(msg="stale"))
+                return redirect(with_msg("/klubok/review", "klubok_ai_refill"))
             if action in ("save", "approve_klubok", "folder_order") or action.startswith(
                 ("confirm:", "gender:")
             ):
@@ -1567,9 +1600,9 @@ class App:
                 if not review.approve_klubok(conn, item_id):
                     return redirect(back(msg="stale"))
                 try:
-                    klubok_queue.sync_one(conn, self.root, item_id)  # одразу у «У черзі»
+                    klubok_queue.sync_one(conn, self.root, item_id)  # одразу у «Схвалені» Клубку
                 except klubok_queue.SetupError:
-                    pass  # рядок запише «Перерахувати чергу» чи «Старт»
+                    pass  # рядок запише фоновий перерахунок (`klubok.refresh`) чи «Старт»
                 return redirect(self._klubok_after(conn, from_, following, "klubok_approved"))
             if action == "reject_klubok":
                 if not review.reject_klubok(conn, item_id):
@@ -1581,6 +1614,8 @@ class App:
                 except klubok_queue.SetupError:
                     return redirect(back(msg="klubok_setup"))
                 done = KLUBOK_ACTIONS[action](conn, item_id)
+                if stay and from_:  # KLB-010: рішення просто в рядку «Проблем» — рядок зникає
+                    return redirect(with_msg(from_, action if done else "stale"))
                 return redirect(back(msg=action if done else "stale"))
             if action in ("klubok_confirm", "klubok_retry"):
                 if lock.busy(self.lock_file):  # як `--klubok-confirm`: не під час роботи робота
@@ -2236,51 +2271,85 @@ class App:
         finally:
             conn.close()
 
-    def sessions_page(self, request: Request) -> Response:
+    def _site_chrome(self, conn, request: Request, site: str) -> dict:
+        return (
+            self._klubok_chrome(conn, request) if site == "klubok" else self._chrome(conn, request)
+        )
+
+    def sessions_page(self, request: Request, site: str = "shafa") -> Response:
+        """«Сесії» — того самого вигляду для Шафи й Клубку (KLB-010: «Ще ▸ Сесії» Клубку)."""
         conn = self.connect()
         try:
             sessions = conn.execute(
-                "SELECT * FROM sessions WHERE site = 'shafa' ORDER BY id DESC LIMIT 200"
+                "SELECT * FROM sessions WHERE site = ? ORDER BY id DESC LIMIT 200", (site,)
             ).fetchall()
             return self.page(
                 "sessions.html",
-                **self._chrome(conn, request),
+                **self._site_chrome(conn, request, site),
                 current="sessions",
                 sessions=sessions,
                 s_tones={r["id"]: session_tone(r) for r in sessions},
-                reason_of=control.reason_of,
+                reason_of=klubok_control.reason_of if site == "klubok" else control.reason_of,
+                session_base="/klubok/session/" if site == "klubok" else "/session/",
                 message=MESSAGES.get(request.arg("msg")),
             )
         finally:
             conn.close()
 
-    def session_page(self, session_id: int, request: Request) -> Response:
+    def session_page(self, session_id: int, request: Request, site: str = "shafa") -> Response:
         conn = self.connect()
         try:
             row = conn.execute(
-                "SELECT * FROM sessions WHERE id = ? AND site = 'shafa'", (session_id,)
+                "SELECT * FROM sessions WHERE id = ? AND site = ?", (session_id, site)
             ).fetchone()
             if row is None:
                 return self.error(404, "Такої сесії немає.")
-            ids = [
-                r[0]
-                for r in conn.execute(
-                    "SELECT id FROM items WHERE session_id = ? ORDER BY published_at IS NULL, published_at, id",
-                    (session_id,),
-                )
-            ]
-            cards = [c for i in ids if (c := review.load_card(conn, i))]
+            if site == "klubok":
+                ads = {
+                    r["item_id"]: r
+                    for r in conn.execute(
+                        "SELECT item_id, state, problem_code, problem_text FROM klubok_ads "
+                        "WHERE session_id = ? ORDER BY published_at IS NULL, published_at, item_id",
+                        (session_id,),
+                    )
+                }
+                cards = [c for i in ads if (c := review.load_card(conn, i))]
+                bad = {c.id for c in cards if ads[c.id]["state"] == klubok_queue.PROBLEM}
+                problems = {
+                    i: SimpleNamespace(
+                        label="Проблема",
+                        why=klubok_queue.REASONS.get(ads[i]["problem_code"] or "")
+                        or ads[i]["problem_text"],
+                    )
+                    for i in bad
+                }
+            else:
+                ids = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT id FROM items WHERE session_id = ? "
+                        "ORDER BY published_at IS NULL, published_at, id",
+                        (session_id,),
+                    )
+                ]
+                cards = [c for i in ids if (c := review.load_card(conn, i))]
+                bad = {c.id for c in cards if c.status == Status.PROBLEM}
+                problems = {c.id: problem_row(c) for c in cards if c.id in bad}
             return self.page(
                 "session.html",
-                **self._chrome(conn, request),
+                **self._site_chrome(conn, request, site),
                 current="sessions",
                 session=row,
                 tone=session_tone(row),
                 cards=cards,
-                rows={c.id: problem_row(c) for c in cards if c.status == Status.PROBLEM},
-                shown_problems=sum(c.status == Status.PROBLEM for c in cards),
-                shown_published=sum(c.status != Status.PROBLEM for c in cards),
-                reason_of=control.reason_of,
+                rows=problems,
+                shown_problems=len(bad),
+                shown_published=len(cards) - len(bad),
+                reason_of=klubok_control.reason_of if site == "klubok" else control.reason_of,
+                session_base="/klubok/session/" if site == "klubok" else "/session/",
+                sessions_url="/klubok/sessions" if site == "klubok" else "/sessions",
+                problems_url="/klubok/decide" if site == "klubok" else "/problem",
+                item_base="/klubok/item/" if site == "klubok" else "/item/",
                 message=None,
             )
         finally:
@@ -2368,7 +2437,9 @@ KLUBOK_TONES = {  # кружечок панелі Клубку: ok — прац�
     "running": "ok", "starting": "ok", "pausing": "ok", "stopping": "ok", "snapshot": "ok",
     "stopped": "idle", "paused": "idle", "off": "idle", "busy_shafa": "idle",
     "login_open": "warn", "busy": "warn", "crashed": "bad", "failed": "bad",
+    "login_needed": "warn",  # KLB-010 (F4): жовте, як у Шафи
 }  # fmt: skip
+KLUBOK_LISTS = (*klubok_screen.TABS, "archive")  # списки Клубку; «Сесії» — свої сторінки
 # Чому «Схвалити для Клубку» заборонене: розділ визначає категорію Клубку, розмір — обов'язковий.
 # Колір і стать Клубку не обов'язкові (без відповідника поле лишається порожнім).
 KLUBOK_BLOCKS = ("no_section", "section_unknown", "section_yellow", "no_sizes", "babies_size")
@@ -2378,6 +2449,46 @@ _KLUBOK_NUMBER = re.compile(r"(?:^|[-/])(\d{1,12})/?$")
 def klubok_block(card: review.Card) -> str | None:
     block = card.approve_block()
     return block if block in KLUBOK_BLOCKS else None
+
+
+def klubok_todo(block: str | None, view: "klubok_screen.AdView | None") -> str | None:
+    """F6: що заважає схвалити — одна причина, одним реченням (як «Щоб схвалити: …» у Шафи)."""
+    if block in BLOCK_TODO:
+        return f"Щоб схвалити: {BLOCK_TODO[block]}"
+    if view is not None and view.skip:
+        why = klubok_queue.REASONS.get(view.skip_code) or view.skip  # без технічних дужок
+        return f"Схвалити не можна: {why[:1].lower()}{why[1:]}"
+    return None
+
+
+def klubok_summary(view: "klubok_screen.AdView | None") -> str:
+    """Згорнутий рядок «Як буде на Клубку: Женские зимние ботинки · 37, 38 · 1900 грн» (F5, 390)."""
+    if view is None:
+        return ""
+    values = {line.label: line.value for line in view.lines}
+    parts = [
+        values.get("Категорія", "").split(" / ")[-1],
+        values.get("Розміри", ""),
+        values.get("Ціна", "").removesuffix(" (з поста)"),
+    ]
+    return " · ".join(p for p in parts if p and p != "—")
+
+
+def klubok_shafa_price(card: review.Card) -> review.FieldView:
+    """F7: Картка Шафи на вкладці Клубку — поле «Ціна на Клубку» з ціною поста (лише читання)."""
+    field = card.fields["price"]
+    value = klubok_fields.klubok_price(card)
+    spec = replace(field.spec, label=review.KLUBOK_PRICE_LABEL)
+    return replace(field, spec=spec, value=value, inputs=[str(value or "")], yellow=False)
+
+
+def klubok_price_hint(card: review.Card) -> str | None:
+    posted = rules.price_from_text(card.post_text) if card.post_text else None
+    if not posted:
+        return None
+    if card.only_klubok:
+        return f"У пості {posted} грн — на Клубок іде ця ціна (без +15 % Шафи)"
+    return f"З поста; на Шафі — {rules.shafa_price(posted)} грн (+15 %)"
 
 
 def klubok_number(raw: str) -> int | None:
@@ -2404,10 +2515,35 @@ def safe_klubok_list(value: str) -> str | None:
     if url.scheme or url.netloc:
         return None
     tab = url.path.removeprefix("/klubok/")
-    if url.path != f"/klubok/{tab}" or tab not in klubok_screen.TABS:
+    if url.path != f"/klubok/{tab}" or tab not in KLUBOK_LISTS:
         return None
-    query = (parse_qs(url.query).get("q") or [""])[0]
-    return f"/klubok/{tab}" + (f"?{urlencode({'q': query})}" if query else "")
+    args = parse_qs(url.query)
+    return klubok_list_url(tab, (args.get("q") or [""])[0], _wave_arg((args.get("w") or [""])[0]))
+
+
+def _wave_arg(raw: str) -> int | None:
+    return int(raw) if raw in ("1", "2", "4") else None
+
+
+def klubok_list_url(tab: str, query: str = "", wave: int | None = None) -> str:
+    args = {k: v for k, v in (("w", wave), ("q", query)) if v}
+    return f"/klubok/{tab}" + (f"?{urlencode(args)}" if args else "")
+
+
+def klubok_mark(row: "klubok_screen.Row", tab: str, root: Path) -> "Mark | None":
+    """Мітка на фото у списку Клубку — як у Шафи (KLB-010, N2)."""
+    card = row.card
+    if tab == "review":
+        if klubok_block(card) or not klubok_screen.ad_view(card, root).ok:
+            return Mark("bad", "Не можна схвалити")
+        if card.yellow:
+            return Mark("warn", plural(card.yellow, "жовте поле", "жовті поля", "жовтих полів"))
+        return Mark("ok", "Готово")
+    if tab == "queue" and row.place:
+        return Mark("ok", f"№ {row.place}")
+    if tab == "published":
+        return Mark("ok", "Виставлено")
+    return None
 
 
 def safe_klubok_next(value: str) -> str | None:

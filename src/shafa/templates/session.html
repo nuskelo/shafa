@@ -1,25 +1,25 @@
 {% extends "base.html" %}
 {% block title %}Сесія · Шафа-помічник{% endblock %}
 {% block main %}
-<p class="back"><a href="/sessions">← Усі сесії</a></p>
+<p class="back"><a href="{{ sessions_url }}">← Усі сесії</a></p>
 <div class="session-head">
   <div class="s-head">
     <h1>Сесія {{ session.id }}</h1>
     <span class="meta">{{ local(session.started_at) }}{% if session.ended_at %} — {{ local(session.ended_at) }}{% endif %}</span>
   </div>
   <div class="s-stats">
-    <span>Опубліковано <b>{{ session.published }}</b></span>
-    <span>У Проблемах <b>{{ session.problems }}</b>{% if session.problems %} — <a href="/problem">подивіться</a>{% endif %}</span>
+    <span>{{ "Виставлено" if site == "klubok" else "Опубліковано" }} <b>{{ session.published }}</b></span>
+    <span>У Проблемах <b>{{ session.problems }}</b>{% if session.problems %} — <a href="{{ problems_url }}">подивіться</a>{% endif %}</span>
   </div>
   <div class="s-why tone-{{ tone }}">{% if tone == "run" %}працює{% else %}{{ reason_of(session.stop_code, session.stop_reason) or "закінчилась" }}{% endif %}</div>
 </div>
 {% if not cards and not session.problems %}<p class="empty">У цій сесії робот не брався за жодну Картку.</p>
-{% elif not shown_published %}<p class="empty">Опублікованих у цій сесії немає. Картки, що пішли в Проблеми, — {% if shown_problems %}нижче{% else %}у розділі «<a href="/problem">Проблеми</a>»{% endif %}.</p>{% endif %}
+{% elif not shown_published %}<p class="empty">{{ "Виставлених" if site == "klubok" else "Опублікованих" }} у цій сесії немає. Картки, що пішли в Проблеми, — {% if shown_problems %}нижче{% else %}у розділі «<a href="{{ problems_url }}">Проблеми</a>»{% endif %}.</p>{% endif %}
 <ul class="grid">
 {% for card in cards %}
   {% set row = rows.get(card.id) %}
   <li>
-    <a class="tilecard" href="/item/{{ card.id }}">
+    <a class="tilecard" href="{{ item_base }}{{ card.id }}">
       <span class="shot">
         {% if card.photos %}
         <img src="/thumb/{{ card.id }}/{{ card.photos[0].position }}" alt="" loading="lazy">
