@@ -124,6 +124,7 @@ ROBOTS = {
     "starting": robot("starting"),
     "rehearsing": robot("rehearsing"),
     "busy": robot("busy"),
+    "busy_klubok": robot("busy_klubok"),  # KLB-009: замок тримає робот Клубку
     "crashed": robot(
         "crashed",
         buttons=["start", "rehearse"],

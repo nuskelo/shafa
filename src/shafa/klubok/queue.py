@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from shafa import config, variants
+from shafa import config, events, variants
 from shafa.db import Status, now
 from shafa.klubok import dup, fields
 from shafa.klubok.dup import Dup
@@ -329,12 +329,9 @@ def take(
     return Taken(out, None if out else EMPTY)
 
 
-def place(conn: sqlite3.Connection, root: Path, item_id: int) -> int | None:
-    """D7: місце Картки серед рядків `queued` — у порядку `plan` (хвиля, зимове → інше → лише літнє,
-    далі дата поста й id), але без `dup.find`, без `fields.ad` і без запису: екран відкриває Картку
-    швидко й при тисячах її оголошень. Рядка `queued` немає — None («у черзі» без номера).
-    `root` — для однаковості з `plan` (фото тут не потрібні)."""
-    del root
+def order(conn: sqlite3.Connection) -> list[tuple[int, int]]:
+    """Рядки `queued` у порядку `plan` (хвиля, зимове → інше → лише літнє, далі дата поста й id):
+    `(item_id, хвиля)`. Без `dup.find`, без `fields.ad` і без запису (KLB-009: вкладка «У черзі»)."""
     rows = conn.execute(
         f"SELECT k.item_id, {_WAVE} AS wave FROM klubok_ads k JOIN items i ON i.id = k.item_id "
         "LEFT JOIN posts p ON p.post_id = i.post_id "
@@ -343,11 +340,29 @@ def place(conn: sqlite3.Connection, root: Path, item_id: int) -> int | None:
         (QUEUED,),
     ).fetchall()
     waves = {r[0]: r[1] for r in rows}
-    if item_id not in waves:
-        return None
     ranks = {i: rank(card) if (card := load_card(conn, i)) else 1 for i in waves}
     ordered = sorted(waves, key=lambda i: (waves[i], ranks[i]))  # стабільне, як у `plan`
-    return ordered.index(item_id) + 1
+    return [(i, waves[i]) for i in ordered]
+
+
+def place(conn: sqlite3.Connection, root: Path, item_id: int) -> int | None:
+    """D7: місце Картки серед рядків `queued` — у порядку `plan` (`order`): екран відкриває Картку
+    швидко й при тисячах її оголошень. Рядка `queued` немає — None («у черзі» без номера).
+    `root` — для однаковості з `plan` (фото тут не потрібні)."""
+    del root
+    ids = [i for i, _wave in order(conn)]
+    return ids.index(item_id) + 1 if item_id in ids else None
+
+
+def unsynced(conn: sqlite3.Connection) -> int:
+    """KLB-009: кандидати черги без рядка Клубку (схвалено після останнього перерахунку) — їх
+    вкладка «У черзі» ще не бачить; «Перерахувати чергу» (`sync`) чи «Старт» їх запише."""
+    where, args = _candidate_sql(from_post())
+    return conn.execute(
+        "SELECT count(*) FROM items i LEFT JOIN klubok_ads k ON k.item_id = i.id "
+        f"LEFT JOIN klubok_waves w ON w.post_id = i.post_id WHERE {where} AND k.item_id IS NULL",
+        args,
+    ).fetchone()[0]
 
 
 # --- стани для KLB-003 (D5) ---
@@ -403,6 +418,27 @@ def recover(conn: sqlite3.Connection) -> list[int]:
     for item_id in ids:
         problem(conn, item_id, UNCERTAIN, "Перевірте на Клубку, чи опубліковано")
     return ids
+
+
+def retry(conn: sqlite3.Connection, item_id: int) -> bool:
+    """KLB-009: «Ні, не опубліковано — повернути в чергу» (лише з екрана): `problem klubok_uncertain`
+    → `queued`. Інші стани й коди — відмова, нічого не змінюється. Подія в журнал."""
+    stamp = now()
+    with conn:
+        cursor = conn.execute(
+            "UPDATE klubok_ads SET state = ?, problem_code = NULL, problem_text = NULL, "
+            "queued_at = ?, updated_at = ? WHERE item_id = ? AND state = ? AND problem_code = ?",
+            (QUEUED, stamp, stamp, item_id, PROBLEM, UNCERTAIN),
+        )
+    if cursor.rowcount != 1:
+        return False
+    post = conn.execute("SELECT post_id FROM items WHERE id = ?", (item_id,)).fetchone()
+    events.emit(
+        "klubok.retry",
+        f"Клубок: пост {post[0] if post else '?'} — «не опубліковано», повернуто в чергу",
+        data={"item": item_id},
+    )
+    return True
 
 
 # --- KLB-007: людина підтверджує невпевнену публікацію ---

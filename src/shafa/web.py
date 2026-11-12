@@ -57,7 +57,8 @@ from shafa.folders import (
     old_root,
 )
 from shafa.klubok import queue as klubok_queue
-from shafa.robot import browser, control, lock, publish, rehearse
+from shafa.klubok import screen as klubok_screen
+from shafa.robot import browser, control, klubok_control, klubok_publish, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
 from shafa.scan import NO_SECTION_TEXT, OLD_NO_SECTION_TEXT, STICKY, scan
@@ -103,6 +104,29 @@ STICKY_TITLES = {  # проблеми публікації — простими 
 MESSAGES = {
     "klubok_dup_other": "Добре — пара піде на Клубок як інша.",
     "klubok_dup_yes": "Добре — на Клубок ця пара не піде: це дубль.",
+    # KLB-009: вкладка «Клубок»
+    "klubok_approved": "Схвалено для Клубку — пара в черзі",
+    "klubok_approved_next": "Схвалено для Клубку. Ось наступна",
+    "klubok_approved_done": "Схвалено для Клубку. На перевірку більше нічого немає",
+    "klubok_rejected": "Добре — на Клубок ця пара не піде (Архів на 7 днів)",
+    "klubok_rejected_next": "Добре — на Клубок ця пара не піде. Ось наступна",
+    "klubok_rejected_done": "Добре — на Клубок ця пара не піде. На перевірку більше нічого немає",
+    "klubok_cannot_approve": "Схвалити для Клубку не можна — причина жовтим у блоці «Як буде на Клубку»",
+    "klubok_retry": "Добре — пара знову в черзі Клубку",
+    "klubok_confirmed": "Добре — позначено як виставлене на Клубку",
+    "klubok_robot_busy": "Робот зараз працює — зачекайте, поки він закінчить",
+    "klubok_synced": "Чергу Клубку перераховано",
+    "klubok_setup": "Налаштування Клубку з помилкою — Налаштування, блок «Клубок»",
+    "klubok_started": "Робот Клубку запускається — за хвилину відкриється окреме вікно Chrome. "
+    "Не закривайте його, поки робот працює",
+    "klubok_cannot_start": "Робота Клубку не запущено — причина на панелі",
+    "klubok_login": "Відкриваю вікно входу в Клубок — увійдіть і закрийте вікно",
+    "klubok_fake_login": "У підставному режимі вхід у Клубок не потрібен",
+    "klubok_snapshot": "Робот перечитує ваші оголошення на Клубку — кілька хвилин",
+    "klubok_paused": "Пауза: робот допише поточну пару і зачекає",
+    "klubok_resumed": "Продовжуємо",
+    "klubok_stopping": "Стоп: робот допише поточну пару і зупиниться",
+    "klubok_not_running": "Робот Клубку зараз не працює",
     "saved": "Збережено",
     "approved": "Схвалено",
     "rejected": f"Картку «{{name}}» відкладено в Архів на {review.ARCHIVE_DAYS} днів.",
@@ -338,6 +362,7 @@ SECURITY_HEADERS = {
 }
 
 _ITEM = re.compile(r"/item/(\d+)")
+_KLUBOK_ITEM = re.compile(r"/klubok/item/(\d+)")
 ONLY_KLUBOK_TEXT = "Ця Картка — лише для Клубку, у Шафі її немає."
 _SESSION = re.compile(r"/session/(\d+)")
 _PHOTO = re.compile(r"/(photo|thumb)/(\d+)/(\d+)")
@@ -440,6 +465,10 @@ def _thread(job: Callable[[], None]) -> None:
     threading.Thread(target=job, daemon=True).start()
 
 
+def _spawn_klubok(args: list[str]) -> object:
+    return control.spawn(args, log=klubok_control.log_path())
+
+
 def _real_client() -> Any:
     return ai.make_client(config.api_key())
 
@@ -464,6 +493,7 @@ class App:
         bot_lock: Path | None = None,
         on_quit: Callable[[], list[str]] | None = None,
         health_check: Callable[[], list[health.Check]] | None = None,
+        klubok_spawner: Callable[[list[str]], object] | None = None,
     ) -> None:
         self.db_path = db_path
         self.root = root
@@ -477,6 +507,11 @@ class App:
         self.process = None  # останній запущений з екрана процес робота
         self.started_at = 0.0
         self.spawned_at: datetime | None = None  # UX-002: коли екран запустив процес робота
+        # KLB-009: робот Клубку — свій процес і журнал (`klubok-run.log`), замок спільний
+        self.klubok_spawner = klubok_spawner or spawner or _spawn_klubok
+        self.klubok_process = None
+        self.klubok_started_at = 0.0
+        self.klubok_spawned_at: datetime | None = None
         # ШІ: одна робота за раз (Оновити, збір результатів, «спробуй ще раз») — без подвійних оплат.
         self.ai_client, self.run, self.clock, self.today = ai_client, run, clock, today
         self.ai_lock = threading.Lock()
@@ -508,6 +543,9 @@ class App:
         self.env.filters["names"] = names
         self.env.globals["archive_reason"] = archive_reason
         self.env.globals["plural"] = plural
+        self.env.globals["site"] = "shafa"  # KLB-009: сторінки Клубку передають `site="klubok"`
+        self.env.globals["ktabs"] = klubok_screen.TABS
+        self.env.globals["wave_text"] = klubok_screen.wave_text
 
     def when(self, stamp: str | None) -> str:
         """«сьогодні о 10:08» / «вчора о 22:22» / «30.10 о 22:22» (місцевий час)."""
@@ -611,6 +649,8 @@ class App:
                 return self.page("quit.html", done=done)
             if get or request.method == "POST":  # без підтвердження програма працює далі
                 return self.quit_page(request)
+        if path == "/klubok" or path.startswith("/klubok/"):
+            return self.klubok_route(request)
         if path.strip("/") in CARD_TABS and get:
             return self.tab_page(Status(path.strip("/")), request)
         if match := _ITEM.fullmatch(path):
@@ -1274,6 +1314,349 @@ class App:
         self.started_at = time.monotonic()
         self.spawned_at = datetime.now().astimezone()
 
+    # --- Клубок (KLB-009): вкладки, Картка, панель робота ---
+
+    def klubok_route(self, request: Request) -> Response:
+        path, get, post = request.path, request.method == "GET", request.method == "POST"
+        name = path.removeprefix("/klubok").strip("/")
+        if name == "" and get:
+            return redirect("/klubok/review")
+        if name in klubok_screen.TABS and get:
+            return self.klubok_tab(name, request)
+        if name == "panel" and get:
+            return self.klubok_panel(request)
+        if name == "robot" and post:
+            return self.klubok_robot_post(request)
+        if name == "sync" and post:
+            return self.klubok_sync_post(request)
+        if match := _KLUBOK_ITEM.fullmatch(path):
+            if get:
+                return self.klubok_card_page(int(match[1]), request)
+            if post:
+                return self.klubok_card_post(int(match[1]), request)
+        return self.error(404, "Такої сторінки немає.")
+
+    def klubok_state(self, conn) -> klubok_control.State:
+        process = self.klubok_process
+        code = process.poll() if process is not None else None
+        starting = (
+            process is not None and code is None and time.monotonic() - self.klubok_started_at < 60
+        )
+        failed = process is not None and code not in (None, 0, 130)
+        state = klubok_control.state(
+            conn, self.lock_file, self.today(), starting=starting, failed=failed,
+            spawned=self.klubok_spawned_at,
+        )  # fmt: skip
+        if state.code in ("failed", "crashed") and failed:
+            state.details.append(last_log_line(klubok_control.log_path()))
+        return state
+
+    def _klubok_counts(self, conn) -> dict:
+        return {f"klubok/{key}": n for key, n in klubok_screen.counts(conn).items()}
+
+    def _klubok_chrome(self, conn, request: Request) -> dict:
+        kstate = self.klubok_state(conn)
+        return {
+            "site": "klubok",
+            "tabs": TAB_TITLES,
+            "counts": self._counts(conn),
+            "kcounts": klubok_screen.counts(conn),
+            "kpanel": kstate,
+            "ktone": KLUBOK_TONES.get(kstate.code, "warn"),
+            "can_quit": self.on_quit is not None,
+            "undo": None,
+            "back": safe_back(request.path),
+            "fake": self.fake_shafa,
+        }
+
+    def klubok_panel(self, request: Request) -> Response:
+        conn = self.connect()
+        try:
+            kstate = self.klubok_state(conn)
+            template = "klubok_panel_mini.html" if request.arg("mini") else "klubok_panel.html"
+            html = self.env.get_template(template).render(
+                token=self.token, local=local_time, back=safe_back(request.arg("back")),
+                fake=self.fake_shafa, kpanel=kstate, ktone=KLUBOK_TONES.get(kstate.code, "warn"),
+                counts=self._klubok_counts(conn),
+            )  # fmt: skip
+        finally:
+            conn.close()
+        return Response(200, html.encode("utf-8"))
+
+    def klubok_tab(self, tab: str, request: Request) -> Response:
+        conn = self.connect()
+        try:
+            query = request.arg("q").strip()
+            found = klubok_screen.rows(conn, tab, query)
+            try:
+                unsynced = klubok_queue.unsynced(conn)
+            except klubok_queue.SetupError:
+                unsynced = 0
+            list_url = f"/klubok/{tab}" + (f"?{urlencode({'q': query})}" if query else "")
+            return self.page(
+                "klubok_list.html",
+                **self._klubok_chrome(conn, request),
+                current=tab,
+                rows=found,
+                groups=klubok_screen.groups(found) if tab == "skipped" else [],
+                query=query,
+                list_url=list_url,
+                reset_url=f"/klubok/{tab}",
+                unsynced=unsynced,
+                message=self._message(conn, request),
+                link=klubok_link,
+            )
+        finally:
+            conn.close()
+
+    def klubok_sync_post(self, request: Request) -> Response:
+        back = safe_klubok_list((request.form.get("back") or [""])[0]) or "/klubok/queue"
+        conn = self.connect()
+        try:
+            klubok_queue.sync(conn, self.root, self.today())
+        except klubok_queue.SetupError:
+            return redirect(with_msg(back, "klubok_setup"))
+        finally:
+            conn.close()
+        return redirect(with_msg(back, "klubok_synced"))
+
+    def _klubok_nav(self, conn, card: review.Card, from_: str) -> "Nav":
+        """Верх Картки Клубку: список, звідки прийшли, «3 з 8», «Далі →» — у тому ж списку."""
+        url = urlsplit(from_)
+        tab = url.path.removeprefix("/klubok/")
+        nav = Nav(from_, klubok_screen.TABS.get(tab, "Клубок"))
+        query = (parse_qs(url.query).get("q") or [""])[0]
+        ids = (
+            [r.card.id for r in klubok_screen.rows(conn, tab, query)]
+            if tab in klubok_screen.TABS
+            else []
+        )
+        following = ids[:1]
+        if card.id in ids:
+            at = ids.index(card.id)
+            nav.index, nav.total = at + 1, len(ids)
+            following = ids[at + 1 : at + 2]
+            if at:
+                nav.prev_url = klubok_item_url(ids[at - 1], from_)
+        if following:
+            nav.next_url = klubok_item_url(following[0], from_)
+        return nav
+
+    def _klubok_from(self, conn, request: Request, card: review.Card) -> str:
+        """Звідки відкрили Картку Клубку; без `from` — вкладка за її станом."""
+        chosen = safe_klubok_list(request.arg("from"))
+        if chosen:
+            return chosen
+        if card.only_klubok and card.status == Status.REVIEW:
+            return "/klubok/review"
+        row = conn.execute("SELECT state FROM klubok_ads WHERE item_id = ?", (card.id,)).fetchone()
+        tabs = {state: tab for tab, state in klubok_screen.STATES.items()}
+        return f"/klubok/{tabs.get(row[0], 'queue') if row else 'queue'}"
+
+    def klubok_card_page(
+        self, item_id: int, request: Request, error: str | None = None
+    ) -> Response:
+        conn = self.connect()
+        try:
+            card = review.load_card(conn, item_id)
+            if card is None:
+                return self.error(404, "Такої Картки немає — можливо, її вже видалено.")
+            bad = {name for name in request.query.get("bad", []) if name in review.SPEC}
+            for name in bad:  # помилкове значення лишається в полі, як вона його ввела
+                typed = request.query.get(f"v_{name}")
+                if typed:
+                    shown = [t[:200] for t in typed][: len(card.fields[name].inputs)]
+                    card.fields[name] = replace(
+                        card.fields[name], inputs=[*shown, *card.fields[name].inputs[len(shown) :]]
+                    )
+            ad_row = conn.execute(
+                "SELECT * FROM klubok_ads WHERE item_id = ?", (item_id,)
+            ).fetchone()
+            editable = bool(card.only_klubok) and card.status == Status.REVIEW
+            view = klubok_screen.ad_view(card, self.root)
+            block = klubok_block(card) if editable else None
+            from_ = self._klubok_from(conn, request, card)
+            return self.page(
+                "card.html",
+                **self._klubok_chrome(conn, request),
+                current=None,
+                card=card,
+                item_action=f"/klubok/item/{item_id}",
+                view=view,
+                kline=klubok_line(conn, self.root, card),
+                kad=ad_row,
+                kwave=klubok_queue.wave(conn, card.post_id),
+                klubok_url=klubok_link(ad_row["url"]) if ad_row is not None else None,
+                kblock=MESSAGES.get(block) if block else None,
+                kerror=error,
+                deletion_date=review.deletion_date,
+                no_restore_reason=None,
+                bad=bad,
+                bad_input=review.BAD_INPUT,
+                message=self._message(conn, request),
+                sections=catalog.sections(),
+                waiting=self._waiting(conn, card),
+                editable=editable,
+                nav=self._klubok_nav(conn, card, from_),
+                layout=card_layout(card, bad, None),
+                attention=attention(card) if editable else None,
+                price_hint=price_hint(card),
+                insole_hint=insole_hint(card),
+                gender=gender_buttons(card),
+                was=was_values(card),
+            )
+        finally:
+            conn.close()
+
+    def klubok_card_post(self, item_id: int, request: Request) -> Response:
+        action = (request.form.get("action") or [""])[0]
+        from_ = safe_klubok_list((request.form.get("from") or [""])[0])
+        following = safe_klubok_next((request.form.get("next") or [""])[0])
+        conn = self.connect()
+        try:
+            card = review.load_card(conn, item_id)
+            if card is None:
+                return self.error(404, "Такої Картки немає — можливо, її вже видалено.")
+
+            def back(**params) -> str:
+                return klubok_item_url(item_id, from_, **params)
+
+            editable = bool(card.only_klubok) and card.status == Status.REVIEW
+            if action in ("save", "approve_klubok", "folder_order") or action.startswith(
+                ("confirm:", "gender:")
+            ):
+                if not editable:
+                    return redirect(back(msg="stale"))
+                form, confirm = dict(request.form), action.removeprefix("confirm:")
+                if action == "folder_order":
+                    by_position = sorted(card.photos, key=lambda p: p.position)
+                    form["photo_order"] = ["\n".join(p.file_name for p in by_position)]
+                    confirm = "photo_order"
+                if action.startswith("gender:"):
+                    target = review.gender_target(card.path, action.removeprefix("gender:"))
+                    if target is None:
+                        return redirect(back(msg="stale"))
+                    form["section"], confirm = [target], "section"
+                if action == "approve_klubok":
+                    confirm = ""
+                bad = review.save(conn, card, form, confirm or None)
+                if bad:
+                    typed = {f"v_{n}": form[n] for n in bad if n in form}
+                    return redirect(back(msg="bad", bad=bad, **typed))
+                if action != "approve_klubok":
+                    return redirect(back(msg="saved"))
+                fresh = review.load_card(conn, item_id)
+                if fresh is None:
+                    return redirect(back(msg="stale"))
+                block = klubok_block(fresh)
+                if block is None and not klubok_screen.ad_view(fresh, self.root).ok:
+                    block = "klubok_cannot_approve"
+                if block:
+                    return redirect(back(msg=block))
+                if not review.approve_klubok(conn, item_id):
+                    return redirect(back(msg="stale"))
+                try:
+                    klubok_queue.sync_one(conn, self.root, item_id)  # одразу у «У черзі»
+                except klubok_queue.SetupError:
+                    pass  # рядок запише «Перерахувати чергу» чи «Старт»
+                return redirect(self._klubok_after(conn, from_, following, "klubok_approved"))
+            if action == "reject_klubok":
+                if not review.reject_klubok(conn, item_id):
+                    return redirect(back(msg="stale"))
+                return redirect(self._klubok_after(conn, from_, following, "klubok_rejected"))
+            if action in KLUBOK_ACTIONS:  # дубль: «Інша пара» / «Так, дубль»
+                try:
+                    klubok_queue.sync_one(conn, self.root, item_id)
+                except klubok_queue.SetupError:
+                    return redirect(back(msg="klubok_setup"))
+                done = KLUBOK_ACTIONS[action](conn, item_id)
+                return redirect(back(msg=action if done else "stale"))
+            if action in ("klubok_confirm", "klubok_retry"):
+                if lock.busy(self.lock_file):  # як `--klubok-confirm`: не під час роботи робота
+                    return redirect(back(msg="klubok_robot_busy"))
+                if action == "klubok_retry":
+                    done = klubok_queue.retry(conn, item_id)
+                    return redirect(back(msg="klubok_retry" if done else "stale"))
+                raw = (request.form.get("klubok_id") or [""])[0].strip()
+                number = klubok_number(raw)
+                if number is None:
+                    return self.klubok_card_page(
+                        item_id, request,
+                        error="Вставте номер оголошення на Клубку (цифри) або посилання на нього",
+                    )  # fmt: skip
+                if card.post_id is None:
+                    return redirect(back(msg="stale"))
+                try:
+                    klubok_queue.confirm(conn, card.post_id, number, datetime.now().astimezone())
+                except klubok_queue.ConfirmError as why:
+                    return self.klubok_card_page(item_id, request, error=str(why))
+                return redirect(back(msg="klubok_confirmed"))
+            return self.error(400, UNKNOWN_ACTION)
+        finally:
+            conn.close()
+
+    def _klubok_after(self, conn, from_: str | None, following: str | None, message: str) -> str:
+        """Після «Схвалити для Клубку» / «Не виставляти»: наступна Картка того ж списку чи список."""
+        if following:
+            return with_params(following, msg=f"{message}_next")
+        back = from_ or "/klubok/review"
+        left = [r.card.id for r in klubok_screen.rows(conn, "review")]
+        if left and urlsplit(back).path == "/klubok/review":
+            return klubok_item_url(left[0], back, msg=f"{message}_next")
+        if urlsplit(back).path == "/klubok/review":
+            return with_msg(back, f"{message}_done")
+        return with_msg(back, message)
+
+    def klubok_robot_post(self, request: Request) -> Response:
+        action = (request.form.get("action") or [""])[0]
+        back = safe_back((request.form.get("back") or [""])[0])
+        if not back.startswith("/klubok"):
+            back = "/klubok/review"
+        sep = "&" if "?" in back else "?"
+        conn = self.connect()
+        try:
+            fake = ["--fake-klubok"] if self.fake_shafa else []
+            if action == "start":
+                state = self.klubok_state(conn)
+                if not state.can_start or state.left < 1:
+                    return redirect(f"{back}{sep}msg=klubok_cannot_start")
+                limit = min(state.left, klubok_publish.LIMIT_RANGE[1])
+                args = ["--klubok-publish", "--db", str(self.db_path), "--root", str(self.root)]
+                self._klubok_spawn([*args, "--limit", str(limit), *fake])
+                return redirect(f"{back}{sep}msg=klubok_started")
+            if action == "login":
+                if self.fake_shafa:
+                    return redirect(f"{back}{sep}msg=klubok_fake_login")
+                if lock.busy(self.lock_file):
+                    return redirect(f"{back}{sep}msg=klubok_robot_busy")
+                self._klubok_spawn(["--klubok-login"])
+                return redirect(f"{back}{sep}msg=klubok_login")
+            if action == "snapshot":
+                if lock.busy(self.lock_file):
+                    return redirect(f"{back}{sep}msg=klubok_robot_busy")
+                self._klubok_spawn(["--klubok-snapshot", "--db", str(self.db_path), *fake])
+                return redirect(f"{back}{sep}msg=klubok_snapshot")
+            if action == "login_done":
+                busy = lock.busy(self.lock_file)
+                if not busy or busy.get("mode") != "klubok-login":
+                    return redirect(f"{back}{sep}msg=robot_no_login_window")
+                browser.login_done_flag().touch()
+                return redirect(f"{back}{sep}msg=robot_login_done")
+            commands = {"pause": "pause", "resume": None, "stop": "stop"}
+            if action in commands:
+                done = publish.request(conn, commands[action], site="klubok")
+                message = {"pause": "klubok_paused", "resume": "klubok_resumed",
+                           "stop": "klubok_stopping"}[action]  # fmt: skip
+                return redirect(f"{back}{sep}msg={message if done else 'klubok_not_running'}")
+            return self.error(400, UNKNOWN_ACTION)
+        finally:
+            conn.close()
+
+    def _klubok_spawn(self, args: list[str]) -> None:
+        self.klubok_process = self.klubok_spawner(args)
+        self.klubok_started_at = time.monotonic()
+        self.klubok_spawned_at = datetime.now().astimezone()
+
     # --- Сторінки ---
 
     def tab_page(self, status: Status, request: Request) -> Response:
@@ -1557,6 +1940,7 @@ class App:
                 sticky_titles=STICKY_TITLES,
                 current=card.status,
                 card=card,
+                item_action=f"/item/{item_id}",
                 bad=bad,
                 bad_input=review.BAD_INPUT,
                 message=self._message(conn, request),
@@ -1969,6 +2353,65 @@ KLUBOK_ACTIONS = {
 }
 
 
+KLUBOK_TONES = {  # кружечок панелі Клубку: ok — працює, idle — стоїть, warn — увага, bad — помилка
+    "running": "ok", "starting": "ok", "pausing": "ok", "stopping": "ok", "snapshot": "ok",
+    "stopped": "idle", "paused": "idle", "off": "idle", "busy_shafa": "idle",
+    "login_open": "warn", "busy": "warn", "crashed": "bad", "failed": "bad",
+}  # fmt: skip
+# Чому «Схвалити для Клубку» заборонене: розділ визначає категорію Клубку, розмір — обов'язковий.
+# Колір і стать Клубку не обов'язкові (без відповідника поле лишається порожнім).
+KLUBOK_BLOCKS = ("no_section", "section_unknown", "section_yellow", "no_sizes", "babies_size")
+_KLUBOK_NUMBER = re.compile(r"(?:^|[-/])(\d{1,12})/?$")
+
+
+def klubok_block(card: review.Card) -> str | None:
+    block = card.approve_block()
+    return block if block in KLUBOK_BLOCKS else None
+
+
+def klubok_number(raw: str) -> int | None:
+    """Номер оголошення: «37977926» або посилання «https://klubok.com/item-…-37977926»."""
+    raw = raw.strip()
+    if raw.isascii() and raw.isdigit():
+        return int(raw) if 0 < int(raw) < 10**12 else None
+    if not raw.startswith("https://klubok.com/"):
+        return None
+    match = _KLUBOK_NUMBER.search(urlsplit(raw).path)
+    return int(match[1]) if match and int(match[1]) > 0 else None
+
+
+def klubok_item_url(item_id: int, from_: str | None = None, **params) -> str:
+    args = ({"from": from_} if from_ else {}) | params
+    return f"/klubok/item/{item_id}" + (f"?{urlencode(args, doseq=True)}" if args else "")
+
+
+def safe_klubok_list(value: str) -> str | None:
+    """Адреса списку Клубку: `/klubok/<вкладка>` з необов'язковим `q`; решта — None."""
+    if "\\" in value:
+        return None
+    url = urlsplit(value)
+    if url.scheme or url.netloc:
+        return None
+    tab = url.path.removeprefix("/klubok/")
+    if url.path != f"/klubok/{tab}" or tab not in klubok_screen.TABS:
+        return None
+    query = (parse_qs(url.query).get("q") or [""])[0]
+    return f"/klubok/{tab}" + (f"?{urlencode({'q': query})}" if query else "")
+
+
+def safe_klubok_next(value: str) -> str | None:
+    """Наступна Картка Клубку: лише `/klubok/item/N?from=<список Клубку>`."""
+    if "\\" in value:
+        return None
+    url = urlsplit(value)
+    match = _KLUBOK_ITEM.fullmatch(url.path)
+    if url.scheme or url.netloc or not match:
+        return None
+    return klubok_item_url(
+        int(match[1]), safe_klubok_list((parse_qs(url.query).get("from") or [""])[0])
+    )
+
+
 def klubok_link(url: str | None) -> str | None:
     """Посилання на Клубок — у сторінку лише https://klubok.com/… (не `javascript:`)."""
     return url if url and url.startswith("https://klubok.com/") else None
@@ -2324,7 +2767,7 @@ def attention(card: review.Card) -> Attention | None:
 ROBOT_TONES = {  # кружечок плитки «Робот»: ok — працює, idle — стоїть, warn — увага, bad — помилка
     "running": "ok", "starting": "ok", "pausing": "ok", "stopping": "ok", "rehearsing": "ok",
     "stopped": "idle", "paused": "idle",
-    "login_needed": "warn", "login_open": "warn", "busy": "warn",
+    "login_needed": "warn", "login_open": "warn", "busy": "warn", "busy_klubok": "idle",
     "crashed": "bad", "failed": "bad",
 }  # fmt: skip
 BOT_TONES = {

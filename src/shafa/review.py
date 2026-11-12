@@ -716,6 +716,29 @@ def approve_klubok(conn: sqlite3.Connection, item_id: int) -> bool:
     return cursor.rowcount == 1
 
 
+NOT_FOR_KLUBOK = "klubok_not_for"  # KLB-009: «Не виставляти» на Картці «лише Клубок»
+
+
+def reject_klubok(conn: sqlite3.Connection, item_id: int) -> bool:
+    """KLB-009: Картка «лише Клубок» `review` → Архів з причиною «не для Клубку» (через 7 днів
+    зникне, як і в Шафі). Картки Шафи не чіпає."""
+    with conn:
+        cursor = conn.execute(
+            "UPDATE items SET status = ?, archived_at = ?, problem_code = ?, problem_text = ?, "
+            "updated_at = ? WHERE id = ? AND status = ? AND only_klubok = 1 AND purged_at IS NULL",
+            (
+                Status.ARCHIVED,
+                now(),
+                NOT_FOR_KLUBOK,
+                "Не для Клубку",
+                now(),
+                item_id,
+                Status.REVIEW,
+            ),
+        )
+    return cursor.rowcount == 1
+
+
 def robot_retry(conn: sqlite3.Connection, item_id: int) -> bool:
     """Проблема робота (код `robot_…`) → назад у Схвалені. ШІ знову не викликається."""
     with conn:

@@ -63,6 +63,7 @@ KINDS = {
     "klubok.end": Kind("🧶"),
     "klubok.stop": Kind("⛔", loud=True),
     "klubok.missing": Kind("⚠️", loud=True),
+    "klubok.retry": Kind("🧶"),  # KLB-009: «не опубліковано» — назад у чергу (екран)
     # пости каналу (`scan.py`, `changes.py`, `robot/publish.py`, `site.py`)
     "post.new": Kind("📥"),
     "post.changed": Kind("✏️"),

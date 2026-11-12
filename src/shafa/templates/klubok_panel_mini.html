@@ -1,0 +1,12 @@
+<div class="status mini" aria-label="Робот Клубку" aria-live="polite">
+  {% if fake %}<span class="fake">ПІДСТАВНИЙ КЛУБОК</span>{% endif %}
+  <span class="mini-item robot robot-{{ kpanel.code }}" title="Сьогодні на Клубку {{ kpanel.started }} з {{ kpanel.day_limit }} · у черзі {{ kpanel.queued }}"><span class="dot dot-{{ ktone }}" aria-hidden="true"></span>{{ kpanel.mini }}</span>
+  {% if "stop" in kpanel.buttons %}
+  <form method="post" action="/klubok/robot" class="mini-stop">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="back" value="{{ back }}">
+    <button name="action" value="stop" class="reject">Стоп</button>
+  </form>
+  {% endif %}
+</div>
+{% if counts %}<span hidden data-counts="{% for key, value in counts.items() %}{{ key }}={{ value }};{% endfor %}"></span>{% endif %}

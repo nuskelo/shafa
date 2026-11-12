@@ -15,9 +15,15 @@
 Помилка форми до кліку — Проблема з кодом KLB-001 і наступна Картка. Між Картками пауза 60–180 с.
 Ctrl+C — прапорець: поточна Картка доробляється (відповідь дочікується), потім стоп. Наприкінці,
 якщо щось виставлено, — ще один знімок: посилання й звірка «чи видно оголошення в її списку».
+
+KLB-009: екран керує тими самими командами, що й у Шафи (`sessions.command`, `publish.request(…,
+site="klubok")`): «Стоп» = Ctrl+C (поточна доробляється), «Пауза» — між парами (сесія чекає, доки
+не натиснуть «Продовжити» чи «Стоп»). Що робить зараз — `klubok-now.json` у теці даних (лише для
+панелі; збій запису публікацію не ламає).
 """
 
 import contextlib
+import json
 import random
 import sqlite3
 import time
@@ -26,10 +32,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from shafa import events
+from shafa import config, events
 from shafa.db import now
 from shafa.klubok import queue, snapshot
 from shafa.robot import klubok_form as form
+from shafa.robot import publish
 from shafa.robot.klubok_guard import Forbidden
 
 SUBMIT_WAIT = 60.0  # с на відповідь `add-edit-used` після кліку робота
@@ -37,6 +44,9 @@ HUMAN_WAIT = 600.0  # с, `--human-click`: людина перевіряє фо�
 PAUSE = (60.0, 180.0)  # с між Картками
 PAGE_PAUSE = (1.0, 2.0)  # с між сторінками знімка
 LIMIT_RANGE = (1, 30)
+TICK = 2.0  # с: як часто сесія на паузі перевіряє команду екрана
+NOW_NAME = "klubok-now.json"  # KLB-009: що робить сесія зараз — для панелі Клубку
+SITE = "klubok"
 
 DONE, STOPPED, CRASH, ERROR = "done", "stop", "crash", "klubok_error"
 LOGIN, CAPTCHA, NOT_SENT = "klubok_login", "klubok_captcha", "klubok_not_sent"
@@ -46,7 +56,7 @@ LOUD = {CAPTCHA, UNCERTAIN, LOGIN, TOO_MANY, snapshot.FAILED, snapshot.DROPPED, 
 LOGIN_TEXT = "Увійдіть у Клубок: python -m shafa robot --klubok-login"
 STOPS = {
     DONE: "виставлено, скільки просили (--limit)",
-    STOPPED: "зупинено (Ctrl+C) після поточної Картки",
+    STOPPED: "зупинено («Стоп» чи Ctrl+C) після поточної Картки",
     LOGIN: LOGIN_TEXT,
     CAPTCHA: "Клубок не прийняв публікацію: захист від роботів",
     UNCERTAIN: "немає певної відповіді Клубку — перевірте, чи опубліковано",
@@ -116,6 +126,31 @@ def close_crashed(conn: sqlite3.Connection) -> int:
     return cursor.rowcount
 
 
+def now_path() -> Path:
+    return config.data_dir() / NOW_NAME
+
+
+def write_now(path: Path | None, session_id: int, stage: str, **fields) -> None:
+    """KLB-009: «що робить сесія зараз» (`start`/`fill`/`submit`/`pause`/`paused`) для панелі."""
+    if path is None:
+        return
+    data = {"session": session_id, "stage": stage, "at": now(), **fields}
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(path.name + ".tmp")
+        temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        temp.replace(path)
+
+
+def read_now(session_id: int, path: Path | None = None) -> dict:
+    """Запис сесії `session_id`; немає, зіпсований чи від іншої сесії — порожній словник."""
+    try:
+        data = json.loads((path or now_path()).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) and data.get("session") == session_id else {}
+
+
 def nap(seconds: float, stopping: Callable[[], bool]) -> None:
     """Пауза, яку перериває Ctrl+C (прапорець)."""
     end = time.monotonic() + seconds
@@ -137,13 +172,46 @@ class Run:
         stopping: Callable[[], bool] = lambda: False,
         log: Callable[[str], None] = print,
         screens: Path | None = None,
+        now_file: Path | None = None,
     ) -> None:
         if not LIMIT_RANGE[0] <= opts.limit <= LIMIT_RANGE[1]:
             raise ValueError(f"--limit від {LIMIT_RANGE[0]} до {LIMIT_RANGE[1]}")
         self.conn, self.root, self.session, self.opts = conn, root, session, opts
-        self.make_driver, self.today, self.stopping, self.log = make_driver, today, stopping, log
-        self.sleep = sleep or (lambda s: nap(s, stopping))
-        self.screens = screens
+        self.make_driver, self.today, self.ctrl_c, self.log = make_driver, today, stopping, log
+        self.sleep = sleep or (lambda s: nap(s, self.stopping))
+        self.screens, self.now_file = screens, now_file
+
+    # --- команди екрана (KLB-009) ---
+
+    def _command(self) -> str | None:
+        result = getattr(self, "result", None)
+        if result is None:
+            return None
+        return publish.command(self.conn, result.session_id, SITE)
+
+    def stopping(self) -> bool:
+        """Ctrl+C у терміналі або «Стоп» на екрані — поточна Картка доробляється, далі стоп."""
+        return self.ctrl_c() or self._command() == "stop"
+
+    def _now(self, stage: str, **fields) -> None:
+        write_now(self.now_file, self.result.session_id, stage, limit=self.opts.limit,
+                  published=len(self.result.published), **fields)  # fmt: skip
+
+    def _hold(self) -> None:
+        """«Пауза» з екрана — між парами: чекати, доки не натиснуть «Продовжити» чи «Стоп»."""
+        paused = False
+        while self._command() == "pause":
+            if not paused:
+                self.log("Пауза з екрана — чекаю «Продовжити»")
+                self._now("paused")
+                paused = True
+            if self.ctrl_c():
+                break
+            self.sleep(TICK)
+        if self.stopping():
+            raise Stop(STOPPED)
+        if paused:
+            self.log("Продовжую")
 
     # --- сесія ---
 
@@ -159,6 +227,7 @@ class Run:
                 "INSERT INTO sessions (started_at, site) VALUES (?, 'klubok')", (now(),)
             ).lastrowid
         self.result = Result(sid, recovered=recovered)
+        self._now("start")
         events.emit("klubok.start", f"Клубок: сесія {sid}, до {self.opts.limit} оголошень")
         try:
             self._loop()
@@ -187,6 +256,7 @@ class Run:
         while True:
             if self.stopping():
                 raise Stop(STOPPED)
+            self._hold()
             if self.result.attempts >= self.opts.limit:
                 raise Stop(DONE)
             taken = queue.take(self.conn, self.root, self.today(), post_id=self.opts.post_id)
@@ -199,6 +269,8 @@ class Run:
                 raise Stop(STOPPED)
             pause = random.uniform(*self.opts.pause)
             self.log(f"Пауза {pause:.0f} с")
+            until = datetime.now().astimezone().timestamp() + pause
+            self._now("pause", until=until, last=self._last(taken.cards[0]))
             self.sleep(pause)
 
     def _check_429(self) -> None:
@@ -219,6 +291,7 @@ class Run:
                 (now(), self.result.session_id),
             )
         self.log(f"Пост {verdict.post_id}: заповнюю форму Клубку")
+        self._now("fill", post=verdict.post_id, title=(ad.name or "")[:80])
         try:
             outcome = self._submit(verdict)
         except Stop:
@@ -266,6 +339,7 @@ class Run:
         for note in driver.notes:
             self.log(f"  · {note}")
         session.issue_ticket(item_id)
+        self._now("submit", post=verdict.post_id, title=(ad.name or "")[:80])
         if self.opts.human:
             self.log(
                 f"Пост {verdict.post_id}: перевірте форму й натисніть «Опубликовать» "
@@ -305,6 +379,11 @@ class Run:
         self.result.problems.append((item_id, post_id, code, text))
         raise Stop(stop, f"{STOPS[stop]} (пост {post_id})")
 
+    def _last(self, verdict: queue.Verdict) -> dict:
+        """Як закінчилась щойно оброблена Картка — рядок «Останній: …» на панелі."""
+        done = any(item == verdict.item_id for item, _id, _name in self.result.published)
+        return {"post": verdict.post_id, "ok": done}
+
     def _blocked_log(self) -> None:
         """Що guard заблокував у цій сесії — у файл (HYP-3: хости reCAPTCHA видно лише наживо)."""
         blocked = self.session.unexpected_blocks()
@@ -333,7 +412,7 @@ class Run:
         with conn:
             conn.execute(
                 "UPDATE sessions SET ended_at = ?, stop_code = ?, stop_reason = ?, published = ?, "
-                "problems = ? WHERE id = ?",
+                "problems = ?, item_started_at = NULL, command = NULL WHERE id = ?",
                 (now(), result.code, result.reason, len(result.published), len(result.problems),
                  result.session_id),
             )  # fmt: skip
