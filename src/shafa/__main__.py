@@ -709,7 +709,7 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
                 )  # fmt: skip
                 result = klubok_publish.run(
                     conn, root, session, opts, stopping=lambda: bool(stop), log=log,
-                    screens=shafa_form.screens_dir(),
+                    screens=shafa_form.screens_dir(), now_file=klubok_publish.now_path(),
                 )  # fmt: skip
                 print("\n".join(result.lines()), flush=True)
                 return 0 if result.code in (klubok_publish.DONE, klubok_publish.STOPPED) else 1

@@ -398,18 +398,19 @@ def clear_now() -> None:
         now_path().unlink()
 
 
-def command(conn: sqlite3.Connection, session_id: int) -> str | None:
+def command(conn: sqlite3.Connection, session_id: int, site: str = "shafa") -> str | None:
     row = conn.execute(
-        "SELECT command FROM sessions WHERE id = ? AND site = 'shafa'", (session_id,)
+        "SELECT command FROM sessions WHERE id = ? AND site = ?", (session_id, site)
     ).fetchone()
     return row[0] if row else None
 
 
-def request(conn: sqlite3.Connection, what: str | None) -> bool:
-    """Пауза / Стоп / Продовжити (None) для запущеної сесії. False — сесії немає."""
+def request(conn: sqlite3.Connection, what: str | None, site: str = "shafa") -> bool:
+    """Пауза / Стоп / Продовжити (None) для запущеної сесії. False — сесії немає.
+    `site` — чия сесія (KLB-009: `klubok` слухає ті самі команди)."""
     with conn:
         cursor = conn.execute(
-            "UPDATE sessions SET command = ? WHERE ended_at IS NULL AND site = 'shafa'", (what,)
+            "UPDATE sessions SET command = ? WHERE ended_at IS NULL AND site = ?", (what, site)
         )
     return cursor.rowcount > 0
 
