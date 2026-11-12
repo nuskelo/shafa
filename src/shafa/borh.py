@@ -64,6 +64,7 @@ class ImportResult:
     not_in_export: list[int] = field(default_factory=list)
     no_photo: list[int] = field(default_factory=list)
     problems: list[tuple[int, str]] = field(default_factory=list)  # створено, але в Проблемах
+    only_klubok: list[int] = field(default_factory=list)  # KLB-008 (R8): є Картка «лише Клубок»
 
     def text(self) -> str:
         summary = (
@@ -73,6 +74,10 @@ class ImportResult:
         if self.reordered:
             summary += f" · порядок оновлено: {self.reordered}"
         lines = [summary]
+        if self.only_klubok:
+            lines.append(
+                "Є Картка лише Клубок (пропущено): " + ", ".join(map(str, self.only_klubok))
+            )
         if self.not_in_export:
             lines.append("Немає в експорті: " + ", ".join(map(str, self.not_in_export)))
         if self.problems:
@@ -133,6 +138,11 @@ def import_old(
         post = posts.get(post_id)
         if post is None:
             result.not_in_export.append(post_id)
+            continue
+        if conn.execute(
+            "SELECT 1 FROM items WHERE post_id = ? AND only_klubok = 1", (post_id,)
+        ).fetchone():
+            result.only_klubok.append(post_id)  # KLB-008 (R8): Шафа цей пост не бере
             continue
         if _known(conn, post_id):
             result.existed.append(post_id)

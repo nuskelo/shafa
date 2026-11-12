@@ -12,6 +12,12 @@ PUBLISHED_DIR = "Опубліковано"  # зарезервована наз�
 # `<дані>/borh/<номер>/`, а не папка в Головній. Назва Картки — `borh-<номер>`.
 OLD_PREFIX = "borh-"
 OLD_DIR = "borh"
+# Картки «лише Клубок» (KLB-008): старий пост з Експорту, якого немає на Шафі. Одне фото поста й
+# текст — у `<дані>/klubok-old/<номер>/`, у Головну нічого не кладемо. Назва Картки — `klubok-<номер>`.
+# Та сама тека — запасне фото еталона Шафи, чиї фото вже стерто (R5).
+KLUBOK_PREFIX = "klubok-"
+KLUBOK_DIR = "klubok-old"
+SPARE_PHOTO = "1.jpg"  # одне фото поста з Експорту в цій теці
 # Картка-варіант одного розміру з поста з кількома розмірами (CORE-014): `<папка>~<розмір>`
 # (`3654~43`, `borh-3655~36`). Фото — спільна папка поста, назва без суфікса.
 VARIANT_SEP = "~"
@@ -42,6 +48,16 @@ def is_old(folder_name: str) -> bool:
     return folder_name.startswith(OLD_PREFIX)
 
 
+def is_klubok(folder_name: str) -> bool:
+    """Картка «лише Клубок» (KLB-008, фото в теці даних)."""
+    return folder_name.startswith(KLUBOK_PREFIX)
+
+
+def in_data_dir(folder_name: str) -> bool:
+    """Фото Картки — у теці даних програми, не в Головній (старий пост Шафи чи «лише Клубок»)."""
+    return is_old(folder_name) or is_klubok(folder_name)
+
+
 def base_name(folder_name: str) -> str:
     """Папка з фото Картки: для варіанта — без `~<розмір>`."""
     return folder_name.split(VARIANT_SEP, 1)[0]
@@ -65,12 +81,27 @@ def old_root() -> Path:
     return config.data_dir() / OLD_DIR
 
 
+def klubok_folder_name(post_id: int) -> str:
+    return f"{KLUBOK_PREFIX}{post_id}"
+
+
+def klubok_root() -> Path:
+    return config.data_dir() / KLUBOK_DIR
+
+
+def klubok_spare(post_id: int) -> Path:
+    """Тека з одним фото поста з Експорту для Клубку (Картка «лише Клубок» чи запасне еталона)."""
+    return klubok_root() / str(post_id)
+
+
 def item_folder(root: Path, folder_name: str) -> Path:
-    """Де лежать фото Картки: папка в Головній або (старий пост) тека в даних програми.
-    Варіанти одного поста (CORE-014) ділять одну папку."""
+    """Де лежать фото Картки: папка в Головній або (старий пост, «лише Клубок») тека в даних
+    програми. Варіанти одного поста (CORE-014) ділять одну папку."""
     folder_name = base_name(folder_name)
     if is_old(folder_name):
         return old_root() / folder_name.removeprefix(OLD_PREFIX)
+    if is_klubok(folder_name):
+        return klubok_root() / folder_name.removeprefix(KLUBOK_PREFIX)
     return root / folder_name
 
 
@@ -78,7 +109,7 @@ def photo_folder(root: Path, folder_name: str) -> Path:
     """Фото Картки для Клубку (KLB-002): `item_folder`, а якщо такої теки немає й це не старий пост —
     `<Головна>/Опубліковано/<папка>` (робот Шафи переносить туди опубліковане)."""
     folder = item_folder(root, folder_name)
-    if folder.is_dir() or is_old(base_name(folder_name)):
+    if folder.is_dir() or in_data_dir(base_name(folder_name)):
         return folder
     return root / PUBLISHED_DIR / base_name(folder_name)
 
@@ -107,11 +138,11 @@ def list_photos(folder: Path) -> tuple[str, ...]:
 def list_folders(root: Path, channel_id: str | None) -> list[Folder]:
     """Папки товарів першого рівня, у порядку «як у провіднику».
 
-    Теку «Опубліковано» і назви `borh-…` (зарезервовані для старих постів) пропускає.
+    Теку «Опубліковано» і назви `borh-…`/`klubok-…` (зарезервовані для старих постів) пропускає.
     """
     folders = [
         Folder(p.name, post_id_from_name(p.name, channel_id), list_photos(p))
         for p in root.iterdir()
-        if p.is_dir() and not _is_hidden(p) and p.name != PUBLISHED_DIR and not is_old(p.name)
+        if p.is_dir() and not _is_hidden(p) and p.name != PUBLISHED_DIR and not in_data_dir(p.name)
     ]
     return sorted(folders, key=lambda f: natural_key(f.name))

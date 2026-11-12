@@ -16,7 +16,7 @@ from pathlib import Path
 
 from shafa import ai, events, fill, review, rules, scan, variants
 from shafa.db import Status, now
-from shafa.folders import Folder, base_name, is_old
+from shafa.folders import Folder, base_name, in_data_dir
 
 LOG_NAME = "post-changes.json"  # у теці даних: зміни постів, що вже на Шафі (для звіту, BOT-009)
 LOG_KEEP = 200
@@ -242,7 +242,7 @@ def sync_photos(
     when = _date(moment)
     with conn:
         for row in rows:
-            if is_old(row["folder_name"]):  # фото старих постів — у теці даних, не в Головній
+            if in_data_dir(row["folder_name"]):  # старі, «лише Клубок» — фото в теці даних
                 continue
             item_id, status = row["id"], row["status"]
             folder = by_name.get(base_name(row["folder_name"]))  # варіанти ділять папку (CORE-014)

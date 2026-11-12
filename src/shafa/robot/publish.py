@@ -230,6 +230,7 @@ def queue_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
         SELECT items.id, items.folder_name FROM items LEFT JOIN posts USING (post_id)
         WHERE items.status = ? AND items.purged_at IS NULL
           AND items.shafa_id IS NULL  -- ROBOT-011: що вже є на Шафі, вдруге не публікуємо ніколи
+          AND items.only_klubok = 0  -- KLB-008: Картка «лише Клубок» на Шафу не йде ніколи
         ORDER BY items.folder_name LIKE 'borh-%', items.queue_pos IS NULL, items.queue_pos,
                  posts.date IS NULL, posts.date, items.id
         """,
