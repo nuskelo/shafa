@@ -13,6 +13,11 @@
 
 Модуль не знає ні браузера, ні бази Карток: запит, відповідь і гроші. Куди йде рішення — справа
 `robot.publish`.
+
+KLB-011: той самий суддя для Клубку — `Judge(…, site="klubok")`: своя інструкція
+(`prompts/duplicate-klubok.md`), підписи «на Клубку», ціна з поста (не ціна Шафи), без факту про
+інший пост (`other_post` шукає `items.shafa_id`). `Verdict.retry` — ШІ не запитано з тимчасової
+причини (бюджет, ключ, мережа): Клубок спробує ще раз; Шафа прапорця не читає.
 """
 
 import base64
@@ -31,6 +36,8 @@ from shafa.robot import lang
 from shafa.robot.listings import Listing
 
 PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "duplicate.md"
+SHAFA, KLUBOK = "shafa", "klubok"
+PROMPT_FILES = {SHAFA: PROMPT_FILE, KLUBOK: PROMPT_FILE.with_name("duplicate-klubok.md")}
 MAX_TOKENS = 400
 # Оцінка виходу для бюджету: JSON з двома полями, `why` — 1–2 речення.
 OUTPUT_TOKENS_ESTIMATE = 200
@@ -58,6 +65,7 @@ class Verdict:
     why: str
     asked: bool = False
     downgraded: bool = False  # ШІ казав «no», обережне правило зробило «unsure»
+    retry: bool = False  # KLB-011: не запитано з тимчасової причини — спробувати пізніше
 
 
 _AI_SAID = re.compile(r"ШІ не (?:впевнений|порівняв): .*", re.DOTALL)
@@ -69,12 +77,12 @@ def verdict_text(problem_text: str | None) -> str | None:
     return match.group(0) if match else None
 
 
-def unasked(why: str) -> Verdict:
-    return Verdict(UNSURE, why)
+def unasked(why: str, *, retry: bool = False) -> Verdict:
+    return Verdict(UNSURE, why, retry=retry)
 
 
-def system_prompt() -> str:
-    return PROMPT_FILE.read_text(encoding="utf-8")
+def system_prompt(site: str = SHAFA) -> str:
+    return PROMPT_FILES[site].read_text(encoding="utf-8")
 
 
 def _number(value: float) -> str:
@@ -85,12 +93,22 @@ def _list(values: Any) -> str:
     return ", ".join(values) if values else "невідомо"
 
 
-def our_facts(card: review.Card) -> str:
+def _price_line(card: review.Card, site: str) -> str:
+    if site == KLUBOK:  # KLB-011: на Клубку — ціна з поста, без +15 % Шафи
+        from shafa.klubok import fields
+
+        price = fields.klubok_price(card)
+        return f"Ціна: {price} грн" if price else "Ціна: немає"
+    price = card.fields["price"].value
+    return f"Ціна на Шафі: {price} грн" if price else "Ціна: немає"
+
+
+def our_facts(card: review.Card, site: str = SHAFA) -> str:
     f = {name: view.value for name, view in card.fields.items()}
     insole = rules.insole_lengths(card.post_text or "")
     lines = [
         f"Назва: {f['title'] or '—'}",
-        f"Ціна на Шафі: {f['price']} грн" if f["price"] else "Ціна: немає",
+        _price_line(card, site),
         f"Розміри: {_list(f['sizes'])}",
         f"Кольори: {_list(f['colors'])}",
         "Довжина устілки: " + (", ".join(_number(x) for x in insole) if insole else "—"),
@@ -99,7 +117,7 @@ def our_facts(card: review.Card) -> str:
     return "Новий товар (ще не опублікований):\n" + "\n".join(lines)
 
 
-def their_facts(found: Listing) -> str:
+def their_facts(found: Listing, site: str = SHAFA) -> str:
     lines = [
         f"Назва: {found.name}",
         f"Бренд: {found.brand or 'невідомо'}",
@@ -108,7 +126,10 @@ def their_facts(found: Listing) -> str:
         f"Кольори: {_list(found.colors)}",
         "Опису в знімку немає.",
     ]
-    return "Уже опубліковане оголошення на Шафі:\n" + "\n".join(lines)
+    where = {KLUBOK: "Уже виставлене оголошення на Клубку"}.get(
+        site, "Уже опубліковане оголошення на Шафі"
+    )
+    return f"{where}:\n" + "\n".join(lines)
 
 
 def other_post(conn: sqlite3.Connection, card: review.Card, found: Listing) -> int | None:
@@ -146,23 +167,29 @@ def build_request(
     ours: PreparedPhoto,
     theirs: PreparedPhoto,
     post: int | None = None,
+    site: str = SHAFA,
 ) -> dict[str, Any]:
     """Параметри `client.messages.create`: Фото 1 — наше, Фото 2 — знайдене, далі тексти
     (і факт про інший пост, якщо `post` задано)."""
-    facts = f"{our_facts(card)}\n\n{their_facts(found)}"
+    facts = f"{our_facts(card, site)}\n\n{their_facts(found, site)}"
     if post is not None:
         facts += f"\n\n{post_fact(card, post)}"
+    theirs_label = (
+        "Фото 2 — оголошення, яке вже є на Клубку:"
+        if site == KLUBOK
+        else "Фото 2 — уже опубліковане оголошення:"
+    )
     content = [
         {"type": "text", "text": "Фото 1 — новий товар:"},
         _image(ours),
-        {"type": "text", "text": "Фото 2 — уже опубліковане оголошення:"},
+        {"type": "text", "text": theirs_label},
         _image(theirs),
         {"type": "text", "text": facts},
     ]
     return {
         "model": ai.MODEL,
         "max_tokens": MAX_TOKENS,
-        "system": system_prompt(),
+        "system": system_prompt(site),
         "thinking": {"type": "between_tools"},  # мислення вимкнене, як і в бланка
         "output_config": {"format": {"type": "json_schema", "schema": SCHEMA}},
         "messages": [{"role": "user", "content": content}],
@@ -216,7 +243,7 @@ class Judge:
     """Викликається роботом перед «Проблемою». Залежності ззовні — тести без мережі й ключів.
 
     `client` — фабрика клієнта Claude (ключ береться лише в момент потреби), `budget_left` —
-    скільки мікродоларів лишилось у денному бюджеті ШІ.
+    скільки мікродоларів лишилось у денному бюджеті ШІ; `site` — Шафа чи Клубок (KLB-011).
     """
 
     def __init__(
@@ -224,8 +251,9 @@ class Judge:
         conn: sqlite3.Connection,
         client: Callable[[], Any],
         budget_left: Callable[[], int],
+        site: str = SHAFA,
     ) -> None:
-        self.conn, self.client, self.budget_left = conn, client, budget_left
+        self.conn, self.client, self.budget_left, self.site = conn, client, budget_left, site
 
     def __call__(
         self, card: review.Card, found: Listing, our_photo: Path | None, their_photo: bytes | None
@@ -237,20 +265,21 @@ class Judge:
             theirs = photos.prepare_bytes(their_photo, "shafa.jpg")
         except (OSError, UnidentifiedImageError):
             return unasked("фото не читається")
-        request = build_request(card, found, ours, theirs, other_post(self.conn, card, found))
+        post = other_post(self.conn, card, found) if self.site == SHAFA else None
+        request = build_request(card, found, ours, theirs, post, self.site)
         try:
             left, cost = self.budget_left(), estimate(request, ours, theirs).cost_micro_usd
         except Exception as error:  # noqa: BLE001 — не вміємо порахувати гроші: не питаємо
-            return unasked(f"бюджет ШІ не прочитано ({error})")
+            return unasked(f"бюджет ШІ не прочитано ({error})", retry=True)
         if left < cost:
-            return unasked("вичерпано денний бюджет ШІ")
+            return unasked("вичерпано денний бюджет ШІ", retry=True)
         try:
             answer, usage = ai.call(self.client(), request)
         except ai.AiError as error:
             self._log(card.id, error.usage, str(error))
-            return unasked(str(error))
+            return unasked(str(error), retry=True)
         except config.ConfigError as error:
-            return unasked(str(error))
+            return unasked(str(error), retry=True)
         self._log(card.id, usage, None)
         if (verdict := _answer(answer)) is None:
             return unasked("відповідь ШІ не за схемою")
