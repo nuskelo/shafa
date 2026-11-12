@@ -46,7 +46,16 @@ from shafa import (
 )
 from shafa.db import Status
 from shafa.export import parse_export
-from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, list_folders, old_root
+from shafa.folders import (
+    PUBLISHED_DIR,
+    base_name,
+    is_klubok,
+    is_old,
+    item_folder,
+    klubok_root,
+    list_folders,
+    old_root,
+)
 from shafa.klubok import queue as klubok_queue
 from shafa.robot import browser, control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
@@ -133,6 +142,7 @@ MESSAGES = {
     "to_review": "Картку повернуто на перевірку — виправте поля й схваліть знову",
     "no_restore": "Такий пост робот не опублікує — повертати його на перевірку не можна",
     "on_shafa_block": "Цей товар уже є на Шафі — повертати його на перевірку й публікувати вдруге не можна",
+    "only_klubok": "Ця Картка — лише для Клубку, у Шафі її не схвалюють і не публікують",
     "sticky": "Спершу перевірте Шафу і скористайтеся кнопками нижче",
     "on_shafa": "Картку перенесено в Опубліковані",
     "bad_link": "Це не посилання на Шафу. Вставте посилання на товар з shafa.ua або його номер",
@@ -328,6 +338,7 @@ SECURITY_HEADERS = {
 }
 
 _ITEM = re.compile(r"/item/(\d+)")
+ONLY_KLUBOK_TEXT = "Ця Картка — лише для Клубку, у Шафі її немає."
 _SESSION = re.compile(r"/session/(\d+)")
 _PHOTO = re.compile(r"/(photo|thumb)/(\d+)/(\d+)")
 _DUPLICATE_PHOTO = re.compile(r"/duplicate/(\d+)\.jpg")
@@ -1507,6 +1518,10 @@ class App:
             card = review.load_card(conn, item_id)
             if card is None:
                 return self.error(404, "Такої Картки немає — можливо, її вже видалено.")
+            if (
+                card.only_klubok
+            ):  # KLB-008: Шафа її не показує й не змінює (вкладка «Клубок» — KLB-009)
+                return self.error(404, ONLY_KLUBOK_TEXT)
             bad = {name for name in request.query.get("bad", []) if name in review.SPEC}
             row = conn.execute(
                 "SELECT duplicate_url, duplicate_name, shafa_url, shafa_id, problem_code FROM items WHERE id = ?",
@@ -1582,6 +1597,10 @@ class App:
             card = review.load_card(conn, item_id)
             if card is None:
                 return self.error(404, "Такої Картки немає — можливо, її вже видалено.")
+            if (
+                card.only_klubok
+            ):  # KLB-008: Шафа її не показує й не змінює (вкладка «Клубок» — KLB-009)
+                return self.error(404, ONLY_KLUBOK_TEXT)
 
             stay = (request.form.get("stay") or [""])[
                 0
@@ -1887,7 +1906,10 @@ class App:
             conn.close()
         if row is None:
             return text(404, "Фото не знайдено")
-        root = (old_root() if is_old(row["folder_name"]) else self.root).resolve()
+        name = row["folder_name"]
+        root = (
+            old_root() if is_old(name) else klubok_root() if is_klubok(name) else self.root
+        ).resolve()
         folders = [item_folder(self.root, row["folder_name"]).resolve()]
         if row["status"] == Status.PUBLISHED:  # робот переносить папку в «Опубліковано» (TD-016)
             folders.insert(0, root / PUBLISHED_DIR / base_name(row["folder_name"]))
@@ -1982,7 +2004,8 @@ def klubok_line(conn, root: Path, card: review.Card) -> dict | None:
         except klubok_queue.SetupError as error:
             return out | {"text": f"налаштування з помилкою: {error}"}
         if verdict is None:
-            if card.post_id is not None and card.post_id <= limit:
+            old = card.post_id is not None and card.post_id <= limit
+            if old and klubok_queue.wave(conn, card.post_id) is None:  # KLB-008: хвилі немає
                 return out | {"text": f"не піде: пост старіший за {limit}"}
             if card.status == Status.REVIEW:
                 return out | {"text": "піде після схвалення"}

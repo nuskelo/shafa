@@ -119,8 +119,11 @@ def _parse(value: object) -> datetime | None:
 def _problems_now(conn: sqlite3.Connection) -> dict[str, str]:
     return {
         str(row["id"]): row["problem_code"] or ""
-        for row in conn.execute("SELECT id, problem_code FROM items WHERE status = ?", (Status.PROBLEM,))
-    }  # fmt: skip
+        for row in conn.execute(
+            "SELECT id, problem_code FROM items WHERE status = ? AND only_klubok = 0",
+            (Status.PROBLEM,),
+        )
+    }  # fmt: skip  (KLB-008: Проблеми Карток «лише Клубок» — не тривога Шафи)
 
 
 def _last_session(conn: sqlite3.Connection) -> int:

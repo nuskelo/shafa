@@ -6,6 +6,7 @@ from shafa import db
 
 # KLB-002 (версія 18): таблиці Клубку і `sessions.site`
 KLUBOK_DROP = (
+    "DROP TABLE klubok_waves; ALTER TABLE items DROP COLUMN only_klubok; "
     "DROP TABLE klubok_ads; DROP TABLE klubok_listings; DROP TABLE klubok_listings_read; "
     "ALTER TABLE sessions DROP COLUMN site;"
 )
@@ -28,19 +29,19 @@ LISTINGS_DROP = (
 
 
 def test_schema_created_with_version(conn):
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 18
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION == 19
     assert tables(conn) == {
         "posts", "items", "photos", "blanks", "ai_requests", "edits", "sessions", "ai_batches",
         "ai_batch_items", "bot_updates", "bot_drafts", "bot_draft_parts", "bot_status",
         "bot_summaries", "site_jobs", "site_cache", "my_listings", "my_listings_read",
         "post_checks", "ai_answers", "channel_posts", "outbox", "server_sync", "owner_cmds",
-        "klubok_ads", "klubok_listings", "klubok_listings_read",
+        "klubok_ads", "klubok_listings", "klubok_listings_read", "klubok_waves",
         "sqlite_sequence",
     }  # fmt: skip
     assert {"cache_write_tokens", "cache_read_tokens", "batch_id"} <= columns(conn, "ai_requests")
     assert {"archived_at", "purged_at", "shafa_id", "shafa_url", "publish_started_at",
             "published_at", "session_id", "duplicate_ok_at", "duplicate_url",
-            "duplicate_name"} <= columns(
+            "duplicate_name", "only_klubok"} <= columns(
         conn, "items"
     )  # fmt: skip
     assert {"stop_code", "item_started_at", "command"} <= columns(conn, "sessions")
@@ -214,7 +215,8 @@ def test_version_5_migrated_keeps_cost_records(tmp_path):
         conn.execute("SELECT sql FROM sqlite_master WHERE name = 'items'").fetchone()[0]
         == (
             sql[:-1]
-            + ", queue_pos INTEGER, duplicate_name TEXT, rules_version INTEGER, refill_at TEXT)"  # лише нові колонки, без перебудови
+            + ", queue_pos INTEGER, duplicate_name TEXT, rules_version INTEGER, refill_at TEXT, "
+            "only_klubok INTEGER NOT NULL DEFAULT 0 CHECK (only_klubok IN (0, 1)))"  # лише нові колонки, без перебудови
         )
     )
     with conn, pytest.raises(sqlite3.IntegrityError):

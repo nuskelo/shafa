@@ -355,6 +355,20 @@ def _open(bot: Any, query: dict, row: sqlite3.Row) -> None:
     _finish(bot, query, f"Пост {post_name(row)} — окреме повідомлення нижче", _without(query))
 
 
+def session_problems(conn: sqlite3.Connection, session: sqlite3.Row) -> list[sqlite3.Row]:
+    """Проблеми сесії робота Шафи (Картки «лише Клубок» — ні, KLB-008)."""
+    return conn.execute(
+        "SELECT id, status, problem_code, problem_text, shafa_id, shafa_url, post_id, folder_name "
+        "FROM items WHERE status = ? AND only_klubok = 0 "
+        "AND (session_id = ? OR (updated_at >= ? AND updated_at <= ?)) "
+        "ORDER BY updated_at DESC LIMIT ?",
+        (
+            Status.PROBLEM, session["id"], session["started_at"],
+            session["ended_at"] or "9999", SESSION_ITEMS,
+        ),
+    ).fetchall()  # fmt: skip
+
+
 def _what(bot: Any, query: dict, raw_id: str) -> None:
     """Зупинка робота: чому і які Проблеми були в цій сесії."""
     session = None
@@ -367,15 +381,7 @@ def _what(bot: Any, query: dict, raw_id: str) -> None:
         return
     reason = control.LAST.get(session["stop_code"] or "", "") or session["stop_reason"] or ""
     lines = [f"📋 Сесія {session['id']}: {reason.strip().rstrip('.') or 'причина невідома'}."]
-    rows = bot.conn.execute(
-        "SELECT id, status, problem_code, problem_text, shafa_id, shafa_url, post_id, folder_name "
-        "FROM items WHERE status = ? AND (session_id = ? OR (updated_at >= ? AND updated_at <= ?)) "
-        "ORDER BY updated_at DESC LIMIT ?",
-        (
-            Status.PROBLEM, session["id"], session["started_at"],
-            session["ended_at"] or "9999", SESSION_ITEMS,
-        ),
-    ).fetchall()  # fmt: skip
+    rows = session_problems(bot.conn, session)
     if rows:
         lines.append("Проблеми цієї сесії:")
         lines += ["• " + card_text(r) for r in rows]

@@ -128,7 +128,8 @@ def _problems(conn: sqlite3.Connection, day: date) -> str:
     codes = Counter(
         code
         for code, stamp in conn.execute(
-            "SELECT problem_code, updated_at FROM items WHERE status = ? AND updated_at >= ?",
+            "SELECT problem_code, updated_at FROM items WHERE status = ? AND updated_at >= ? "
+            "AND only_klubok = 0",
             (Status.PROBLEM, _since(day)),
         )
         if _on(stamp, day)
@@ -144,7 +145,9 @@ def _problems(conn: sqlite3.Connection, day: date) -> str:
 
 def _waiting(conn: sqlite3.Connection) -> str:
     def count(status: Status) -> int:
-        return conn.execute("SELECT count(*) FROM items WHERE status = ?", (status,)).fetchone()[0]
+        return conn.execute(
+            "SELECT count(*) FROM items WHERE status = ? AND only_klubok = 0", (status,)
+        ).fetchone()[0]
 
     parts = []
     if review := count(Status.REVIEW):

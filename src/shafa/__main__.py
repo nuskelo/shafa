@@ -22,6 +22,9 @@
 не пише; `python -m shafa klubok-catalog --from <тека з categors.json і filters.json>` — знімок.
 `python -m shafa klubok-queue --db <копія> --root <Головна> [--today РРРР-ММ-ДД]` — KLB-002: пробний
 прогін черги Клубку (копія бази в пам'яті, файл не змінюється; ≤ 60 рядків).
+`python -m shafa klubok-import --export <тека Експорту> --wave 1|4 [--dry-run] [--db …] [--root …]` —
+KLB-008: старі пости хвилі в чергу Клубку (еталон Шафи чи нова Картка «лише Клубок»); `--dry-run` —
+копія бази в пам'яті, нічого не пише (≤ 60 рядків).
 `python -m shafa robot --klubok-login` — KLB-003: вхід у Клубок руками (профіль `<дані>/klubok-profile`);
 `--klubok-snapshot --db …` — знімок її оголошень (лише читання сайту); `--klubok-publish --db … --root …
 --limit N [--post P] [--human-click]` — ПУБЛІКАЦІЯ на Клубку з черги (живий сайт, лише з дозволу
@@ -231,6 +234,14 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--db", type=Path, required=True, help="файл бази (читається, не змінюється)")
     _add_root(cmd)
     cmd.add_argument("--today", help="день РРРР-ММ-ДД (типово сьогодні)")
+    cmd = commands.add_parser(
+        "klubok-import", help="старі пости з Експорту в чергу Клубку хвилею 1 чи 4 (KLB-008)"
+    )
+    cmd.add_argument("--export", type=Path, required=True, help="папка Експорту (або result.json)")
+    cmd.add_argument("--wave", type=int, required=True, choices=(1, 4), help="хвиля: 1 чи 4")
+    cmd.add_argument("--dry-run", action="store_true", help="лише звіт, нічого не пише")
+    cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
+    _add_root(cmd)
     cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
     mode.add_argument("--login", action="store_true", help="відкрити профіль робота для входу")
@@ -1121,6 +1132,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_klubok_catalog(args)
     if args.command == "klubok-queue":
         return run_klubok_queue(parser, args)
+    if args.command == "klubok-import":
+        return run_klubok_import(parser, args)
     if args.command == "robot":
         return run_robot(parser, args)
     if args.command == "bot":
@@ -1203,6 +1216,39 @@ def run_klubok_queue(parser: argparse.ArgumentParser, args: argparse.Namespace) 
         return 2
     finally:
         conn.close()
+    return 0
+
+
+def run_klubok_import(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from datetime import datetime
+
+    from shafa import app
+    from shafa.klubok import importer, preview
+
+    export = args.export / "result.json" if args.export.is_dir() else args.export
+    if not export.is_file():
+        parser.error(f"Експорт не знайдено: {export}")
+    root = _root(parser, args)
+    path = args.db or app.db_path()
+    if not path.is_file():
+        parser.error(f"Базу не знайдено: {path}")
+    posts = read_export(export)
+    try:
+        conn = preview.open_copy(path) if args.dry_run else db.connect(path)
+    except (preview.CopyError, RuntimeError) as error:
+        print(error)
+        return 2
+    try:
+        report = importer.run(
+            conn, posts, export.parent, root, args.wave,
+            apply=not args.dry_run, today=datetime.now().astimezone(),
+        )  # fmt: skip
+    except importer.ImportFailed as error:
+        print(error)
+        return 2
+    finally:
+        conn.close()
+    print("\n".join(report.lines()))
     return 0
 
 

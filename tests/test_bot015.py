@@ -412,6 +412,7 @@ def test_migration_keeps_drafts_and_accepts_queued(tmp_path):
     conn = db.connect(path)
     with conn:
         conn.executescript(
+            "DROP TABLE klubok_waves; ALTER TABLE items DROP COLUMN only_klubok; "
             "DROP TABLE klubok_ads; DROP TABLE klubok_listings; DROP TABLE klubok_listings_read; "
             "ALTER TABLE sessions DROP COLUMN site; "  # KLB-002 (18)
             "DROP TABLE outbox; DROP TABLE server_sync; DROP TABLE owner_cmds; "

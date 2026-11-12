@@ -8,7 +8,15 @@ from shafa import catalog, events, variants
 from shafa.bot.hashtag import accessory_group, item_kind, size_of
 from shafa.db import Status, now
 from shafa.export import Post
-from shafa.folders import Folder, base_name, is_old, natural_key, variant_name, variant_size
+from shafa.folders import (
+    Folder,
+    base_name,
+    in_data_dir,
+    is_old,
+    natural_key,
+    variant_name,
+    variant_size,
+)
 from shafa.rules import many_items, many_sizes, price_from_text
 
 MAX_PHOTOS = 10
@@ -248,7 +256,7 @@ def _mark_missing(conn: sqlite3.Connection, present: set[str]) -> None:
     for row in rows:
         if base_name(row["folder_name"]) in present or row["problem_code"] == "folder_missing":
             continue
-        if is_old(row["folder_name"]):  # фото старого поста — у теці даних, не в Головній
+        if in_data_dir(row["folder_name"]):  # старий пост, «лише Клубок» — фото в теці даних
             continue
         if robot_problem(row["problem_code"]):
             continue
@@ -316,11 +324,14 @@ def scan(conn: sqlite3.Connection, posts: dict[int, Post], folders: list[Folder]
     changes.sync_photos(conn, folders)  # TD-004: фото Карток review/approved
     _announce_new(conn, known)
 
-    new = conn.execute("SELECT count(*) FROM items WHERE status = ?", (Status.NEW,)).fetchone()[0]
+    new = conn.execute(
+        "SELECT count(*) FROM items WHERE status = ? AND only_klubok = 0", (Status.NEW,)
+    ).fetchone()[0]
     problems = [
         Problem(r["folder_name"], r["problem_code"], r["problem_text"])
         for r in conn.execute(
-            "SELECT folder_name, problem_code, problem_text FROM items WHERE status = ?",
+            "SELECT folder_name, problem_code, problem_text FROM items WHERE status = ? "
+            "AND only_klubok = 0",
             (Status.PROBLEM,),
         )
     ]
@@ -340,7 +351,7 @@ def rescan_folder(conn: sqlite3.Connection, folder_name: str, folders: list[Fold
         ).fetchone()
         if row is None or not touchable(row["status"], row["problem_code"]):
             return None
-        if is_old(folder_name):
+        if in_data_dir(folder_name):  # одне фото поста в теці даних (CORE-005, KLB-008)
             from shafa import borh  # borh бере правила звідси
 
             return borh.recheck(conn, row["id"])

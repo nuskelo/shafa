@@ -92,7 +92,8 @@ def pick_sections(conn: sqlite3.Connection, root: Path, count: int) -> list[int]
     rows += [
         r[0]
         for r in conn.execute(
-            "SELECT id FROM items WHERE status = ? AND purged_at IS NULL ORDER BY id",
+            "SELECT id FROM items WHERE status = ? AND purged_at IS NULL AND only_klubok = 0 "
+            "ORDER BY id",
             (Status.REVIEW,),
         )
     ]
@@ -117,7 +118,8 @@ def pick_posts(conn: sqlite3.Connection, post_ids: list[int]) -> tuple[list[int]
     ids, missing = [], []
     for post_id in post_ids:
         row = conn.execute(
-            "SELECT id FROM items WHERE post_id = ? AND purged_at IS NULL ORDER BY id LIMIT 1",
+            "SELECT id FROM items WHERE post_id = ? AND purged_at IS NULL AND only_klubok = 0 "
+            "ORDER BY id LIMIT 1",
             (post_id,),
         ).fetchone()
         (ids if row else missing).append(row[0] if row else post_id)

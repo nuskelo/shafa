@@ -47,7 +47,8 @@ STATE_FILES = (
     "rehearse-last.json",
     "health-last.json",
 )
-DATA_DIRS = (folders.OLD_DIR, "duplicates")  # фото старих постів і знайдені дублі
+# фото старих постів, Карток «лише Клубок» (KLB-008) і знайдені дублі
+DATA_DIRS = (folders.OLD_DIR, folders.KLUBOK_DIR, "duplicates")
 SIDE_SUFFIXES = ("-journal", "-wal", "-shm")
 STORED = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".gif"}  # не стискаються
 
@@ -253,11 +254,13 @@ def _tree(base: Path, prefix: str, only: tuple[str, ...] | None, skip: frozenset
 
 
 def _is_unit(arcname: str) -> bool:
-    """Тека-одиниця фото: `root/<н>`, `root/Опубліковано/<н>`, `data/borh/<н>`."""
+    """Тека-одиниця фото: `root/<н>`, `root/Опубліковано/<н>`, `data/borh/<н>`, `data/klubok-old/<н>`."""
     parts = arcname.split("/")
     if parts[0] == ROOT:
         return len(parts) == (3 if parts[1:2] == [folders.PUBLISHED_DIR] else 2)
-    return parts[0] == DATA and len(parts) == 3 and parts[1] == folders.OLD_DIR
+    return (
+        parts[0] == DATA and len(parts) == 3 and parts[1] in (folders.OLD_DIR, folders.KLUBOK_DIR)
+    )
 
 
 # --- unpack ---
@@ -539,6 +542,6 @@ def _missing_photos(conn: sqlite3.Connection, root: Path) -> list[str]:
     return [
         name
         for name, source in rows
-        if (source == "bot" or folders.is_old(name))
+        if (source == "bot" or folders.in_data_dir(name))
         and not folders.item_folder(root, name).is_dir()
     ]

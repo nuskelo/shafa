@@ -162,6 +162,7 @@ class Card:
     queue_pos: int | None = None  # місце старої Картки у списку імпорту
     old_rules: bool = False  # нова інструкція ШІ могла змінити бланк — «Перезаповнити» (CORE-009 B)
     place: tuple[int, int] = (0, 0)  # CORE-014: «1 з 3» серед сестер-розмірів; (0, 0) — не варіант
+    only_klubok: bool = False  # KLB-008: Картка «лише Клубок» — Шафа її не бачить
 
     @property
     def variant(self) -> str | None:
@@ -517,6 +518,7 @@ def load_card(conn: sqlite3.Connection, item_id: int) -> Card | None:
         row["queue_pos"],
         bool(blanks) and bool(row["needs_ai"]),
         variants.place(conn, row["folder_name"], row["post_id"]),
+        bool(row["only_klubok"]),
     )
 
 
@@ -606,6 +608,13 @@ NO_RESTORE = ("many_items", "no_section")
 NO_RESTORE_MSG = "no_restore"
 
 ON_SHAFA = "on_shafa_block"  # ROBOT-011: у Картки є `shafa_id` — товар уже на Шафі
+ONLY_KLUBOK = "only_klubok"  # KLB-008: Картка «лише Клубок» — кнопки Шафи на ній не діють
+
+
+def only_klubok(conn: sqlite3.Connection, item_id: int) -> bool:
+    """Картка «лише Клубок» (KLB-008): Шафа її не показує й не змінює."""
+    row = conn.execute("SELECT only_klubok FROM items WHERE id = ?", (item_id,)).fetchone()
+    return row is not None and bool(row[0])
 
 
 def _on_shafa(conn: sqlite3.Connection, item_id: int) -> bool:
@@ -641,6 +650,8 @@ def act(
     `confirmed` — підтверджено повернення проданої пари (B10): без нього `restore` такої Картки
     нічого не робить і каже `confirm_restore`."""
     source, target, done = ACTIONS[action]
+    if only_klubok(conn, item_id):
+        return ONLY_KLUBOK  # KLB-008: схвалює вкладка «Клубок» (`approve_klubok`), не кнопки Шафи
     if action == "restore" and not confirmed and sold(conn, item_id):
         return CONFIRM_RESTORE
     if action in ("approve", "restore") and _on_shafa(conn, item_id):
@@ -691,6 +702,18 @@ def act(
                 (now(), item_id),
             )
     return done if cursor.rowcount == 1 else "stale"
+
+
+def approve_klubok(conn: sqlite3.Connection, item_id: int) -> bool:
+    """KLB-008 (R2): Картка «лише Клубок» `review` → `approved` (кнопка — вкладка «Клубок», KLB-009).
+    Далі її бере черга Клубку (`klubok.queue`, пост із хвилею); Шафа — ніколи."""
+    with conn:
+        cursor = conn.execute(
+            "UPDATE items SET status = ?, updated_at = ? "
+            "WHERE id = ? AND status = ? AND only_klubok = 1 AND purged_at IS NULL",
+            (Status.APPROVED, now(), item_id, Status.REVIEW),
+        )
+    return cursor.rowcount == 1
 
 
 def robot_retry(conn: sqlite3.Connection, item_id: int) -> bool:
@@ -849,10 +872,11 @@ def deletion_date(archived_at: str) -> datetime:
 
 
 def counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """Скільки Карток у кожному статусі (без очищеного архіву)."""
+    """Скільки Карток у кожному статусі (без очищеного архіву й Карток «лише Клубок», KLB-008)."""
     result = {s.value: 0 for s in Status}
     for status, count in conn.execute(
-        "SELECT status, count(*) FROM items WHERE purged_at IS NULL GROUP BY status"
+        "SELECT status, count(*) FROM items WHERE purged_at IS NULL AND only_klubok = 0 "
+        "GROUP BY status"
     ):
         result[status] = count
     return result
@@ -883,7 +907,8 @@ def list_tab(conn: sqlite3.Connection, status: str, query: str = "") -> list[Car
     ids = [
         r[0]
         for r in conn.execute(
-            "SELECT id FROM items WHERE status = ? AND purged_at IS NULL", (status,)
+            "SELECT id FROM items WHERE status = ? AND purged_at IS NULL AND only_klubok = 0",
+            (status,),
         )
     ]
     cards = [c for c in (load_card(conn, i) for i in ids) if c is not None]

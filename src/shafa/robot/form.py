@@ -1026,7 +1026,8 @@ def is_create_request(request: Any) -> bool:
 
 def find_card(conn: sqlite3.Connection, post_id: int) -> review.Card | None:
     row = conn.execute(
-        "SELECT id FROM items WHERE post_id = ? AND purged_at IS NULL ORDER BY id LIMIT 1",
+        "SELECT id FROM items WHERE post_id = ? AND purged_at IS NULL AND only_klubok = 0 "
+        "ORDER BY id LIMIT 1",
         (post_id,),
     ).fetchone()
     return review.load_card(conn, row[0]) if row else None

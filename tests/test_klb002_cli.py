@@ -48,12 +48,12 @@ def test_newer_base_refused_without_change(tmp_path, root, capsys):
     path = tmp_path / "нова.sqlite"
     db.connect(path).close()
     raw = sqlite3.connect(path)
-    raw.execute("PRAGMA user_version = 19")
+    raw.execute("PRAGMA user_version = 99")
     raw.close()
     before = _digest(path)
 
     code = main(["klubok-queue", "--db", str(path), "--root", str(root)])
 
     assert code == 2
-    assert "Невідома версія бази 19" in capsys.readouterr().out
+    assert "Невідома версія бази 99" in capsys.readouterr().out
     assert _digest(path) == before

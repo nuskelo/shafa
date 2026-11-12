@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 class Status(StrEnum):
@@ -134,7 +134,8 @@ CREATE TABLE sessions (
 def _rebuild_items(conn: sqlite3.Connection) -> None:
     """Перебудова `items` без втрати фото, бланків і правок (вони посилаються на items).
 
-    Майбутня перебудова `items` мусить зберегти й `klubok_ads` (FK на items, версія 18)."""
+    Майбутня перебудова `items` мусить зберегти й `klubok_ads` (FK на items, версія 18) і
+    `only_klubok` (версія 19)."""
     conn.commit()
     conn.execute("PRAGMA foreign_keys = OFF")  # інакше DROP TABLE items видалить фото каскадом
     try:
@@ -570,10 +571,37 @@ def _klubok(conn: sqlite3.Connection) -> None:
         raise
 
 
+# Версія 19 (KLB-008): Картки «лише Клубок» і хвилі черги Клубку.
+# `items.only_klubok` — 1: Картку створив `klubok-import` для старого поста, якого немає на Шафі;
+# Шафа (вкладки, лічильники, черга й кнопки робота, бот, звіт, scan) таких не бачить.
+# `klubok_waves` — хвиля старого поста (1 — зима/демі/сумки, 4 — решта); немає рядка — хвиля 2
+# (пост новіший за `SHAFA_KLUBOK_FROM_POST`). Окремо від `klubok_ads`: черга (`sync`/`forget`)
+# видаляє свої рядки, хвиля від цього не губиться.
+WAVES = """
+ALTER TABLE items ADD COLUMN only_klubok INTEGER NOT NULL DEFAULT 0 CHECK (only_klubok IN (0, 1));
+CREATE TABLE klubok_waves (
+    post_id  INTEGER PRIMARY KEY,
+    wave     INTEGER NOT NULL CHECK (wave IN (1, 4)),
+    kind     TEXT NOT NULL,      -- сумки, зима, демі, спорт, літо, туфлі, домашнє
+    added_at TEXT NOT NULL
+);
+"""
+
+
+def _waves(conn: sqlite3.Connection) -> None:
+    """Крок 18 → 19: колонка, таблиця й номер версії в одній транзакції (обрив — база лишається 18)."""
+    conn.commit()
+    try:
+        conn.executescript("BEGIN;" + WAVES + "PRAGMA user_version = 19; COMMIT;")
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+
+
 MIGRATIONS = {
     1: BLANKS, 2: EDITS, 3: _rebuild_items, 4: CONTROL, 5: BATCHES, 6: BOT, 7: QUEUE, 8: SITE,
     9: LISTINGS, 10: REFILL, 11: _site_wait, 12: SOLD, 13: ANSWERS, 14: LISTING_STATE,
-    15: _bot_queue, 16: OUTBOX, 17: _klubok,
+    15: _bot_queue, 16: OUTBOX, 17: _klubok, 18: _waves,
 }  # fmt: skip
 
 
