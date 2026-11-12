@@ -746,6 +746,8 @@ def similar_drill(server, data, root, F: Findings, stage: Stage, picked: list[in
             "duplicate_ok_at = NULL, shafa_id = NULL, shafa_url = NULL WHERE id = ?",
             [(i,) for i in picked],
         )
+        # випадкові дії могли вписати сміття в поля цих Карток — робот тоді не дійде до дубля
+        conn.executemany("DELETE FROM edits WHERE item_id = ?", [(i,) for i in picked])
         monkey_seed.snapshot(conn, picked)
     with parked(data, picked):
         run_robot(server, data, root, "ok", len(picked) + 2)
