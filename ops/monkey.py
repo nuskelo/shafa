@@ -33,14 +33,15 @@ import monkey_seed
 REPO = Path(__file__).resolve().parent.parent
 WIDTHS = (1400, 390)
 TABS = ("/review", "/approved", "/problem", "/published", "/sessions", "/archived", "/settings",
-        "/refill")  # fmt: skip
+        "/refill", "/klubok/review", "/klubok/queue", "/klubok/decide", "/klubok/published",
+        "/klubok/skipped")  # fmt: skip
 VARIANTS = ("/review?f=warn", "/review?f=ok", "/problem?f=warn", "/approved?f=ok")
 JUNK = (
     "", " ", "0", "-1", "999999999999", "а" * 400, "<script>window.__xss=3</script>",
     '"><img src=x onerror="window.__xss=4">', "'; DROP TABLE items; --", "Ёжик 😀 \u202e تست",
     "1200грн", "38,5", "https://example.com/x", "\n\n", "%s %d {0} {{x}}", "../../etc/passwd",
 )  # fmt: skip
-ROBOT_FORM = 'form[action="/robot"]'
+ROBOT_FORM = 'form[action="/robot"], form[action="/klubok/robot"]'  # робот — свій етап (лише Шафа)
 PAGE_CHECK = """() => {
   const de = document.documentElement, W = window.innerWidth;
   const clipped = e => {
@@ -418,10 +419,25 @@ def press_all(b: Browser, page, url: str, width: int, stage: Stage, limit: int =
 
 
 def cards(data: Path) -> list[tuple[int, str, str | None]]:
+    """Картки Шафи (`/item/N`); «лише Клубок» там — 404, вони в `klubok_cards` (TD-076)."""
     with contextlib.closing(ro(data)) as conn:
         return [
             (r["id"], r["status"], r["problem_code"])
-            for r in conn.execute("SELECT id, status, problem_code FROM items ORDER BY id")
+            for r in conn.execute(
+                "SELECT id, status, problem_code FROM items WHERE only_klubok = 0 ORDER BY id"
+            )
+        ]
+
+
+def klubok_cards(data: Path) -> list[str]:
+    """TD-076: Картки на вкладках Клубку — «лише Клубок» і ті, що мають рядок черги Клубку."""
+    with contextlib.closing(ro(data)) as conn:
+        return [
+            f"/klubok/item/{r[0]}"
+            for r in conn.execute(
+                "SELECT id FROM items WHERE only_klubok = 1 "
+                "OR id IN (SELECT item_id FROM klubok_ads) ORDER BY id"
+            )
         ]
 
 
@@ -448,6 +464,8 @@ def buttons_phase(b: Browser, data: Path, stage: Stage, pages: list[str], quick:
         ids = pick_cards(rows, 1 if width < 600 or quick else None)
         for item_id in ids:
             press_all(b, page, f"/item/{item_id}", width, stage)
+        for url in klubok_cards(data):
+            press_all(b, page, url, width, stage)
         sessions = [p for p in pages if p.startswith("/session/")]
         for url in sessions:
             press_all(b, page, url, width, stage)
@@ -462,7 +480,8 @@ def random_phase(
     width = rnd.choice(WIDTHS)
     page = b.page(width)
     ids = [r[0] for r in cards(data)]
-    urls = [*TABS, *VARIANTS, *(f"/item/{i}" for i in ids), "/session/1", "/session/2"]
+    urls = [*TABS, *VARIANTS, *(f"/item/{i}" for i in ids), *klubok_cards(data), "/session/1",
+            "/session/2"]  # fmt: skip
     goto(b, page, rnd.choice(urls), width)
     for number in range(actions):
         kind = rnd.choices(
@@ -601,7 +620,12 @@ def robot_cycles(
         if len(server.robots()) > 1:
             F.add("two_robots", f"цикл {number} ({action})", "одночасно кілька процесів робота")
         if number % 10 == 9:
-            if count(data, "SELECT COUNT(*) FROM items WHERE status = 'approved'") < 12:
+            if (
+                count(
+                    data, "SELECT COUNT(*) FROM items WHERE status = 'approved' AND only_klubok = 0"
+                )
+                < 12
+            ):
                 top_up(server, data, root, seed + number, 40)
             if count(data, "SELECT COUNT(*) FROM sessions WHERE site = 'shafa' AND stop_code = 'limit' "
                            "AND started_at > datetime('now', '-3 minutes')"):  # fmt: skip
@@ -801,6 +825,23 @@ def invariants(data: Path, server: Server, F: Findings, stage: Stage) -> None:
             "SELECT id FROM items WHERE status = 'publishing'",
             "Картка лишилась у «publishing»",
         )
+        # TD-076: «лише Клубок» ніколи не йде на Шафу; черга Клубку — лише відомі стани.
+        check(
+            "only_klubok",
+            "SELECT id FROM items WHERE only_klubok = 1 AND (status IN ('publishing', 'published') "
+            "OR shafa_id IS NOT NULL)",
+            "«лише Клубок» у публікації Шафи чи з shafa_id",
+        )
+        check(
+            "klubok_open_session",
+            "SELECT id FROM sessions WHERE site = 'klubok' AND ended_at IS NULL",
+            "сесія Клубку без кінця",
+        )
+        check(
+            "klubok_publishing",
+            "SELECT item_id FROM klubok_ads WHERE state = 'publishing'",
+            "рядок Клубку лишився у «publishing»",
+        )
         # Лише робот створює опубліковані зі свіжими shafa_id (900 млн+ з підставної Шафи).
         fake = {e["item"] for e in fake_events(server.base) if e["event"] == "create"}
         made = {r[0] for r in conn.execute("SELECT id FROM items WHERE shafa_id >= 900000000")}
@@ -826,12 +867,15 @@ def double_click(b: Browser, server: Server, data: Path, F: Findings) -> None:
     """HYP-3: подвійний клік «Схвалити і далі» не повинен схвалити дві Картки."""
     with contextlib.closing(ro(data)) as conn:
         ids = [
-            r[0] for r in conn.execute("SELECT id FROM items WHERE status = 'review' ORDER BY id")
+            r[0]
+            for r in conn.execute(
+                "SELECT id FROM items WHERE status = 'review' AND only_klubok = 0 ORDER BY id"
+            )
         ]
     if len(ids) < 3:
         return
     page = b.page(1400)
-    before = count(data, "SELECT COUNT(*) FROM items WHERE status = 'approved'")
+    before = count(data, "SELECT COUNT(*) FROM items WHERE status = 'approved' AND only_klubok = 0")
     b.where = "dblclick «Схвалити і далі»"
     page.goto(f"{server.url}/item/{ids[0]}?from=/review&next=/item/{ids[1]}")
     button = page.locator("button", has_text=re.compile("Схвалити"))
@@ -839,7 +883,9 @@ def double_click(b: Browser, server: Server, data: Path, F: Findings) -> None:
         with contextlib.suppress(Exception):
             button.first.dblclick(timeout=3000)
         page.wait_for_timeout(800)
-        after = count(data, "SELECT COUNT(*) FROM items WHERE status = 'approved'")
+        after = count(
+            data, "SELECT COUNT(*) FROM items WHERE status = 'approved' AND only_klubok = 0"
+        )
         if after - before > 1:
             F.add(
                 "double_action",
