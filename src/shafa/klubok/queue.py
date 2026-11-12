@@ -4,7 +4,10 @@
 
 * `plan` — вердикт кожній Картці-кандидату, нічого не пише; `sync` — записує вердикти, але
   чіпає лише рядки `queued`/`skipped` (крім її «Так, дубль»), решту станів — ніколи.
-* Порядок: зимове → інше → лише літнє; усередині — старіші пости першими.
+* Порядок (KLB-008): хвиля (`klubok_waves`; немає рядка — 2) ↑, далі зимове → інше → лише літнє,
+  усередині — старіші пости першими.
+* Кандидат: Картка Шафи `approved`/`published` з постом новішим за межу або з хвилею (старі
+  пости, `klubok-import`); Картка «лише Клубок» — лише `approved` (`review.approve_klubok`) і з хвилею.
 * `take` — що можна сьогодні (ліміт доби, свіжий знімок її оголошень, дублі перед видачею).
 * `start` / `published` / `problem` / `recover` — переходи для робота KLB-003, кожен в одній
   транзакції й з умовою на поточний стан.
@@ -105,20 +108,45 @@ class Verdict:
         return REASONS.get(self.code or "", self.text or "")
 
 
+WAVE_DEFAULT = 2  # пост без рядка `klubok_waves` (новіший за межу — пости бота)
+_WAVE = f"COALESCE(w.wave, {WAVE_DEFAULT})"
+
+
+def _candidate_sql(limit: int) -> tuple[str, list]:
+    """KLB-008 (R2): умова кандидата для `items i LEFT JOIN klubok_waves w` (без рядка Клубку)."""
+    where = (
+        "i.purged_at IS NULL AND ("
+        "(i.only_klubok = 0 AND i.status IN (?, ?) AND (i.post_id > ? OR w.post_id IS NOT NULL)) "
+        "OR (i.only_klubok = 1 AND i.status = ? AND w.post_id IS NOT NULL))"
+    )
+    return where, [Status.APPROVED, Status.PUBLISHED, limit, Status.APPROVED]
+
+
+def wave(conn: sqlite3.Connection, post_id: int | None) -> int | None:
+    """Хвиля старого поста з `klubok_waves` (KLB-008) або None."""
+    if post_id is None:
+        return None
+    row = conn.execute("SELECT wave FROM klubok_waves WHERE post_id = ?", (post_id,)).fetchone()
+    return row[0] if row else None
+
+
 def _candidates(conn: sqlite3.Connection, item_id: int | None = None) -> list[sqlite3.Row]:
-    """D3: схвалені й опубліковані на Шафі, пост новіший за межу, рядка Клубку немає або він
-    `queued`/`skipped` (її «Так, дубль» — ні). Порядок — старіші пости першими."""
+    """D3 + KLB-008: кандидати (`_candidate_sql`), рядка Клубку немає або він `queued`/`skipped`
+    (її «Так, дубль» — ні). Порядок — хвиля, далі старіші пости першими."""
+    where, args = _candidate_sql(from_post())
     sql = (
-        "SELECT i.id, i.post_id FROM items i LEFT JOIN klubok_ads k ON k.item_id = i.id "
+        f"SELECT i.id, i.post_id, {_WAVE} AS wave FROM items i "
+        "LEFT JOIN klubok_ads k ON k.item_id = i.id "
         "LEFT JOIN posts p ON p.post_id = i.post_id "
-        "WHERE i.status IN (?, ?) AND i.purged_at IS NULL AND i.post_id > ? "
+        "LEFT JOIN klubok_waves w ON w.post_id = i.post_id "
+        f"WHERE {where} "
         "AND (k.item_id IS NULL OR (k.state IN (?, ?) AND COALESCE(k.problem_code, '') != ?))"
     )
-    args: list = [Status.APPROVED, Status.PUBLISHED, from_post(), *OPEN, DUP_YES]
+    args += [*OPEN, DUP_YES]
     if item_id is not None:
         sql += " AND i.id = ?"
         args.append(item_id)
-    return conn.execute(sql + " ORDER BY p.date IS NULL, p.date, i.id", args).fetchall()
+    return conn.execute(sql + " ORDER BY wave, p.date IS NULL, p.date, i.id", args).fetchall()
 
 
 def post_done(conn: sqlite3.Connection, card: Card) -> bool:
@@ -167,12 +195,14 @@ def judge(conn: sqlite3.Connection, root: Path, card: Card) -> Verdict:
 
 def plan(conn: sqlite3.Connection, root: Path, today: datetime | None = None) -> list[Verdict]:
     """Вердикти всім кандидатам у порядку черги (`today` — для однаковості з `take`)."""
-    verdicts = []
+    verdicts, waves = [], {}
     for row in _candidates(conn):
         card = load_card(conn, row["id"])
         if card is not None:
             verdicts.append(judge(conn, root, card))
-    return sorted(verdicts, key=lambda v: v.rank)  # стабільне: усередині — порядок `_candidates`
+            waves[card.id] = row["wave"]
+    # стабільне: усередині — порядок `_candidates`
+    return sorted(verdicts, key=lambda v: (waves[v.item_id], v.rank))
 
 
 def plan_one(conn: sqlite3.Connection, root: Path, item_id: int) -> Verdict | None:
@@ -222,12 +252,13 @@ def sync(conn: sqlite3.Connection, root: Path, today: datetime | None = None) ->
     """Записати вердикти `plan`. Рядки `queued`/`skipped` Карток, що вже не кандидати, — геть."""
     verdicts = plan(conn, root, today)
     stamp = now()
+    where, args = _candidate_sql(from_post())
     with conn:
         conn.execute(
             "DELETE FROM klubok_ads WHERE state IN (?, ?) AND COALESCE(problem_code, '') != ? "
-            "AND item_id NOT IN (SELECT i.id FROM items i WHERE i.status IN (?, ?) "
-            "AND i.purged_at IS NULL AND i.post_id > ?)",
-            (*OPEN, DUP_YES, Status.APPROVED, Status.PUBLISHED, from_post()),
+            "AND item_id NOT IN (SELECT i.id FROM items i "
+            f"LEFT JOIN klubok_waves w ON w.post_id = i.post_id WHERE {where})",
+            (*OPEN, DUP_YES, *args),
         )
         for verdict in verdicts:
             _write(conn, verdict, stamp)
@@ -299,22 +330,23 @@ def take(
 
 
 def place(conn: sqlite3.Connection, root: Path, item_id: int) -> int | None:
-    """D7: місце Картки серед рядків `queued` — у порядку `plan` (зимове → інше → лише літнє, далі
-    дата поста й id), але без `dup.find`, без `fields.ad` і без запису: екран відкриває Картку
+    """D7: місце Картки серед рядків `queued` — у порядку `plan` (хвиля, зимове → інше → лише літнє,
+    далі дата поста й id), але без `dup.find`, без `fields.ad` і без запису: екран відкриває Картку
     швидко й при тисячах її оголошень. Рядка `queued` немає — None («у черзі» без номера).
     `root` — для однаковості з `plan` (фото тут не потрібні)."""
     del root
     rows = conn.execute(
-        "SELECT k.item_id FROM klubok_ads k JOIN items i ON i.id = k.item_id "
-        "LEFT JOIN posts p ON p.post_id = i.post_id WHERE k.state = ? "
-        "ORDER BY p.date IS NULL, p.date, i.id",
+        f"SELECT k.item_id, {_WAVE} AS wave FROM klubok_ads k JOIN items i ON i.id = k.item_id "
+        "LEFT JOIN posts p ON p.post_id = i.post_id "
+        "LEFT JOIN klubok_waves w ON w.post_id = i.post_id WHERE k.state = ? "
+        "ORDER BY wave, p.date IS NULL, p.date, i.id",
         (QUEUED,),
     ).fetchall()
-    ids = [r[0] for r in rows]
-    if item_id not in ids:
+    waves = {r[0]: r[1] for r in rows}
+    if item_id not in waves:
         return None
-    ranks = {i: rank(card) if (card := load_card(conn, i)) else 1 for i in ids}
-    ordered = sorted(ids, key=lambda i: ranks[i])  # стабільне, як у `plan`
+    ranks = {i: rank(card) if (card := load_card(conn, i)) else 1 for i in waves}
+    ordered = sorted(waves, key=lambda i: (waves[i], ranks[i]))  # стабільне, як у `plan`
     return ordered.index(item_id) + 1
 
 
@@ -484,11 +516,12 @@ def needs_photos(conn: sqlite3.Connection, item_id: int) -> bool:
         limit = from_post()
     except SetupError:
         limit = FROM_DEFAULT  # налаштування з помилкою — краще зберегти фото
+    where, args = _candidate_sql(limit)
     return (
         conn.execute(
-            "SELECT 1 FROM items WHERE id = ? AND status IN (?, ?) AND purged_at IS NULL "
-            "AND post_id > ?",
-            (item_id, Status.APPROVED, Status.PUBLISHED, limit),
+            "SELECT 1 FROM items i LEFT JOIN klubok_waves w ON w.post_id = i.post_id "
+            f"WHERE i.id = ? AND {where}",
+            (item_id, *args),
         ).fetchone()
         is not None
     )
