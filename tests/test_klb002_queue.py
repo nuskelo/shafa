@@ -311,7 +311,9 @@ def test_like_ad_published_by_program_is_duplicate(conn, root):
     verdict = {v.item_id: v for v in queue.plan(conn, root, TODAY)}[second]
 
     assert (verdict.state, verdict.code) == (queue.PROBLEM, queue.DUPLICATE)
-    assert verdict.dup == dup.Dup(77, verdict.dup.name, "https://klubok.com/item/77", "ours")
+    assert verdict.dup == dup.Dup(
+        77, verdict.dup.name, "https://klubok.com/item/77", "ours", item_id=first
+    )
 
 
 def test_other_pair_then_queued_and_never_duplicate_again(conn, root):
