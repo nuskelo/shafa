@@ -249,6 +249,7 @@ class Seed:
         )
 
     def ad(self, item_id: int, state: str, **cols) -> None:
+        cols = {k: v for k, v in cols.items() if v is not None}
         names = ["item_id", "state", "created_at", "updated_at", *cols]
         stamp = db.now()
         with self.conn:
@@ -276,20 +277,24 @@ class Seed:
             Status.REVIEW,
             [ai.Field("section", None) if f.name == "section" else f for f in blank("Сумка")],
         )
+        shafa = self.items[str(Status.APPROVED)][1:]  # без Nike-хвоста екрана; до «лише Клубок»
+        published = self.items[str(Status.PUBLISHED)][:2]
         queued = self.klubok_card(Status.APPROVED)
         self.ad(queued, "queued", queued_at=db.now())
-        shafa = self.items[str(Status.APPROVED)][1:6]
-        published = self.items[str(Status.PUBLISHED)][:2]
-        self.ad(shafa[0], "queued", queued_at=db.now())
-        self.ad(shafa[1], "problem", problem_code="klubok_duplicate",
-                problem_text="Схоже, ця пара вже є на Клубку", dup_klubok_id=500_000_001,
-                dup_name=f"Черевики {HTML_TRAP} 38")  # fmt: skip
-        self.ad(shafa[2], "problem", problem_code="klubok_uncertain",
-                problem_text="Немає певної відповіді Клубку")  # fmt: skip
-        self.ad(shafa[3], "skipped", problem_code="klubok_no_price")
-        self.ad(published[0], "published", klubok_id=500_000_100,
-                url="https://klubok.com/item-x-500000100", published_at=db.now())  # fmt: skip
-        self.ad(published[1], "published", klubok_id=500_000_101, published_at=db.now())
+        rows = [
+            {"state": "queued", "queued_at": db.now()},
+            {"state": "problem", "problem_code": "klubok_duplicate",
+             "problem_text": "Схоже, ця пара вже є на Клубку", "dup_klubok_id": 500_000_001,
+             "dup_name": f"Черевики {HTML_TRAP} 38"},
+            {"state": "problem", "problem_code": "klubok_uncertain",
+             "problem_text": "Немає певної відповіді Клубку"},
+            {"state": "skipped", "problem_code": "klubok_no_price"},
+        ]  # fmt: skip
+        for item_id, cols in zip(shafa, rows, strict=False):  # малий засів тестів — скільки є
+            self.ad(item_id, **cols)
+        for number, item_id in enumerate(published):
+            self.ad(item_id, "published", klubok_id=500_000_100 + number, published_at=db.now(),
+                    url=f"https://klubok.com/item-x-{500_000_100 + number}" if number == 0 else None)  # fmt: skip
         with self.conn:
             self.conn.execute(
                 "INSERT INTO klubok_listings (id, name, price, sizes, url, sold, added_at) "
