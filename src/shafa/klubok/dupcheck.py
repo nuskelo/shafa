@@ -95,7 +95,12 @@ class Report:
                 out.append(f"… ще {len(self.decisions) - (len(out) - 2)} Карток")
                 break
             post = f"пост {d.post_id}" if d.post_id is not None else f"Картка {d.item_id}"
-            out.append(f"{post}: {OUTCOMES[d.outcome]} — {d.text}"[:200])
+            said = (
+                d.text
+                if d.text.startswith((AUTO_DUP, AUTO_OTHER))
+                else (f"{OUTCOMES[d.outcome]} — {d.text}")
+            )
+            out.append(f"{post}: {said}"[:200])
         return out
 
 

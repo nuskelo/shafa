@@ -204,6 +204,7 @@ def test_same_photo_is_duplicate_without_ai(conn, root, tmp_path):
     assert (got["state"], got["problem_code"]) == (queue.SKIPPED, queue.DUP_YES)
     assert got["dup_klubok_id"] == 901 and got["problem_text"].startswith("Дубль — фото")
     assert judge.calls == [] and report.count(dupcheck.DUP) == 1
+    assert "пост 7301: Дубль — фото збіглось з оголошенням 901" in report.lines()
     post = conn.execute("SELECT post_id FROM klubok_listings WHERE id = 901").fetchone()[0]
     assert post == 7301  # як «Так, дубль»: її оголошення знає свій пост
 
