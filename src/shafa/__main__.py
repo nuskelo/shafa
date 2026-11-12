@@ -670,6 +670,9 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
             )
         print({"closed": "Вікно закрито.", "done": "Вікно закрито кнопкою «Я увійшов».",
                "timeout": "15 хв минуло — вікно закрито."}[why], flush=True)  # fmt: skip
+        from shafa.robot import klubok_control
+
+        klubok_control.mark_login()  # KLB-010: «треба увійти» на панелі знімається
         return 0
 
     stop: list[bool] = []

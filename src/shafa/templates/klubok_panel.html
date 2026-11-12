@@ -11,28 +11,40 @@
         {% if note %}<span class="sp-note">{{ note }}</span>{% endif %}
         <details class="more-info sp-more" data-key="klubok">
           <summary>Детальніше</summary>
-          <p class="why">«Старт» — робот виставить на Клубок пари з «У черзі», не більше ліміту доби (Налаштування, блок «Клубок»). Між парами він робить паузу 1–3 хв, як людина.</p>
-          <p class="why">Пауза — робот допише поточну пару й зачекає; «Продовжити» поверне до роботи. Стоп — допише поточну пару й завершить сесію.</p>
+          <p class="why">«Старт» — робот виставить на Клубок пари зі «Схвалених», не більше ліміту доби (Налаштування, блок «Клубок»). Між парами він робить паузу 1–3 хв, як людина.</p>
           <p class="why">«Перечитати мої оголошення» — робот прочитає ваш список на Клубку (щоб не було дублів). На початку кожної сесії він робить це сам.</p>
           <p class="why">Робот один на обидва сайти: поки працює робот Шафи, «Старт» Клубку недоступний, і навпаки.</p>
+          <p class="why">{{ kpanel.listings }}</p>
           {% for line in kpanel.details %}<p class="why">{{ line }}</p>{% endfor %}
         </details>
       </div>
       <div class="sp-stats" role="list" aria-label="Сьогодні на Клубку">
-        <div class="stat stat-key" role="listitem"><span class="stat-label">Сьогодні на Клубку</span><span class="stat-num">{{ kpanel.started }} <small>з {{ kpanel.day_limit }}</small></span></div>
-        <a class="stat stat-link" role="listitem" href="/klubok/queue"><span class="stat-label">У черзі</span><span class="stat-num">{{ kpanel.queued }}{% if kpanel.unsynced %} <small>+{{ kpanel.unsynced }}</small>{% endif %}</span></a>
+        <div class="stat stat-key" role="listitem"><span class="stat-label">Сьогодні виставить</span><span class="stat-num">
+          {%- if working -%}
+            {{ kpanel.progress_done }} <small>у цій сесії</small>
+          {%- elif kpanel.today_plan -%}
+            до {{ kpanel.today_plan }} {{ "пари" if kpanel.today_plan % 10 in (2, 3, 4) and kpanel.today_plan % 100 not in (12, 13, 14) else ("пару" if kpanel.today_plan % 10 == 1 and kpanel.today_plan % 100 != 11 else "пар") }} <small>· {{ kpanel.eta }}</small>
+          {%- else -%}0{%- endif -%}
+        </span></div>
+        {% for wave in (1, 2) %}
+        <a class="stat stat-link" role="listitem" href="/klubok/queue?w={{ wave }}" title="Схвалені хвилі {{ wave }}"><span class="stat-label">Хвиля {{ wave }}</span><span class="stat-num">{{ kpanel.waves.get(wave, 0) }}</span></a>
+        {% endfor %}
+        <a class="stat stat-link" role="listitem" href="/klubok/queue"><span class="stat-label">Схвалених</span><span class="stat-num">{{ kpanel.queued }} <small>· сьогодні {{ kpanel.shown_started }} з {{ kpanel.day_limit }}</small></span></a>
       </div>
       {% set lines = [] %}
       {% if kpanel.doing %}{% set _ = lines.append(("robot-doing", kpanel.doing)) %}{% endif %}
       {% if kpanel.previous %}{% set _ = lines.append(("robot-previous", kpanel.previous)) %}{% endif %}
       {% if why_line and why_line != note %}{% set _ = lines.append(("why", why_line)) %}{% endif %}
       {% if kpanel.code == "running" %}{% set _ = lines.append(("", "Не закривайте вікно Chrome робота і кришку ноутбука, поки робот працює.")) %}{% endif %}
-      {% if not working %}{% set _ = lines.append(("robot-last", kpanel.listings)) %}{% endif %}
+      {% if "pause" in kpanel.buttons or "resume" in kpanel.buttons %}{% set _ = lines.append(("", "Пауза — робот допише поточну пару й зачекає, «Продовжити» поверне до роботи. Стоп — допише поточну пару й завершить сесію.")) %}{% endif %}
+      {% if kpanel.code == "login_needed" %}{% set _ = lines.append(("robot-help", "Робот вийшов із Клубку. Натисніть «Увійти в Клубок»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».")) %}{% endif %}
+      {% if lines or kpanel.last and not working %}
       <div class="sp-foot">
         {% for kind, text in lines %}<span class="sp-line {{ kind }}">{{ text }}</span>
         {% endfor %}
-        {% if kpanel.last and not working %}<span class="sp-line robot-last">{{ kpanel.last }}</span>{% endif %}
+        {% if kpanel.last and not working %}<span class="sp-line robot-last">Останній запуск: {{ kpanel.last }}{% if kpanel.last_session %} · <a href="/klubok/session/{{ kpanel.last_session }}">Подробиці сесії</a>{% endif %}</span>{% endif %}
       </div>
+      {% endif %}
     </div>
     <form method="post" action="/klubok/robot" class="sp-actions">
       <input type="hidden" name="token" value="{{ token }}">
@@ -42,8 +54,8 @@
       {% endif %}
       {% if "resume" in kpanel.buttons %}<button name="action" value="resume">Продовжити</button>{% endif %}
       {% if "pause" in kpanel.buttons %}<button name="action" value="pause">Пауза</button>{% endif %}
-      {% if "snapshot" in kpanel.buttons %}<button name="action" value="snapshot">Перечитати мої оголошення</button>{% endif %}
-      {% if "login" in kpanel.buttons %}<button name="action" value="login">Увійти в Клубок</button>{% endif %}
+      {% if "login" in kpanel.buttons %}<button name="action" value="login"{% if kpanel.code != "login_needed" %} class="sp-rehearse"{% endif %}>Увійти в Клубок</button>{% endif %}
+      {% if "snapshot" in kpanel.buttons %}<button name="action" value="snapshot" class="sp-rehearse" title="Робот прочитає ваш список оголошень на Клубку — щоб не було дублів">Перечитати мої оголошення</button>{% endif %}
       {% if "login_done" in kpanel.buttons %}<button name="action" value="login_done">Вхід виконано — закрити вікно</button>{% endif %}
       {% if "stop" in kpanel.buttons %}<button name="action" value="stop" class="reject sp-stop">Стоп</button>{% endif %}
     </form>

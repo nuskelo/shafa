@@ -17,6 +17,10 @@ from shafa.klubok import queue, snapshot
 from shafa.robot import control, klubok_publish, lock
 
 LOG_NAME = "klubok-run.log"
+LOGIN_NAME = (
+    "klubok-login-at"  # KLB-010: коли вікно входу в Клубок закрито (як `control.LOGIN_NAME`)
+)
+MINUTES_PER_PAIR = 3  # форма ≈ 1 хв + пауза 1–3 хв між парами — для «≈ N хв» на панелі
 SHAFA_MODES = ("publish", "rehearse", "login", "dry-fill", "sync-catalog")  # `__main__.robot`
 
 TEXTS = {
@@ -31,12 +35,30 @@ TEXTS = {
     "snapshot": "Робот перечитує ваші оголошення на Клубку (кілька хвилин)",
     "busy_shafa": "Зараз працює робот Шафи — «Старт» Клубку стане доступний, коли він закінчить",
     "busy": "Робот зайнятий іншою справою (Власник щось перевіряє)",
-    "crashed": "Робот Клубку зупинився посеред роботи. Відкрийте «Треба рішення», потім «Старт». "
+    "crashed": "Робот Клубку зупинився посеред роботи. Відкрийте «Проблеми», потім «Старт». "
     "Повториться — скажіть Власнику.",
+    "login_needed": "Робот не увійшов у Клубок — потрібно увійти",
     "failed": "Робот Клубку зупинився з помилкою — подробиці в «Детальніше». "
     "Повториться — скажіть Власнику.",
 }
 
+# Коротко — для верху Картки (KLB-010: як «Робот чекає · ШІ · Бот» у Шафи)
+SHORT = {  # на сторінках Клубку «Клубку» зайве — повний текст у підказці (title)
+    "stopped": "Робот чекає",
+    "off": "Клубок вимкнено",
+    "starting": "Робот запускається",
+    "running": "Робот працює",
+    "pausing": "Робот: пауза",
+    "paused": "Робот на паузі",
+    "stopping": "Робот: стоп",
+    "login_open": "Відкрито вхід",
+    "login_needed": "Робот: треба увійти",
+    "snapshot": "Перечитує оголошення",
+    "busy_shafa": "Працює робот Шафи",
+    "busy": "Робот зайнятий",
+    "crashed": "Робот зупинився",
+    "failed": "Робот: помилка",
+}
 # Як закінчилась сесія — простими словами (решта — `klubok_publish.STOPS` / `queue.REASONS`)
 LAST = {
     klubok_publish.DONE: "виставлено, скільки можна було",
@@ -50,7 +72,15 @@ LAST = {
 }
 
 WORKING = ("running", "pausing", "paused", "stopping")
-IDLE = ("stopped", "off", "crashed", "failed")
+IDLE = ("stopped", "off", "crashed", "failed", "login_needed")
+CRASHED_LIMIT = (  # N9: ліміт доби вичерпано — «Старт» сьогодні не допоможе
+    "Робот Клубку зупинився посеред роботи — відкрийте «Проблеми». На сьогодні ліміт вичерпано: "
+    "завтра після 00:00 натисніть «Старт». Повториться — скажіть Власнику."
+)
+LOGIN_HELP = (
+    "Робот вийшов із Клубку. Натисніть «Увійти в Клубок»: відкриється вікно Chrome — увійдіть, як "
+    "завжди, і закрийте це вікно. Потім натисніть «Старт»."
+)
 
 
 @dataclass
@@ -64,9 +94,14 @@ class State:
     day_limit: int = 0
     started: int = 0  # спроб сьогодні (рахуються в ліміт доби)
     left: int = 0  # скільки ще можна сьогодні → `--limit`
-    queued: int = 0  # рядків «у черзі»
-    unsynced: int = 0  # схвалено, але ще не перераховано
+    queued: int = 0  # рядків «у черзі» (Схвалені Клубку)
+    unsynced: int = 0  # схвалено, але ще не перераховано (KLB-010: на екрані не показується)
+    waves: dict[int, int] = field(default_factory=dict)  # у черзі за хвилями: {1: 120, 2: 25}
+    shown_started: int = 0  # «N з M» — ніколи не більше ліміту (зайве — у «Детальніше»)
+    today_plan: int = 0  # «Сьогодні виставить N пар»
+    eta: str = ""  # «≈ 30 хв»
     progress: str = ""  # «Виставлено 2 з 8 у цій сесії»
+    progress_done: int = 0  # виставлено в цій сесії (плитка «Сьогодні виставить»)
     doing: str = ""  # «Зараз: пост 7233 «…» — заповнює форму» / «Пауза між парами — …»
     previous: str = ""  # «Останній: пост 7233 — виставлено ✓»
     last: str = ""  # підсумок останньої сесії
@@ -80,6 +115,29 @@ def log_path() -> Path:
     return config.data_dir() / LOG_NAME
 
 
+def mark_login(now: datetime | None = None) -> None:
+    """Вікно входу в Клубок закрито: «треба увійти» знімається (KLB-010, як `control.mark_login`)."""
+    path = config.data_dir() / LOGIN_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text((now or datetime.now().astimezone()).isoformat(), encoding="utf-8")
+
+
+def _login_at() -> datetime | None:
+    try:
+        text = (config.data_dir() / LOGIN_NAME).read_text(encoding="utf-8").strip()
+        return datetime.fromisoformat(text)
+    except (OSError, ValueError):
+        return None
+
+
+def eta_text(pairs: int) -> str:
+    minutes = pairs * MINUTES_PER_PAIR
+    if minutes < 60:
+        return f"≈ {minutes} хв"
+    hours, rest = divmod(minutes, 60)
+    return f"≈ {hours} год" + (f" {rest} хв" if rest else "")
+
+
 def reason_of(code: str | None, reason: str | None) -> str:
     return (
         LAST.get(code or "")
@@ -91,7 +149,7 @@ def reason_of(code: str | None, reason: str | None) -> str:
 
 
 def last_run(row, now: datetime) -> str:
-    """«Сесія 63 о 12:07: виставлено 4, у «Треба рішення» 1 — черга закінчилась»."""
+    """«сьогодні о 12:07 — виставлено 4, у «Проблемах» 1 — черга закінчилась» (як у Шафи)."""
     started = control._stamp(row["started_at"], now)
     when = (
         f"о {started:%H:%M}"
@@ -100,9 +158,11 @@ def last_run(row, now: datetime) -> str:
         if started is not None
         else ""
     )
-    text = f"Сесія {row['id']} {when}".rstrip() + f": виставлено {row['published'] or 0}"
+    if when.startswith("о "):
+        when = "сьогодні " + when
+    text = (f"{when} — " if when else "") + f"виставлено {row['published'] or 0}"
     if row["problems"]:
-        text += f", у «Треба рішення» {row['problems']}"
+        text += f", у «Проблемах» {row['problems']}"
     reason = reason_of(row["stop_code"], row["stop_reason"])
     return text + (f" — {reason}" if reason else "")
 
@@ -138,7 +198,7 @@ def _stage(data: dict, now: datetime) -> tuple[str, str]:
     last, previous = data.get("last"), ""
     if isinstance(last, dict) and last.get("post"):
         previous = f"Останній: пост {last['post']} — " + (
-            "виставлено ✓" if last.get("ok") else "у «Треба рішення»"
+            "виставлено ✓" if last.get("ok") else "у «Проблемах»"
         )
     return doing, previous
 
@@ -212,6 +272,14 @@ def state(
         code = "failed"  # процес помер до сесії (вхід, знімок, налаштування)
     elif not enabled:
         code = "off"
+    elif (
+        last is not None
+        and last["stop_code"] == klubok_publish.LOGIN
+        and not (
+            (at := _login_at()) is not None and at >= (control._stamp(last["ended_at"], now) or at)
+        )
+    ):
+        code = "login_needed"  # KLB-010 (F4): жовте «треба увійти», як у Шафи
     else:
         code = "stopped"
 
@@ -223,13 +291,15 @@ def state(
         why_not = f"Налаштування Клубку з помилкою: {setup} — Налаштування, блок «Клубок»."
     elif idle and not enabled:
         why_not = "Увімкніть Клубок у Налаштуваннях (блок «Клубок»), потім «Старт»."
+    elif code == "login_needed":
+        why_not = "Спершу увійдіть у Клубок: натисніть «Увійти в Клубок»"
     elif idle and left <= 0:
         why_not = (
-            f"На сьогодні все: почато {started} з {day_limit} (ліміт Клубку на добу). "
-            "Завтра після 00:00 натисніть «Старт»."
+            f"На сьогодні все: почато {min(started, day_limit)} з {day_limit} (ліміт Клубку на "
+            "добу). Завтра після 00:00 натисніть «Старт»."
         )
     elif idle and not (queued or unsynced):
-        why_not = "У черзі Клубку нічого — схваліть Картки у «На перевірку»."
+        why_not = "Схвалених для Клубку немає — схваліть пари у «На перевірку»."
     can_start = idle and not why_not
 
     buttons: list[str] = []
@@ -243,6 +313,7 @@ def state(
         buttons.append("login_done")
 
     progress = doing = previous = mini = ""
+    done = 0
     if code in WORKING and open_session is not None:
         done = conn.execute(
             "SELECT count(*) FROM klubok_ads WHERE session_id = ? AND state = ?",
@@ -258,13 +329,32 @@ def state(
             mini += " · на паузі"
 
     text = TEXTS[code]
+    if code == "crashed" and left <= 0:
+        text = CRASHED_LIMIT
+    details = []
+    if started > day_limit:
+        details.append(f"Почато сьогодні {started} спроб — на {started - day_limit} більше за ліміт "
+                       f"{day_limit} (ліміт змінили під час дня або спроба не дійшла).")  # fmt: skip
+    if code == "login_needed":
+        details.append(LOGIN_HELP)
+    by_wave = dict(
+        conn.execute(
+            f"SELECT {queue._WAVE} AS wave, count(*) FROM klubok_ads k JOIN items i ON i.id = "
+            "k.item_id LEFT JOIN klubok_waves w ON w.post_id = i.post_id WHERE k.state = ? "
+            "GROUP BY wave ORDER BY wave",
+            (queue.QUEUED,),
+        ).fetchall()
+    )
+    plan_today = min(left, queued) if enabled else 0
     if code == "busy_shafa" and mode == "rehearse":
         text = "Зараз йде пробна перевірка Шафи — «Старт» Клубку стане доступний після неї"
     return State(
         code=code, text=text, can_start=can_start, why_not=why_not, buttons=buttons,
         enabled=enabled, day_limit=day_limit, started=started, left=left, queued=queued,
-        unsynced=unsynced, progress=progress, doing=doing, previous=previous,
+        unsynced=unsynced, progress=progress, progress_done=done, doing=doing, previous=previous,
         last=last_run(last, now) if last is not None else "",
         last_session=last["id"] if last is not None else None,
-        listings=listings_line(conn, now), mini=mini or TEXTS[code],
+        listings=listings_line(conn, now), mini=mini or SHORT[code], details=details,
+        waves=by_wave, shown_started=min(started, day_limit) if day_limit else started,
+        today_plan=plan_today, eta=eta_text(plan_today) if plan_today else "",
     )  # fmt: skip
