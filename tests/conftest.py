@@ -96,3 +96,14 @@ def no_real_browser(monkeypatch):
 
     monkeypatch.setattr(browser, "launch", forbidden)
     monkeypatch.setattr(browser, "wait_for_manual_login", forbidden)
+
+
+@pytest.fixture(autouse=True)
+def no_real_klubok_photos(monkeypatch):
+    """KLB-011: жоден тест не качає фото з img.klubok.com — мережа «недоступна» (тимчасово)."""
+    from shafa.klubok import photo_dup
+
+    def offline(url):
+        raise photo_dup.FetchFailed("мережа в тестах вимкнена", permanent=False)
+
+    monkeypatch.setattr(photo_dup, "http_get", offline)
