@@ -38,8 +38,11 @@ NOT_ASKED = "ШІ не порівняв: "  # людина без ШІ: канд
 MARKERS = (NOT_COMPARED, UNSURE, NOT_ASKED)
 MAX_CANDIDATES = 3
 AI_LIMIT = 40  # запитів ШІ за один прохід (`refresh.Background`); решта — наступного разу
-DUP, OTHER, HUMAN, RETRY = "dup", "other", "human", "retry"
-OUTCOMES = {DUP: "дубль", OTHER: "інша пара", HUMAN: "людині", RETRY: "повтор"}
+DUP, OTHER, HUMAN, RETRY, ASK = "dup", "other", "human", "retry", "ask"
+OUTCOMES = {
+    DUP: "дубль", OTHER: "інша пара", HUMAN: "людині", RETRY: "повтор", ASK: "піде на ШІ",
+}  # fmt: skip
+AI_REQUEST_USD = 0.0068  # ≈ 0,68 ¢ за запит (проба Фази 0: 10 пар — 6,8 ¢)
 REPORT_LINES = 60
 
 
@@ -74,6 +77,7 @@ class Decision:
 class Report:
     decisions: list[Decision] = field(default_factory=list)
     ai_requests: int = 0
+    ai_would: int = 0  # `--dry-run`: скільки запитів ШІ знадобилось би (ШІ не питаємо)
     photo_requests: int = 0
     stopped: str | None = None  # 429/403 — чому прохід зупинився
     left: int = 0  # Картки, до яких цього разу не дійшли
@@ -84,10 +88,17 @@ class Report:
     def lines(self, limit: int = REPORT_LINES) -> list[str]:
         out = [
             f"Перевірено Карток: {len(self.decisions)} · "
-            + " · ".join(f"{OUTCOMES[k]}: {self.count(k)}" for k in OUTCOMES)
+            + " · ".join(
+                f"{OUTCOMES[k]}: {self.count(k)}" for k in OUTCOMES if k != ASK or self.count(k)
+            )
             + (f" · не дійшли: {self.left}" if self.left else ""),
             f"Запитів ШІ: {self.ai_requests} · завантажено фото: {self.photo_requests}",
         ]
+        if self.count(ASK):
+            out.append(
+                f"Піде на ШІ: {self.count(ASK)} Карток, {self.ai_would} запитів "
+                f"≈ {self.ai_would * AI_REQUEST_USD:.2f} $ (за прохід — не більше {AI_LIMIT})"
+            )
         if self.stopped:
             out.append(f"Зупинено: {self.stopped}")
         for d in self.decisions:
@@ -148,8 +159,11 @@ class Checker:
         photos: Photos,
         judge: Judge | None,
         ai_limit: int = AI_LIMIT,
+        estimate: bool = False,
     ) -> None:
         self.conn, self.root, self.photos, self.judge = conn, root, photos, judge
+        self.estimate = estimate  # `--dry-run`: ШІ не питаємо, лише рахуємо, скільки піде
+        self.ai_would = 0
         self.ai_left = ai_limit
         self.ai_requests = 0
         self.ai_off: str | None = None  # бюджет/ключ — до кінця проходу ШІ не кличемо
@@ -225,6 +239,9 @@ class Checker:
 
     def _ask(self, card: Card, base: dict, candidates: list[_Candidate]) -> Decision:
         if self.judge is None:
+            if self.estimate:
+                self.ai_would += len(candidates)
+                return Decision(**base, outcome=ASK, text=f"запитів ШІ: {len(candidates)}")
             return Decision(**base, outcome=RETRY, text="ШІ вимкнено (--no-ai)")
         if self.ai_off:
             return Decision(**base, outcome=RETRY, text=self.ai_off)
@@ -292,11 +309,13 @@ def check(
     limit: int = AI_LIMIT,
     *,
     write: bool = True,
+    estimate: bool = False,
 ) -> Report:
     """Один прохід по Картках з непереглянутим дублем. `limit` — запитів ШІ за прохід;
-    `write=False` — лише звіт (нічого не пише в базу)."""
+    `write=False` — лише звіт (нічого не пише в базу); `estimate` — без `judge`: Картки, які
+    фото не вирішило, рахуються як «піде на ШІ» (кількість запитів і ціна)."""
     report = Report()
-    checker = Checker(conn, root, photos, judge, limit)
+    checker = Checker(conn, root, photos, judge, limit, estimate)
     todo = pending(conn)
     for n, item_id in enumerate(todo):
         card = load_card(conn, item_id)
@@ -314,6 +333,7 @@ def check(
         if write:
             apply(conn, decision)
     report.ai_requests = checker.ai_requests
+    report.ai_would = checker.ai_would
     report.photo_requests = photos.requests
     return report
 
