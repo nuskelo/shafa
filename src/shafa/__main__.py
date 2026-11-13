@@ -27,7 +27,8 @@ KLB-008: старі пости хвилі в чергу Клубку (етало
 копія бази в пам'яті, нічого не пише (≤ 60 рядків).
 `python -m shafa klubok-dups [--dry-run] [--no-ai] [--limit N] [--db …] [--root …]` — KLB-011: дублі
 Клубку з «Проблем» вирішує програма (фото → ШІ → людина); `--dry-run` — копія бази в пам'яті, база
-не змінюється (фото кешуються в `<дані>/klubok-photos`, ШІ питається); `--limit` — запитів ШІ.
+не змінюється, ШІ не питається (у звіті — скільки Карток і запитів піде на ШІ й ≈ ціна; фото кешуються
+в `<дані>/klubok-photos`); `--limit` — запитів ШІ.
 `python -m shafa robot --klubok-login` — KLB-003: вхід у Клубок руками (профіль `<дані>/klubok-profile`);
 `--klubok-snapshot --db …` — знімок її оголошень (лише читання сайту); `--klubok-publish --db … --root …
 --limit N [--post P] [--human-click]` — ПУБЛІКАЦІЯ на Клубку з черги (живий сайт, лише з дозволу
@@ -248,7 +249,11 @@ def build_parser() -> argparse.ArgumentParser:
     cmd = commands.add_parser(
         "klubok-dups", help="дублі Клубку: фото → ШІ → лише тоді людина (KLB-011)"
     )
-    cmd.add_argument("--dry-run", action="store_true", help="лише звіт, база не змінюється")
+    cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="лише фото: база не змінюється, ШІ не питаємо, у звіті — скільки піде на ШІ й ≈ ціна",
+    )
     cmd.add_argument("--no-ai", action="store_true", help="лише фото, ШІ не питати")
     cmd.add_argument("--limit", type=int, default=None, help="найбільше запитів ШІ (типово 40)")
     cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
@@ -1302,8 +1307,11 @@ def run_klubok_dups(parser: argparse.ArgumentParser, args: argparse.Namespace) -
         return 2
     try:
         photos = photo_dup.Photos(args.photos or photo_dup.cache_dir())
-        judge = None if args.no_ai else dupcheck.make_judge(conn)
-        report = dupcheck.check(conn, root, photos, judge, limit, write=not args.dry_run)
+        # `--dry-run` ШІ не питає: його гроші не потрапили б у денний бюджет живої бази
+        judge = None if args.no_ai or args.dry_run else dupcheck.make_judge(conn)
+        report = dupcheck.check(
+            conn, root, photos, judge, limit, write=not args.dry_run, estimate=args.dry_run
+        )
     finally:
         conn.close()
     lines = report.lines()
