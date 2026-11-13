@@ -213,6 +213,14 @@ def plan_one(conn: sqlite3.Connection, root: Path, item_id: int) -> Verdict | No
     return judge(conn, root, card) if card else None
 
 
+# KLB-011 (D2): у черзі після «Інша пара» текст рішення програми («Інша пара — ШІ: …») живе —
+# за ним мітка в «Схвалених» і лічильник; будь-який інший новий стан переписує текст як раніше.
+_NEW_TEXT = (
+    "CASE WHEN excluded.state = 'queued' AND klubok_ads.dup_ok_at IS NOT NULL "
+    "THEN klubok_ads.problem_text ELSE excluded.problem_text END"
+)
+
+
 def _write(conn: sqlite3.Connection, v: Verdict, stamp: str) -> None:
     dup_id, dup_name = (v.dup.klubok_id, v.dup.name) if v.dup else (None, None)
     text = None if v.state == QUEUED else (v.text or REASONS.get(v.code or ""))
@@ -221,7 +229,7 @@ def _write(conn: sqlite3.Connection, v: Verdict, stamp: str) -> None:
         "INSERT INTO klubok_ads (item_id, state, problem_code, problem_text, dup_klubok_id, "
         "dup_name, queued_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (item_id) DO UPDATE SET state = excluded.state, "
-        "problem_code = excluded.problem_code, problem_text = excluded.problem_text, "
+        f"problem_code = excluded.problem_code, problem_text = {_NEW_TEXT}, "
         "dup_klubok_id = excluded.dup_klubok_id, dup_name = excluded.dup_name, "
         "queued_at = CASE WHEN excluded.state = 'queued' "
         "THEN COALESCE(klubok_ads.queued_at, excluded.queued_at) END, "
@@ -230,7 +238,7 @@ def _write(conn: sqlite3.Connection, v: Verdict, stamp: str) -> None:
         "AND COALESCE(klubok_ads.problem_code, '') != 'klubok_dup_yes' "
         "AND (klubok_ads.state, COALESCE(klubok_ads.problem_code, ''), "
         "COALESCE(klubok_ads.problem_text, '')) IS NOT "
-        "(excluded.state, COALESCE(excluded.problem_code, ''), COALESCE(excluded.problem_text, ''))",
+        f"(excluded.state, COALESCE(excluded.problem_code, ''), COALESCE({_NEW_TEXT}, ''))",
         (v.item_id, v.state, v.code, text, dup_id, dup_name, queued_at, stamp, stamp),
     )
 
@@ -502,39 +510,94 @@ def confirm(conn: sqlite3.Connection, post_id: int, klubok_id: int, today: datet
 # --- рішення людини про дубль (D6.3) ---
 
 
-def dup_other(conn: sqlite3.Connection, item_id: int) -> bool:
-    """«Інша пара — виставити»: у чергу, дублі для Картки більше не перевіряються."""
+def dup_other(conn: sqlite3.Connection, item_id: int, text: str | None = None) -> bool:
+    """«Інша пара — виставити»: у чергу, дублі для Картки більше не перевіряються.
+    KLB-011: `text` — рішення програми («Інша пара — ШІ: …»); людське — без тексту."""
     stamp = now()
     with conn:
         cursor = conn.execute(
-            "UPDATE klubok_ads SET state = ?, problem_code = NULL, problem_text = NULL, "
+            "UPDATE klubok_ads SET state = ?, problem_code = NULL, problem_text = ?, "
             "dup_ok_at = ?, queued_at = ?, updated_at = ? "
             "WHERE item_id = ? AND state = ? AND problem_code = ?",
-            (QUEUED, stamp, stamp, stamp, item_id, PROBLEM, DUPLICATE),
+            (QUEUED, text, stamp, stamp, stamp, item_id, PROBLEM, DUPLICATE),
         )
     return cursor.rowcount == 1
 
 
-def dup_yes(conn: sqlite3.Connection, item_id: int) -> bool:
-    """«Так, дубль — не виставляти». Її оголошення без поста — тепер знає свій пост (KLB-005)."""
+def dup_yes(
+    conn: sqlite3.Connection,
+    item_id: int,
+    klubok_id: int | None = None,
+    name: str | None = None,
+    text: str | None = None,
+) -> bool:
+    """«Так, дубль — не виставляти». Її оголошення без поста — тепер знає свій пост (KLB-005).
+    KLB-011: рішення програми — `klubok_id`/`name` того, з ким збіглось, і `text` («Дубль — …»)."""
     stamp = now()
     with conn:
         row = conn.execute(
-            "SELECT k.dup_klubok_id, i.post_id FROM klubok_ads k JOIN items i ON i.id = k.item_id "
-            "WHERE k.item_id = ? AND k.state = ? AND k.problem_code = ?",
+            "SELECT k.dup_klubok_id, k.dup_name, i.post_id FROM klubok_ads k "
+            "JOIN items i ON i.id = k.item_id WHERE k.item_id = ? AND k.state = ? "
+            "AND k.problem_code = ?",
             (item_id, PROBLEM, DUPLICATE),
         ).fetchone()
         if row is None:
             return False
+        found = klubok_id if text is not None else row[0]
         conn.execute(
-            "UPDATE klubok_ads SET state = ?, problem_code = ?, problem_text = ?, updated_at = ? "
+            "UPDATE klubok_ads SET state = ?, problem_code = ?, problem_text = ?, "
+            "dup_klubok_id = ?, dup_name = ?, updated_at = ? WHERE item_id = ?",
+            (
+                SKIPPED, DUP_YES, text or REASONS[DUP_YES], found,
+                name if text is not None else row[1], stamp, item_id,
+            ),
+        )  # fmt: skip
+        if found is not None and row[2] is not None:
+            conn.execute(
+                "UPDATE klubok_listings SET post_id = ? WHERE id = ? AND post_id IS NULL",
+                (row[2], found),
+            )
+    return True
+
+
+def dup_mark(
+    conn: sqlite3.Connection, item_id: int, klubok_id: int | None, name: str | None, text: str
+) -> bool:
+    """KLB-011: програма не вирішила — дубль лишається людині з поясненням (маркер у тексті)."""
+    with conn:
+        cursor = conn.execute(
+            "UPDATE klubok_ads SET problem_text = ?, dup_klubok_id = ?, dup_name = ?, "
+            "updated_at = ? WHERE item_id = ? AND state = ? AND problem_code = ?",
+            (text, klubok_id, name, now(), item_id, PROBLEM, DUPLICATE),
+        )
+    return cursor.rowcount == 1
+
+
+AUTO_DUP = "Дубль — "  # KLB-011: початок тексту дубля, який вирішила програма
+
+
+def undo_auto_dup(conn: sqlite3.Connection, item_id: int) -> bool:
+    """KLB-011: «Ні, це інша пара — виставити» з Архіву для дубля, який вирішила програма: у
+    чергу як людське «Інша пара» (без тексту); її оголошення забуває цей пост."""
+    stamp = now()
+    with conn:
+        row = conn.execute(
+            "SELECT k.dup_klubok_id, i.post_id FROM klubok_ads k JOIN items i ON i.id = k.item_id "
+            "WHERE k.item_id = ? AND k.state = ? AND k.problem_code = ? AND k.problem_text LIKE ?",
+            (item_id, SKIPPED, DUP_YES, AUTO_DUP + "%"),
+        ).fetchone()
+        if row is None:
+            return False
+        conn.execute(
+            "UPDATE klubok_ads SET state = ?, problem_code = NULL, problem_text = NULL, "
+            "dup_klubok_id = NULL, dup_name = NULL, dup_ok_at = ?, queued_at = ?, updated_at = ? "
             "WHERE item_id = ?",
-            (SKIPPED, DUP_YES, REASONS[DUP_YES], stamp, item_id),
+            (QUEUED, stamp, stamp, stamp, item_id),
         )
         if row[0] is not None and row[1] is not None:
             conn.execute(
-                "UPDATE klubok_listings SET post_id = ? WHERE id = ? AND post_id IS NULL",
-                (row[1], row[0]),
+                "UPDATE klubok_listings SET post_id = NULL WHERE id = ? AND post_id = ?",
+                (row[0], row[1]),
             )
     return True
 

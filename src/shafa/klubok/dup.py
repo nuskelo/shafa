@@ -69,12 +69,17 @@ class Facts:
     group: int | None
 
 
+HER, OURS = "her", "ours"
+
+
 @dataclass(frozen=True)
 class Dup:
     klubok_id: int | None  # оголошення програми ще публікується — id немає
     name: str
     url: str | None
     whose: str  # "her" — її оголошення, "ours" — виставлене програмою
+    photo: str | None = None  # KLB-011: фото її оголошення (`klubok_listings.photo`)
+    item_id: int | None = None  # KLB-011: Картка виставленого програмою (її фото — наші файли)
 
 
 def card_facts(card: Card) -> Facts:
@@ -176,13 +181,15 @@ def _post_ads(conn: sqlite3.Connection, post_id: int | None) -> set[int]:
     }
 
 
-def find(conn: sqlite3.Connection, card: Card) -> Dup | None:
-    """Схоже оголошення на Клубку: спершу її активні (`klubok_listings`, `sold = 0`), потім
-    виставлені програмою (`klubok_ads` `publishing`/`published`). Нічого не пише."""
+def find_all(conn: sqlite3.Connection, card: Card) -> list[Dup]:
+    """KLB-011: усі схожі оголошення на Клубку в порядку перевірки: спершу її активні
+    (`klubok_listings`, `sold = 0`), потім виставлені програмою (`klubok_ads`
+    `publishing`/`published`). Нічого не пише."""
     ours = card_facts(card)
     own_post = _post_ads(conn, card.post_id)
+    out = []
     for row in conn.execute(
-        "SELECT id, name, price, sizes, brand, category_id, url FROM klubok_listings "
+        "SELECT id, name, price, sizes, brand, category_id, url, photo FROM klubok_listings "
         "WHERE sold = 0 ORDER BY id"
     ):
         if row["id"] in own_post:
@@ -190,7 +197,7 @@ def find(conn: sqlite3.Connection, card: Card) -> Dup | None:
         sizes = tuple(json.loads(row["sizes"] or "[]")) or tuple(title_sizes(row["name"]))
         theirs = Facts(row["name"], sizes, row["brand"], row["price"], _group(row["category_id"]))
         if same(ours, theirs, brand_in_name=row["brand"] is None):
-            return Dup(row["id"], row["name"], row["url"], "her")
+            out.append(Dup(row["id"], row["name"], row["url"], HER, photo=row["photo"]))
     for row in conn.execute(
         "SELECT k.item_id, k.klubok_id, k.url, i.post_id FROM klubok_ads k "
         "JOIN items i ON i.id = k.item_id WHERE k.state IN ('publishing', 'published') "
@@ -204,5 +211,11 @@ def find(conn: sqlite3.Connection, card: Card) -> Dup | None:
             continue
         theirs = card_facts(other)
         if same(ours, theirs, brand_in_name=False):
-            return Dup(row["klubok_id"], theirs.name, row["url"], "ours")
-    return None
+            out.append(Dup(row["klubok_id"], theirs.name, row["url"], OURS, item_id=other.id))
+    return out
+
+
+def find(conn: sqlite3.Connection, card: Card) -> Dup | None:
+    """Перше схоже оголошення (`find_all`) — для черги; немає — None. Нічого не пише."""
+    found = find_all(conn, card)
+    return found[0] if found else None

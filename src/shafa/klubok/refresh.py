@@ -111,16 +111,21 @@ def refresh(conn: sqlite3.Connection, root: Path, today: datetime | None = None)
         return None
 
 
+Dups = Callable[[sqlite3.Connection, Path], object]
+
+
 class Background:
-    """`refresh` в окремому потоці; поки йде — нові прохання зливаються в один повтор."""
+    """`refresh` в окремому потоці; поки йде — нові прохання зливаються в один повтор.
+    KLB-011: `dups` — після черги, у тому самому потоці, перевірка дублів (`dupcheck.background`)."""
 
     def __init__(
         self,
         connect: Callable[[], sqlite3.Connection],
         root: Callable[[], Path],
         log: Callable[[str], None],
+        dups: Dups | None = None,
     ) -> None:
-        self.connect, self.root, self.log = connect, root, log
+        self.connect, self.root, self.log, self.dups = connect, root, log, dups
         self._lock = threading.Lock()
         self._again = False
         self._thread: threading.Thread | None = None
@@ -144,7 +149,13 @@ class Background:
             try:
                 conn = self.connect()
                 try:
-                    refresh(conn, self.root(), datetime.now().astimezone())
+                    root = self.root()
+                    done = refresh(conn, root, datetime.now().astimezone())
+                    if done is not None and self.dups is not None:
+                        try:
+                            self.dups(conn, root)
+                        except Exception as error:  # noqa: BLE001 — черга вже записана
+                            self.log(f"Дублі Клубку не перевірено: {type(error).__name__}: {error}")
                 finally:
                     conn.close()
             except Exception as error:  # noqa: BLE001 — черга не важливіша за екран

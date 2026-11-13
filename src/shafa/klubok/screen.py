@@ -18,7 +18,7 @@ from pathlib import Path
 
 from shafa import rules
 from shafa.db import Status
-from shafa.klubok import fields, queue
+from shafa.klubok import dupcheck, fields, queue
 from shafa.review import Card, _matches, load_card
 
 TABS = {
@@ -38,6 +38,8 @@ WAVE_FILTER = ("review", "queue")  # вкладки з фільтром «Хви
 NEW_POST = "новий пост"  # хвиля 2 — пости бота, рядка `klubok_waves` немає
 SEX = {fields.SEX_GIRL: "для дівчинки", fields.SEX_BOY: "для хлопчика", fields.SEX_ANY: "будь-яка"}
 LISTING_PHOTO = "https://img.klubok.com/"  # фото її оголошення — лише з цього хоста
+AUTO_DUP_GROUP = "Дубль — вирішила програма"  # KLB-011: група «Архіву» з кнопкою «Ні, це інша пара»
+AUTO_OTHER_TAG = "Інша пара (ШІ)"  # KLB-011: мітка в «Схвалених»
 
 
 def _archived_klubok(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -90,6 +92,8 @@ class Row:
     dup_klubok_id: int | None = None
     klubok_id: int | None = None
     listing: Listing | None = None
+    note: str | None = None  # KLB-011: що сказала програма (ШІ, фото) — простою мовою
+    auto: str | None = None  # KLB-011: рішення програми — "dup" (Архів) / "other" (Схвалені)
 
     @property
     def price(self) -> int | None:
@@ -161,11 +165,14 @@ def rows(conn: sqlite3.Connection, tab: str, query: str = "", wave: int | None =
         out = [Row(c, *_wave(known, c)) for c in review_cards(conn)]
         return _filter(out, query, wave)
     if tab == "queue":
-        out = []
+        out, auto = [], _auto_other(conn)
         for place, (item_id, _wave_n) in enumerate(queue.order(conn), start=1):
             card = load_card(conn, item_id)
             if card is not None:
-                out.append(Row(card, *_wave(known, card), place=place))
+                row = Row(card, *_wave(known, card), place=place)
+                if item_id in auto:
+                    row.auto, row.note = "other", auto[item_id]
+                out.append(row)
         return _filter(out, query, wave)
     if tab == "archive":
         return _filter(_archive(conn, known), query)
@@ -188,6 +195,7 @@ def rows(conn: sqlite3.Connection, tab: str, query: str = "", wave: int | None =
         )  # fmt: skip
         if r["problem_code"] == queue.DUPLICATE:
             row.listing = _listing(conn, r["dup_klubok_id"], r["dup_name"])
+            row.note = dupcheck.note(r["problem_text"])
         out.append(row)
     return _filter(out, query, wave)
 
@@ -200,15 +208,62 @@ def _archive(conn: sqlite3.Connection, known: dict[int, tuple[int, str]]) -> lis
         (queue.SKIPPED,),
     ):
         card = load_card(conn, r["item_id"])
-        if card is not None:
-            reason = queue.REASONS.get(r["problem_code"] or "", r["problem_text"] or "")
-            out.append(Row(card, *_wave(known, card), code=r["problem_code"], reason=reason))
+        if card is None:
+            continue
+        if _auto_dup(r["problem_code"], r["problem_text"]):  # KLB-011: можна повернути в чергу
+            row = Row(card, *_wave(known, card), code=r["problem_code"], reason=AUTO_DUP_GROUP)
+            row.auto, row.note = "dup", r["problem_text"]
+            row.listing = _listing(conn, r["dup_klubok_id"], r["dup_name"])
+            out.append(row)
+            continue
+        reason = queue.REASONS.get(r["problem_code"] or "", r["problem_text"] or "")
+        out.append(Row(card, *_wave(known, card), code=r["problem_code"], reason=reason))
     for r in _archived_klubok(conn):
         card = load_card(conn, r["id"])
         if card is not None:
             reason = r["problem_text"] or "Не виставляти"
             out.append(Row(card, *_wave(known, card), code=card.problem_code, reason=reason))
     return out
+
+
+def _auto_dup(code: str | None, text: str | None) -> bool:
+    return code == queue.DUP_YES and (text or "").startswith(dupcheck.AUTO_DUP)
+
+
+def _auto_other(conn: sqlite3.Connection) -> dict[int, str]:
+    """Картки в черзі, які програма сама визнала іншою парою: id → її слова."""
+    return {
+        r[0]: r[1]
+        for r in conn.execute(
+            "SELECT item_id, problem_text FROM klubok_ads WHERE state = ? AND problem_text LIKE ?",
+            (queue.QUEUED, dupcheck.AUTO_OTHER + "%"),
+        )
+    }
+
+
+@dataclass(frozen=True)
+class AutoSummary:
+    """«Програма вирішила: X дублів, Y інших пар · вам лишилось Z» над «Проблемами»."""
+
+    dups: int
+    others: int
+    left: int
+
+
+def auto_summary(conn: sqlite3.Connection) -> AutoSummary:
+    dups = conn.execute(
+        "SELECT count(*) FROM klubok_ads WHERE state = ? AND problem_code = ? "
+        "AND problem_text LIKE ?",
+        (queue.SKIPPED, queue.DUP_YES, dupcheck.AUTO_DUP + "%"),
+    ).fetchone()[0]
+    others = conn.execute(
+        "SELECT count(*) FROM klubok_ads WHERE problem_text LIKE ?", (dupcheck.AUTO_OTHER + "%",)
+    ).fetchone()[0]
+    left = conn.execute(
+        "SELECT count(*) FROM klubok_ads WHERE state = ? AND problem_code = ?",
+        (queue.PROBLEM, queue.DUPLICATE),
+    ).fetchone()[0]
+    return AutoSummary(dups, others, left)
 
 
 def groups(found: list[Row]) -> list[tuple[str, list[Row]]]:

@@ -895,6 +895,11 @@ html[data-theme="dark"] .sp-actions .sp-stop { color: #1f0c09; }
 .kdup-theirs .kind { font-size: 0.82rem; color: var(--muted); }
 .kdup-theirs .name { overflow-wrap: anywhere; font-weight: 600; }
 .kdup-theirs p { margin: 0; }
+/* KLB-011: дубль, який вирішила програма (Архів), і підсумок над «Проблемами» */
+.kauto { display: flex; flex-direction: column; gap: 6px; padding: 8px 2px 0; min-width: 0; }
+.kauto p { margin: 0; font-size: 0.85rem; overflow-wrap: anywhere; }
+.kauto form button { width: 100%; }
+.kauto-sum { margin: 0 0 12px; padding: 8px 12px; border-radius: var(--radius); background: var(--sub); }
 .kad form.decide { margin-top: 0.6rem; }
 .krows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .krow { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); }

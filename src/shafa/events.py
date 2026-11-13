@@ -65,6 +65,8 @@ KINDS = {
     "klubok.missing": Kind("⚠️", loud=True),
     "klubok.retry": Kind("🧶"),  # KLB-009: «не опубліковано» — назад у чергу (екран)
     "klubok.waves": Kind("🧶"),  # KLB-010: хвилі перераховано новими правилами (тихо)
+    "klubok.dup_auto": Kind("🧶"),  # KLB-011: дубль вирішила програма (фото чи ШІ), тихо
+    "klubok.dup_stop": Kind("⚠️"),  # KLB-011: Клубок відповів 429/403 — перевірку дублів зупинено
     # пости каналу (`scan.py`, `changes.py`, `robot/publish.py`, `site.py`)
     "post.new": Kind("📥"),
     "post.changed": Kind("✏️"),
