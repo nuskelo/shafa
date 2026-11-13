@@ -238,6 +238,25 @@ def test_all_ai_no_goes_to_queue_and_label_survives_two_syncs(conn, root, tmp_pa
     assert screen.auto_summary(conn) == screen.AutoSummary(0, 1, 0)
 
 
+def test_old_reason_is_gone_after_skipped_and_back_to_queue(conn, root, tmp_path):
+    """Пара з `dup_ok_at` пройшла через `skipped` (пост зник) і повернулась у `queued`:
+    старої причини («пост зник») немає, а живе лише «Інша пара — …»."""
+    listing(conn, 901)
+    item_id = problem(conn, root)
+    dupcheck.check(conn, root, photos(tmp_path, Net(thumbs(n901=pattern(7)))),
+                   FakeJudge(("no", "інша")))  # fmt: skip
+    assert row(conn, item_id)["problem_text"] == "Інша пара — ШІ: інша"
+    with conn:  # пост зник з каналу → `skipped` з причиною
+        conn.execute("UPDATE klubok_ads SET state = 'skipped', problem_code = ?, problem_text = ? "
+                     "WHERE item_id = ?",
+                     (queue.POST_GONE, queue.REASONS[queue.POST_GONE], item_id))  # fmt: skip
+    # повернулась у чергу (пост знову є): `dup_ok_at` лишився, текст — стара причина
+    queue.sync(conn, root, TODAY)
+    got = row(conn, item_id)
+    assert got["state"] == queue.QUEUED and got["dup_ok_at"] is not None
+    assert got["problem_text"] is None  # старої причини немає, «Інша пара (ШІ)» теж (ШІ не питали)
+
+
 def test_human_other_pair_keeps_no_text(conn, root):
     listing(conn, 901)
     item_id = problem(conn, root)
@@ -377,8 +396,39 @@ def test_dry_run_writes_nothing(conn, root, tmp_path):
     item_id = problem(conn, root)
     before = dict(row(conn, item_id))
     report = dupcheck.check(conn, root, photos(tmp_path, Net(thumbs(n901=pattern(1)))),
-                            FakeJudge(), write=False)  # fmt: skip
+                            None, write=False, estimate=True)  # fmt: skip
     assert report.count(dupcheck.DUP) == 1 and dict(row(conn, item_id)) == before
+
+
+def test_dry_run_does_not_ask_ai_and_estimates_price(conn, root, tmp_path):
+    listing(conn, 901)
+    listing(conn, 902, name="Черевики Ecco 38 розміру шкіряні")
+    problem(conn, root)
+    problem(conn, root, 7302, seed=2)
+    net = Net(thumbs(n901=pattern(7), n902=pattern(8)))
+    report = dupcheck.check(conn, root, photos(tmp_path, net), None, write=False, estimate=True)
+    # обидві Картки фото не вирішило: кожна — 2 кандидати → 4 запити
+    assert report.count(dupcheck.ASK) == 2 and report.ai_would == 4 and report.ai_requests == 0
+    lines = report.lines()
+    assert any("Піде на ШІ: 2 Карток, 4 запитів ≈ 0.03 $" in line for line in lines)
+    assert len(dupcheck.pending(conn)) == 2  # нічого не записано, маркерів немає
+
+
+def test_dry_run_cli_never_builds_judge(conn, root, tmp_path, monkeypatch):
+    from shafa import __main__ as cli
+
+    listing(conn, 901)
+    problem(conn, root)
+    path = conn.execute("PRAGMA database_list").fetchone()[2]
+    conn.close()
+    monkeypatch.setattr(
+        dupcheck,
+        "make_judge",
+        lambda c: (_ for _ in ()).throw(AssertionError("ШІ не мав питатись")),
+    )
+    code = cli.main(["klubok-dups", "--dry-run", "--db", path, "--root", str(root),
+                     "--photos", str(tmp_path / "kesh")])  # fmt: skip
+    assert code == 0
 
 
 def test_auto_decision_is_journaled(conn, root, tmp_path, monkeypatch):

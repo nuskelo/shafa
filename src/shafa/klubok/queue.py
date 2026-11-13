@@ -214,9 +214,11 @@ def plan_one(conn: sqlite3.Connection, root: Path, item_id: int) -> Verdict | No
 
 
 # KLB-011 (D2): у черзі після «Інша пара» текст рішення програми («Інша пара — ШІ: …») живе —
-# за ним мітка в «Схвалених» і лічильник; будь-який інший новий стан переписує текст як раніше.
+# за ним мітка в «Схвалених» і лічильник; живе лише сам цей текст (старий `LIKE 'Інша пара — %'`):
+# будь-яка інша стара причина (пара побувала в `skipped` і повернулась) переписується як раніше.
 _NEW_TEXT = (
     "CASE WHEN excluded.state = 'queued' AND klubok_ads.dup_ok_at IS NOT NULL "
+    "AND klubok_ads.problem_text LIKE 'Інша пара — %' "
     "THEN klubok_ads.problem_text ELSE excluded.problem_text END"
 )
 
