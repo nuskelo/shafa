@@ -165,16 +165,20 @@ class Renewer:
         return Outcome(RENEWED, verdict.text, page.count, len(before), len(verdict.renewed))
 
     def _send(self, now: datetime) -> bool:
-        """Один GET `/renew/all`: позначка доби — до запиту (робот) чи щойно людина натиснула."""
+        """Один GET `/renew/all`. Позначка доби: робот — до запиту; `--human-click` — лише коли guard
+        пропустив запит «Обновить все» (RENEWED, `Session.on_renew`): людина не натиснула чи
+        натиснула не те — позначки немає, того ж дня можна ще раз."""
+
+        def mark() -> None:
+            renew.save(self.data_dir, day=now.date().isoformat(), at=now.isoformat(), ok=None)
+
         if self.human:
+            self.session.on_renew = mark
             self.session.open_manage()
             self.log("Натисніть «Обновить все» у вікні Chrome (робот чекає до "
                      f"{self.human_wait / 60:.0f} хв)")  # fmt: skip
-            sent = self.session.wait_renew_click(self.human_wait)
-            if sent:
-                renew.save(self.data_dir, day=now.date().isoformat(), at=now.isoformat(), ok=None)
-            return sent
-        renew.save(self.data_dir, day=now.date().isoformat(), at=now.isoformat(), ok=None)
+            return self.session.wait_renew_click(self.human_wait)
+        mark()
         return self.session.renew_all()
 
     def _failed(self, now: datetime, why: str, link: int | None, overdue: int) -> Outcome:

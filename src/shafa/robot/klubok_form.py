@@ -83,6 +83,7 @@ class Session:
         self.human = human
         self.renewing = renewing
         self.renew_ticket: klubok_guard.RenewTicket | None = None
+        self.on_renew: Callable[[], None] | None = None  # guard пропустив «Обновить все» (RENEWED)
         self.blocked: list[tuple[str, str]] = []
         self.uploads = 0
         self.ticket: klubok_guard.Ticket | None = None
@@ -129,6 +130,11 @@ class Session:
         )  # fmt: skip
         if allowed and reason == klubok_guard.SUBMITTED:
             self._send_submit(route)
+        elif allowed and reason == klubok_guard.RENEWED:
+            if self.on_renew is not None:  # позначка доби — до того, як запит піде (KLB-004)
+                with contextlib.suppress(Exception):
+                    self.on_renew()
+            route.continue_()
         elif allowed:
             self.uploads += reason == "завантаження фото"
             route.continue_()

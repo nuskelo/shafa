@@ -260,21 +260,46 @@ def test_no_login_stops_before_any_renew(conn, chromium, server, said, tmp_path)
     assert stop.value.code == kr.LOGIN and renew_hits(server) == []
 
 
-def test_human_click_goes_through_guard(conn, chromium, server, said, tmp_path):  # noqa: F811
+def human_session(chromium, server, link='a[href="/renew/all"]'):  # noqa: F811
+    """Сесія `--human-click`, де «людина» натискає `link` на сторінці керування."""
     s = open_session(chromium, server, human=True)
     original = s.open_manage
 
     def human_opens_and_clicks():
         original()
-        s.page.evaluate(
-            "() => setTimeout(() => document.querySelector('a[href=\"/renew/all\"]').click(), 300)"
-        )
+        s.page.evaluate("sel => setTimeout(() => document.querySelector(sel).click(), 300)", link)
 
     s.open_manage = human_opens_and_clicks
+    return s
+
+
+def test_human_click_goes_through_guard(conn, chromium, server, said, tmp_path):  # noqa: F811
+    seen = []  # чи стояла позначка доби, коли запит дійшов до Клубку
+    renew_overdue = server.renew_overdue
+    server.renew_overdue = lambda: (seen.append(renew.load(tmp_path).get("day")), renew_overdue())
+    s = human_session(chromium, server)
     try:
         out = do_renew(conn, s, tmp_path, human=True, human_wait=10)
     finally:
         s.close()
+    assert out.code == kr.RENEWED and server.renews == 1
+    assert seen == [NOW.date().isoformat()]  # позначка — щойно guard пропустив (RENEWED)
+
+
+def test_human_wrong_link_no_mark_retry_same_day(conn, chromium, server, said, tmp_path):  # noqa: F811
+    wrong = human_session(chromium, server, 'a[href*="pg=renew-used"]')  # «Обновить» одного
+    try:
+        out = do_renew(conn, wrong, tmp_path, human=True, human_wait=2)
+    finally:
+        wrong.close()
+    assert out.code == kr.NOT_CLICKED and server.renews == 0
+    assert any("небезпечна" in why for url, why in wrong.blocked if url.endswith("/users/198135"))
+    assert "day" not in renew.load(tmp_path)
+    again = human_session(chromium, server)  # того ж дня — ще раз, тепер правильне посилання
+    try:
+        out = do_renew(conn, again, tmp_path, human=True, human_wait=10)
+    finally:
+        again.close()
     assert out.code == kr.RENEWED and server.renews == 1
 
 
