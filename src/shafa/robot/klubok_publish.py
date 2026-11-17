@@ -2,7 +2,8 @@
 
 Порядок: обірвані сесії Клубку → `crash`, `queue.recover` → рядок `sessions` (`site = 'klubok'`) →
 вхід (`/item/add`: є форма і `#user_id` = 198135, інакше стоп `klubok_login`) → знімок її оголошень
-(`klubok.snapshot`) → цикл: `queue.take` (щоразу заново: ліміт доби, дублі) → `queue.start` → свіжа
+(`klubok.snapshot`) → KLB-004: «Обновить все», якщо сьогодні ще не оновлювали й є прострочені
+(`klubok_renew`, той самий Chrome; 429 — стоп) → цикл: `queue.take` (щоразу заново: ліміт доби, дублі) → `queue.start` → свіжа
 форма → `KlubokDriver.fill` + `verify` → квиток → клік `#btn-submit` (чи людина, `--human-click`) →
 відповідь `add-edit-used`:
 
@@ -36,7 +37,7 @@ from shafa import config, events
 from shafa.db import now
 from shafa.klubok import queue, refresh, snapshot
 from shafa.robot import klubok_form as form
-from shafa.robot import publish
+from shafa.robot import klubok_renew, publish
 from shafa.robot.klubok_guard import Forbidden
 
 SUBMIT_WAIT = 60.0  # с на відповідь `add-edit-used` після кліку робота
@@ -84,6 +85,8 @@ class Options:
     human_wait: float = HUMAN_WAIT
     pause: tuple[float, float] = PAUSE
     page_pause: tuple[float, float] = PAGE_PAUSE
+    renew: bool = True  # KLB-004: «Обновить все» на початку сесії
+    settle: tuple[float, float] = klubok_renew.SETTLE
 
 
 @dataclass
@@ -253,6 +256,8 @@ class Run:
         except snapshot.SnapshotError as error:
             raise Stop(error.code, error.text) from None
         self._check_429()
+        if self.opts.renew:
+            self._renew()
         while True:
             if self.stopping():
                 raise Stop(STOPPED)
@@ -272,6 +277,18 @@ class Run:
             until = datetime.now().astimezone().timestamp() + pause
             self._now("pause", until=until, last=self._last(taken.cards[0]))
             self.sleep(pause)
+
+    def _renew(self) -> None:
+        """KLB-004: «Обновить все» до першої Картки (квиток — лише до квитка публікації)."""
+        self._now("renew")
+        try:
+            klubok_renew.renew_once(
+                self.conn, self.session, snapped=True, now=self.today, human=self.opts.human,
+                human_wait=self.opts.human_wait, sleep=self.sleep, log=self.log,
+                page_pause=self.opts.page_pause, settle=self.opts.settle,
+            )  # fmt: skip
+        except klubok_renew.RenewStop as stop:
+            raise Stop(stop.code, stop.text) from None
 
     def _check_429(self) -> None:
         if self.session.too_many:

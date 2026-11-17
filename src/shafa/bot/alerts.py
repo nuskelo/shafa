@@ -22,6 +22,8 @@ from pathlib import Path
 from shafa import batch, config, events
 from shafa.bot import actions, report
 from shafa.db import Status
+from shafa.klubok import queue as klubok_queue
+from shafa.klubok import renew as klubok_renew
 from shafa.robot import control
 
 SETTING = "SHAFA_ALERTS"  # не задано — тривоги є; «off» (чи «ні», «no», «0», «false») — вимкнено
@@ -74,6 +76,7 @@ def _defaults() -> dict:
         "batches": [],  # коли надіслано збірки за останню годину
         "dropped": 0,  # подій понад ліміт збірок, про які ще не казали
         "notice_at": "",
+        "renew_due": "",  # KLB-004: про який прострочений термін «Обновить все» вже сказали
     }
 
 
@@ -295,6 +298,25 @@ def _budget_events(conn: sqlite3.Connection, state: dict, moment: datetime) -> l
     return [Event(f"budget:{day}", text, _set("budget_day", day.isoformat()))]
 
 
+def _renew_events(
+    conn: sqlite3.Connection, data_dir: Path, state: dict, moment: datetime
+) -> list[Event]:
+    """KLB-004: «Обновить все» на Клубку прострочено > 12 год — один раз на термін."""
+    if not klubok_queue.enabled():
+        return []
+    try:
+        found = klubok_renew.status(conn, moment.astimezone(), data_dir)
+    except Exception:  # noqa: BLE001 — тривоги не ламаються через Клубок
+        return []
+    if found.since is None or moment - found.since <= klubok_renew.ALERT_AFTER:
+        return []
+    key = found.since.isoformat()
+    if state.get("renew_due") == key:
+        return []
+    text = f"🔄 Клубок: {found.line}. Подивіться панель Клубку на екрані."
+    return [Event(f"renew:{key}", text, _set("renew_due", key))]
+
+
 def _position(record: events.Record) -> Callable[[dict], None]:
     return _set("events", {"inode": record.inode, "offset": record.end})
 
@@ -334,6 +356,7 @@ def collect(conn: sqlite3.Connection, data_dir: Path, state: dict, moment: datet
         *_problem_events(conn, state),
         *_health_events(data_dir, state, moment),
         *_budget_events(conn, state, moment),
+        *_renew_events(conn, data_dir, state, moment),
     ]
 
 

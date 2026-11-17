@@ -513,6 +513,7 @@ def test_client_thread_exchanges_and_runs_owner_commands(conn, root, sconn, sroo
                                                          tmp_path, monkeypatch, chats,
                                                          on_server):  # fmt: skip
     monkeypatch.setenv(bot_run.TOKEN, "123:abc")
+    monkeypatch.setenv(report.SETTING, "off")  # лише /zvit: після 21:00 щоденний звіт дав би другий
     server.handle(owner_text(upd, "/zvit"))
     monkeypatch.setattr(report, "build", lambda *a, **k: "Звіт")
     home = FakeTelegram()

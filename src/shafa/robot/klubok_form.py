@@ -71,12 +71,19 @@ class Session:
     context: Any
     page: Any
 
-    def _setup(self, allow_upload: bool, publishing: bool = False, human: bool = False) -> None:
+    def _setup(
+        self, allow_upload: bool, publishing: bool = False, human: bool = False,
+        renewing: bool = False,
+    ) -> None:  # fmt: skip
         """`publishing` — сесія публікації KLB-003 (квиток, reCAPTCHA); `human` — «Опубликовать»
-        тисне людина (`--human-click`), робот кнопку не чіпає ніколи."""
+        тисне людина (`--human-click`), робот кнопку не чіпає ніколи. `renewing` — KLB-004
+        `--klubok-renew` (квиток «Обновить все»; у сесії публікації — лише на її початку)."""
         self.allow_upload = allow_upload
         self.publishing = publishing
         self.human = human
+        self.renewing = renewing
+        self.renew_ticket: klubok_guard.RenewTicket | None = None
+        self.on_renew: Callable[[], None] | None = None  # guard пропустив «Обновить все» (RENEWED)
         self.blocked: list[tuple[str, str]] = []
         self.uploads = 0
         self.ticket: klubok_guard.Ticket | None = None
@@ -119,10 +126,15 @@ class Session:
             return
         allowed, reason = klubok_guard.request_verdict(
             request.method, url, request.headers.get("content-type", ""), self.allow_upload,
-            publishing=self.publishing, ticket=self.ticket,
+            publishing=self.publishing, ticket=self.ticket, renew=self.renew_ticket,
         )  # fmt: skip
         if allowed and reason == klubok_guard.SUBMITTED:
             self._send_submit(route)
+        elif allowed and reason == klubok_guard.RENEWED:
+            if self.on_renew is not None:  # позначка доби — до того, як запит піде (KLB-004)
+                with contextlib.suppress(Exception):
+                    self.on_renew()
+            route.continue_()
         elif allowed:
             self.uploads += reason == "завантаження фото"
             route.continue_()
@@ -173,6 +185,51 @@ class Session:
 
     def drop_ticket(self) -> None:
         self.ticket = None
+
+    # --- KLB-004: «Обновить все» ---
+
+    def site_url(self, path: str) -> str:
+        """Адреса сторінки Клубку для `page.goto` (підставний — свій хост)."""
+        return f"https://{klubok_guard.HOST}{path}"
+
+    def issue_renew_ticket(self) -> klubok_guard.RenewTicket:
+        """Квиток на один GET «Обновить все»: лише `--klubok-renew` чи початок сесії публікації
+        (до першого квитка Картки), один на сесію."""
+        if not (self.renewing or self.publishing):
+            raise Forbidden("«Обновить все» — лише в --klubok-renew чи на початку публікації")
+        if self.renew_ticket is not None:
+            raise Forbidden("«Обновить все» — один раз за сесію")
+        if self.ticket is not None:
+            raise Forbidden("«Обновить все» — лише на початку сесії публікації")
+        self.renew_ticket = klubok_guard.RenewTicket()
+        return self.renew_ticket
+
+    def open_manage(self) -> None:
+        """Сторінка керування (`/users/198135/manage`) — для `--human-click`."""
+        with contextlib.suppress(_playwright_error()):
+            self.page.goto(self.site_url(MANAGE_PATH), wait_until="load")
+
+    def renew_all(self) -> bool:
+        """Робот: один `page.goto` рівно на `/renew/all` за новим квитком (не клік по посиланню).
+        True — guard пропустив запит (Клубок його отримав чи міг отримати)."""
+        ticket = self.issue_renew_ticket()
+        with contextlib.suppress(_playwright_error()):  # редирект/обрив — результат покаже знімок
+            self.page.goto(self.site_url(klubok_guard.RENEW_PATH), wait_until="load")
+        return ticket.used
+
+    def wait_renew_click(self, limit: float) -> bool:
+        """`--human-click`: чекати, доки людина натисне «Обновить все» (guard пропустить GET)."""
+        ticket = self.issue_renew_ticket()
+        deadline = time.monotonic() + limit
+        while not ticket.used and time.monotonic() < deadline:
+            try:
+                self.page.wait_for_timeout(250)
+            except _playwright_error():  # вікно закрили
+                break
+        if ticket.used:
+            with contextlib.suppress(_playwright_error()):
+                self.page.wait_for_load_state("load", timeout=30_000)
+        return ticket.used
 
     def click_submit(self) -> None:
         """Клік «Опубликовать» роботом: лише `#btn-submit`, живий квиток, не `--human-click`."""
@@ -311,6 +368,7 @@ class Session:
 
 
 KLUBOK_USER = snapshot.USER  # її акаунт: `#user_id` форми (D2) і `user_id` у `get-items` (D3)
+MANAGE_PATH = f"/users/{KLUBOK_USER}/manage"  # KLB-004: сторінка керування з «Обновить все (N)»
 FORM_URL = "https://klubok.com/item/add"
 
 
@@ -322,8 +380,11 @@ class LiveSession(Session):
     """Живий Клубок: видимий Chrome з профілем Клубку, guard публікації. Ctrl+C не закриває Chrome
     (`handle_sigint=False`): сесія доробляє поточну Картку сама."""
 
-    def __init__(self, playwright: Any, publishing: bool = False, human: bool = False) -> None:
-        self._setup(allow_upload=True, publishing=publishing, human=human)
+    def __init__(
+        self, playwright: Any, publishing: bool = False, human: bool = False,
+        renewing: bool = False,
+    ) -> None:  # fmt: skip
+        self._setup(allow_upload=True, publishing=publishing, human=human, renewing=renewing)
         profile = profile_dir()
         profile.mkdir(parents=True, exist_ok=True)
         self.context = playwright.chromium.launch_persistent_context(

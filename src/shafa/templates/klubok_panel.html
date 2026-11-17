@@ -33,6 +33,7 @@
       </div>
       {% set lines = [] %}
       {% if kpanel.doing %}{% set _ = lines.append(("robot-doing", kpanel.doing)) %}{% endif %}
+      {% if kpanel.renew %}{% set _ = lines.append(("renew-line renew-warn" if kpanel.renew_warn else "renew-line", kpanel.renew)) %}{% endif %}
       {% if kpanel.previous %}{% set _ = lines.append(("robot-previous", kpanel.previous)) %}{% endif %}
       {% if why_line and why_line != note %}{% set _ = lines.append(("why", why_line)) %}{% endif %}
       {% if kpanel.code == "running" %}{% set _ = lines.append(("", "Не закривайте вікно Chrome робота і кришку ноутбука, поки робот працює.")) %}{% endif %}

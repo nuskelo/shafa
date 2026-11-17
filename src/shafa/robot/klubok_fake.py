@@ -14,6 +14,10 @@ KLB-003: `GET /api/get-items` посторінково зі штучних ог�
 надсилає); підставна reCAPTCHA на «чужому» хості: шлях `/google/…` підставного сервера guard бачить
 як `https://www.google.com/…` (так перевіряється дозвіл reCAPTCHA), `/evil/…` — як чужий сайт; 429.
 
+KLB-004: `/users/198135/manage` — посилання «Обновить все (N)», лише коли є прострочені (`renew_date`
+≤ `Server.clock`); `GET /renew/all` (`renews` рахує, що дійшли) → режим `RENEWS` і 302 на сторінку
+керування; 429 — `too_many.add("/renew/all")`; без входу — сценарії `login`/`signup`.
+
 Фото: кожне вантажиться `DELAY` секунд (випадково), у `formData.images` елемент з'являється в
 порядку **відповіді сервера** — так відтворюється розсип порядку (1, 2, 3, 4, 5, 7, 8, 6), якщо
 вибрати кілька файлів одразу.
@@ -26,6 +30,7 @@ import random
 import tempfile
 import threading
 import time
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -63,6 +68,18 @@ SUBMITS = {
     "429": "HTTP 429",
 }
 USER = "198135"
+RENEWS = {
+    "ok": "прострочені отримують renew_date = зараз + 7 діб",
+    "stale": "запит прийнято, але нічого не оновилось (renew_date ті самі)",
+}
+MANAGE_PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<title>Объявления — підставний Клубок</title></head><body>
+<h1>Активные объявления</h1>
+<table><tr><td>%(renew)s</td></tr></table>
+<p><a href="/users/198135?pg=renew-used&id=1">Обновить</a> ·
+<a href="/payment/1">Сделать горячим</a> ·
+<a href="/users/198135?pg=marksold&id=1">Отметить проданным</a></p>
+</body></html>"""
 NAMES = ("Черевики", "Чоботи", "Кросівки", "Туфлі", "Кеди", "Сумка")
 
 
@@ -343,6 +360,22 @@ class _Handler(BaseHTTPRequestHandler):
         self.server.hits.append(("GET", self.path))
         if parts.path in self.server.too_many:
             self._send(429, b"{}", "application/json")
+        elif parts.path == "/renew/all" and not parts.query:
+            self.server.renews += 1
+            if self.server.renew_mode == "ok":
+                self.server.renew_overdue()
+            self.send_response(302)
+            self.send_header("Location", f"/users/{USER}/manage")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        elif parts.path == f"/users/{USER}/manage":
+            self.server.manage_reads += 1
+            due = self.server.overdue()
+            link = (
+                f'<a href="/renew/all" class="b-tabs__item__link"> Обновить все ({len(due)}) </a>'
+            )
+            body = MANAGE_PAGE % {"renew": link if due else ""}
+            self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
         elif any(word in self.path.lower() for word in TRAP_WORDS):
             self.server.traps.append(self.path)
             self._send(200, b"trap", "text/plain")
@@ -501,12 +534,30 @@ class Server(ThreadingHTTPServer):
         self.published: list[int] = []
         self.captcha_posts = 0
         self.user = USER
+        # KLB-004
+        self.clock = datetime(2026, 11, 24, 18, 0, tzinfo=UTC)  # «зараз» підставного Клубку
+        self.renew_mode = "ok"  # режим `RENEWS`
+        self.renews = 0  # GET /renew/all, що дійшли до сервера
+        self.manage_reads = 0
         self.base = f"http://127.0.0.1:{self.server_address[1]}"
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
     def close(self) -> None:
         self.shutdown()
         self.server_close()
+
+    def overdue(self) -> list[dict[str, Any]]:
+        """Оголошення, яким уже можна «Обновить» (`renew_date` ≤ `clock`)."""
+        return [
+            item for item in self.listings
+            if datetime.fromisoformat(item["renew_date"]) <= self.clock
+        ]  # fmt: skip
+
+    def renew_overdue(self) -> None:
+        """KLB-004 (Фаза 0): «Обновить все» чіпає лише прострочені — термін = зараз + 7 діб."""
+        stamp = (self.clock + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for item in self.overdue():
+            item["renew_date"] = stamp
 
     def renew_all(self, groups: int = 29) -> None:
         """«Обновить все»: `renew_date` однакова до секунди в групах (11.11: 29 значень на 1787)."""
@@ -537,11 +588,12 @@ class FakeSession(form.Session):
         context: Any = None,
         publishing: bool = False,
         human: bool = False,
+        renewing: bool = False,
     ) -> None:
         """`context` — готовий контекст браузера (тести); без нього — тимчасовий профіль Chrome."""
         if scenario not in SCENARIOS:
             raise ValueError(f"невідомий сценарій підставного Клубку: {scenario}")
-        self._setup(allow_upload, publishing=publishing, human=human)
+        self._setup(allow_upload, publishing=publishing, human=human, renewing=renewing)
         self.base = base
         self.scenario = scenario
         self.profile = None if context else tempfile.TemporaryDirectory(prefix="fake-klubok-")
@@ -562,6 +614,9 @@ class FakeSession(form.Session):
 
     def form_url(self) -> str:
         return f"{self.base}/item/add?s={self.scenario}"
+
+    def site_url(self, path: str) -> str:
+        return self.base + path
 
     def outside(self) -> list[str]:
         """Запити, що намагались піти не на підставний Клубок (заблоковані сесією)."""

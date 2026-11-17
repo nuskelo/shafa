@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from shafa import config, db, events, fill, photos, places, review, web
-from shafa.robot import control, lock, publish, rehearse
+from shafa.robot import control, klubok_control, klubok_renew, lock, publish, rehearse
 
 LOCK_NAME = "ui.lock"
 URL_NAME = "ui.url"
@@ -107,6 +107,17 @@ def nightly(path: Path) -> rehearse.Nightly:
     )  # fmt: skip
 
 
+def klubok_daily(path: Path) -> klubok_renew.Daily:
+    """KLB-004: «Обновить все» на Клубку раз на добу о `SHAFA_KLUBOK_RENEW_AT` і пізніше."""
+    return klubok_renew.Daily(
+        command=lambda: ["--klubok-renew", "--db", str(path)],
+        spawn=lambda args: control.spawn(args, log=klubok_control.log_path()),
+        busy=lock.busy,
+        log=control.log_line,
+        connect=lambda: db.connect(path),
+    )
+
+
 def start(
     open_browser: Callable[[str], object] = webbrowser.open,
     port: int = web.DEFAULT_PORT,
@@ -158,6 +169,9 @@ def start(
         night_stop = threading.Event()
         threading.Thread(
             target=nightly(path).run, args=(night_stop,), daemon=True, name="rehearse-nightly"
+        ).start()
+        threading.Thread(
+            target=klubok_daily(path).run, args=(night_stop,), daemon=True, name="klubok-renew"
         ).start()
         if app.start_bot() == "bot_started":
             print("Бот запускається окремим процесом (журнал — bot-run.log у теці даних)")

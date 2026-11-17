@@ -33,6 +33,8 @@ KLB-008: старі пости хвилі в чергу Клубку (етало
 `--klubok-snapshot --db …` — знімок її оголошень (лише читання сайту); `--klubok-publish --db … --root …
 --limit N [--post P] [--human-click]` — ПУБЛІКАЦІЯ на Клубку з черги (живий сайт, лише з дозволу
 Власника); з `--fake-klubok` — на підставному Клубку й на копії бази (файл не змінюється).
+`--klubok-renew --db … [--human-click]` — KLB-004: «Обновить все» на Клубку, якщо є прострочені й
+сьогодні ще не оновлювали (один GET `/renew/all`; `--human-click` — тисне людина).
 `python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
 `--pause | --resume | --stop --db …` — керування запущеною публікацією (поточний товар дописується).
 `python -m shafa bot --db … --root … [--check]` — Telegram-бот: пост від Продавчині → прев'ю →
@@ -283,6 +285,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="KLB-003: ОПУБЛІКУВАТИ на Клубку з черги (потрібні --limit, живий сайт!)",
     )  # fmt: skip
     mode.add_argument(
+        "--klubok-renew", action="store_true",
+        help="KLB-004: «Обновить все» на Клубку, якщо є прострочені (живий сайт!)",
+    )  # fmt: skip
+    mode.add_argument(
         "--klubok-confirm", action="store_true",
         help="KLB-007: підтвердити, що невпевнена публікація відбулась (--post P --klubok-id N)",
     )  # fmt: skip
@@ -338,13 +344,13 @@ def run_control(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
 def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.pause or args.resume or args.stop:
         return run_control(parser, args)
-    if args.human_click and not args.klubok_publish:
-        parser.error("--human-click лише з --klubok-publish")
+    if args.human_click and not (args.klubok_publish or args.klubok_renew):
+        parser.error("--human-click лише з --klubok-publish чи --klubok-renew")
     if args.klubok_confirm:
         return run_klubok_confirm(parser, args)
     if args.klubok_id is not None:
         parser.error("--klubok-id лише з --klubok-confirm")
-    if args.klubok_login or args.klubok_snapshot or args.klubok_publish:
+    if args.klubok_login or args.klubok_snapshot or args.klubok_publish or args.klubok_renew:
         return run_klubok(parser, args)
     if args.klubok_dry_fill or args.fake_klubok:
         return run_klubok_dry_fill(parser, args)
@@ -650,13 +656,19 @@ def run_klubok(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
             klubok_queue.from_post()
         except klubok_queue.SetupError as error:
             parser.error(str(error))
-    if (args.klubok_snapshot or args.klubok_publish) and (args.db is None or not args.db.is_file()):
+    needs_db = args.klubok_snapshot or args.klubok_publish or args.klubok_renew
+    if needs_db and (args.db is None or not args.db.is_file()):
         parser.error(f"Базу не знайдено: {args.db}")
     if args.fake_klubok and args.klubok_login:
         parser.error("--fake-klubok не для входу")
-    mode = "klubok-login" if args.klubok_login else (
-        "klubok-snapshot" if args.klubok_snapshot else "klubok-publish"
-    )  # fmt: skip
+    if args.klubok_login:
+        mode = "klubok-login"
+    elif args.klubok_snapshot:
+        mode = "klubok-snapshot"
+    elif args.klubok_renew:
+        mode = "klubok-renew"
+    else:
+        mode = "klubok-publish"
     try:
         with lock.hold(mode):
             return _klubok_with_browser(args, root)
@@ -715,15 +727,18 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
             if server is not None:
                 session: klubok_form.Session = klubok_fake.FakeSession(
                     p, server.base, headless=False, publishing=args.klubok_publish,
-                    human=args.human_click,
+                    human=args.human_click, renewing=args.klubok_renew,
                 )  # fmt: skip
             else:
                 session = klubok_form.LiveSession(
-                    p, publishing=args.klubok_publish, human=args.human_click
-                )
+                    p, publishing=args.klubok_publish, human=args.human_click,
+                    renewing=args.klubok_renew,
+                )  # fmt: skip
             try:
                 if args.klubok_snapshot:
                     return _klubok_snapshot(conn, root, session, log)
+                if args.klubok_renew:
+                    return _klubok_renew(conn, session, args.human_click, log)
                 opts = klubok_publish.Options(
                     limit=args.limit, post_id=args.post[0] if args.post else None,
                     human=args.human_click,
@@ -743,6 +758,22 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
             server.close()
         if temp is not None:
             temp.cleanup()
+
+
+def _klubok_renew(conn, session, human: bool, log) -> int:
+    """KLB-004: «Обновить все». 0 — оновлено чи нічого робити; 1 — не підтвердилось чи стоп."""
+    from shafa.robot import klubok_publish, klubok_renew
+
+    try:
+        outcome = klubok_renew.renew_once(
+            conn, session, human=human, log=log, page_pause=klubok_publish.PAGE_PAUSE,
+            sleep=lambda s: klubok_publish.nap(s, lambda: False),
+        )  # fmt: skip
+    except klubok_renew.RenewStop as stop:
+        log(f"Зупинка ({stop.code}): {stop.text}")
+        return 1
+    log(f"Обновить все: {outcome.text}")
+    return 0 if outcome.ok else 1
 
 
 def _klubok_snapshot(conn, root, session, log) -> int:
