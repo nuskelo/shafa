@@ -10,7 +10,7 @@ from test_klb003_publish import cards, klubok_on, last_session, server, session 
 
 
 def run(conn, root, session, sleep, now_file=None):  # noqa: F811
-    opts = kp.Options(limit=2, submit_wait=3.0, pause=(0, 0), page_pause=(0, 0))
+    opts = kp.Options(limit=2, submit_wait=3.0, pause=(0, 0), page_pause=(0, 0), renew=False)
     return kp.run(conn, root, session, opts, sleep=sleep, log=lambda line: None,
                   now_file=now_file)  # fmt: skip
 

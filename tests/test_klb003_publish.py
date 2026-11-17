@@ -49,7 +49,7 @@ def run(conn, root, session, *, limit=2, tmp=None, **kw):
     opts = kp.Options(
         limit=limit, post_id=kw.pop("post_id", None), human=kw.pop("human", False),
         submit_wait=kw.pop("submit_wait", 3.0), human_wait=kw.pop("human_wait", 5.0),
-        pause=(0, 0), page_pause=(0, 0),
+        pause=(0, 0), page_pause=(0, 0), renew=kw.pop("renew", False),  # KLB-004 — окремо
     )  # fmt: skip
     return kp.run(conn, root, session, opts, sleep=lambda s: None, log=lambda line: None,
                   screens=tmp, **kw)  # fmt: skip
