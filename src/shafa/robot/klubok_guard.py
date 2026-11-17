@@ -37,6 +37,9 @@ HOST = "klubok.com"
 UPLOAD_PATH = "/api/upload-used-photo"
 SUBMIT_PATH = "/api/add-edit-used"
 SUBMIT_URL = f"https://{HOST}{SUBMIT_PATH}"
+RENEW_PATH = "/renew/all"  # KLB-004: «Обновить все» — лише за `RenewTicket`
+RENEW_URL = f"https://{HOST}{RENEW_PATH}"
+RENEWED = "«Обновить все» за квитком"  # причина в `request_verdict`: запит оновлення пішов
 SUBMIT_BUTTON = "btn-submit"  # id кнопки «Опубликовать»
 RECAPTCHA = "https://www.google.com/recaptcha/"
 SUBMITTED = "публікація за квитком"  # причина в `request_verdict`: запит публікації пішов
@@ -80,6 +83,40 @@ class Ticket:
             return False
         self.used = True
         return True
+
+
+class RenewTicket:
+    """KLB-004: дозвіл рівно на один GET `https://klubok.com/renew/all`."""
+
+    def __init__(self) -> None:
+        self.used = False
+
+    @property
+    def alive(self) -> bool:
+        return not self.used
+
+    def use(self) -> bool:
+        """Погасити квиток; False — вже погашений (другий запит — блок)."""
+        if self.used:
+            return False
+        self.used = True
+        return True
+
+
+def renew_request(method: str, url: str) -> bool:
+    """Запит — рівно «Обновить все»: GET `https://klubok.com/renew/all` без запиту й фрагмента."""
+    parts = urlsplit(url)
+    return (
+        method.upper() == "GET"
+        and parts.scheme == "https"
+        and parts.hostname == HOST
+        and parts.port is None
+        and parts.path == RENEW_PATH
+        and not parts.query
+        and not parts.fragment
+        and not parts.username
+        and not parts.password
+    )
 
 
 def submit_click_allowed(element_id: str | None, ticket: Ticket | None, human: bool) -> bool:
@@ -139,11 +176,17 @@ def request_verdict(
     *,
     publishing: bool = False,
     ticket: Ticket | None = None,
+    renew: RenewTicket | None = None,
 ) -> tuple[bool, str]:
     """Чи пропустити запит браузера (дозволено, причина). `publishing`/`ticket` — лише сесія
-    публікації KLB-003: квиток гасне, коли пропущено запит публікації."""
+    публікації KLB-003: квиток гасне, коли пропущено запит публікації. `renew` — KLB-004: квиток
+    на один GET «Обновить все»."""
     parts = urlsplit(url)
     method = method.upper()
+    if renew is not None and renew_request(method, url):
+        if not renew.use():
+            return False, "«Обновить все»: квиток уже використано"
+        return True, RENEWED
     if not is_klubok(parts.hostname):
         if method in READ_METHODS:
             return True, "читання (чужий хост: шрифти, стилі, скрипти)"
