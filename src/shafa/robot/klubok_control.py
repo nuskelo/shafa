@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from shafa import config
-from shafa.klubok import queue, snapshot
+from shafa.klubok import queue, renew, snapshot
 from shafa.robot import control, klubok_publish, lock
 
 LOG_NAME = "klubok-run.log"
@@ -33,6 +33,7 @@ TEXTS = {
     "stopping": "Стоп: робот дописує поточну пару й завершує",
     "login_open": "Відкрито вікно входу в Клубок — увійдіть і закрийте вікно (або кнопка нижче)",
     "snapshot": "Робот перечитує ваші оголошення на Клубку (кілька хвилин)",
+    "renewing": "Робот натискає «Обновить все» на Клубку (кілька хвилин)",
     "busy_shafa": "Зараз працює робот Шафи — «Старт» Клубку стане доступний, коли він закінчить",
     "busy": "Робот зайнятий іншою справою (Власник щось перевіряє)",
     "crashed": "Робот Клубку зупинився посеред роботи. Відкрийте «Проблеми», потім «Старт». "
@@ -54,6 +55,7 @@ SHORT = {  # на сторінках Клубку «Клубку» зайве �
     "login_open": "Відкрито вхід",
     "login_needed": "Робот: треба увійти",
     "snapshot": "Перечитує оголошення",
+    "renewing": "«Обновить все»",
     "busy_shafa": "Працює робот Шафи",
     "busy": "Робот зайнятий",
     "crashed": "Робот зупинився",
@@ -107,6 +109,8 @@ class State:
     last: str = ""  # підсумок останньої сесії
     last_session: int | None = None
     listings: str = ""  # «Ваших оголошень на Клубку: 1787 · перечитано сьогодні о 10:00»
+    renew: str = ""  # KLB-004: «Обновить все: наступне 24.11 о 16:33» / «… оновлено сьогодні …»
+    renew_warn: bool = False  # прострочено > 12 год чи оновлення не підтвердилось — жовте
     mini: str = ""
     details: list[str] = field(default_factory=list)
 
@@ -184,6 +188,7 @@ def _stage(data: dict, now: datetime) -> tuple[str, str]:
         name += f" «{title[:40]}{'…' if len(title) > 40 else ''}»"
     doing = {
         "start": "Зараз: відкриває Клубок і перечитує ваші оголошення (щоб не було дублів)",
+        "renew": "Зараз: «Обновить все» на Клубку (якщо є прострочені)",
         "fill": f"Зараз: {name} — заповнює форму",
         "submit": f"Зараз: {name} — натискає «Опубликовать»",
     }.get(stage or "", "")
@@ -260,6 +265,8 @@ def state(
         code = "login_open"
     elif mode == "klubok-snapshot":
         code = "snapshot"
+    elif mode == "klubok-renew":
+        code = "renewing"
     elif mode in SHAFA_MODES:
         code = "busy_shafa"
     elif busy:
@@ -346,6 +353,7 @@ def state(
         ).fetchall()
     )
     plan_today = min(left, queued) if enabled else 0
+    renewal = renew.status(conn, now)
     if code == "busy_shafa" and mode == "rehearse":
         text = "Зараз йде пробна перевірка Шафи — «Старт» Клубку стане доступний після неї"
     return State(
@@ -355,6 +363,7 @@ def state(
         last=last_run(last, now) if last is not None else "",
         last_session=last["id"] if last is not None else None,
         listings=listings_line(conn, now), mini=mini or SHORT[code], details=details,
+        renew=renewal.line, renew_warn=renewal.warn,
         waves=by_wave, shown_started=min(started, day_limit) if day_limit else started,
         today_plan=plan_today, eta=eta_text(plan_today) if plan_today else "",
     )  # fmt: skip

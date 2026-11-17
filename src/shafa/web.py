@@ -2440,6 +2440,7 @@ KLUBOK_ACTIONS = {
 
 KLUBOK_TONES = {  # кружечок панелі Клубку: ok — працює, idle — стоїть, warn — увага, bad — помилка
     "running": "ok", "starting": "ok", "pausing": "ok", "stopping": "ok", "snapshot": "ok",
+    "renewing": "ok",
     "stopped": "idle", "paused": "idle", "off": "idle", "busy_shafa": "idle",
     "login_open": "warn", "busy": "warn", "crashed": "bad", "failed": "bad",
     "login_needed": "warn",  # KLB-010 (F4): жовте, як у Шафи
