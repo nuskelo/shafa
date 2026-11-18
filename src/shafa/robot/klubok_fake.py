@@ -14,9 +14,15 @@ KLB-003: `GET /api/get-items` посторінково зі штучних ог�
 надсилає); підставна reCAPTCHA на «чужому» хості: шлях `/google/…` підставного сервера guard бачить
 як `https://www.google.com/…` (так перевіряється дозвіл reCAPTCHA), `/evil/…` — як чужий сайт; 429.
 
-KLB-004: `/users/198135/manage` — посилання «Обновить все (N)», лише коли є прострочені (`renew_date`
-≤ `Server.clock`); `GET /renew/all` (`renews` рахує, що дійшли) → режим `RENEWS` і 302 на сторінку
+KLB-004: `/users/198135/manage` — посилання «Обновить все (N)», лише коли вкладка «Обновить» не
+порожня; `GET /renew/all` (`renews` рахує, що дійшли) → режим `RENEWS` і 302 на сторінку
 керування; 429 — `too_many.add("/renew/all")`; без входу — сценарії `login`/`signup`.
+
+KLB-013 (як живий 18.11): `get-items` з `type=0` — «Активные» без прострочених (`renew_date` ≤
+`clock`), `items_count` = `tabs_count[0]`; `type=1` — «Обновить» (`renew_date` ≤ `clock` +
+`RENEW_AHEAD`); `type=2`, `3` — порожньо, інший `type` — як 0; `tabs_count` — чотири числа.
+Типово нічого не прострочено; `expire(N)` — перші N прострочені (сценарій «1780 з 1798»);
+`tab_fault` — помилка однієї вкладки.
 
 Фото: кожне вантажиться `DELAY` секунд (випадково), у `formData.images` елемент з'являється в
 порядку **відповіді сервера** — так відтворюється розсип порядку (1, 2, 3, 4, 5, 7, 8, 6), якщо
@@ -68,6 +74,7 @@ SUBMITS = {
     "429": "HTTP 429",
 }
 USER = "198135"
+RENEW_AHEAD = timedelta(hours=2)  # KLB-013: у «Обновить» — за стільки до терміну
 RENEWS = {
     "ok": "прострочені отримують renew_date = зараз + 7 діб",
     "stale": "запит прийнято, але нічого не оновилось (renew_date ті самі)",
@@ -92,7 +99,8 @@ def listing(n: int) -> dict[str, Any]:
         "img_link": f"https://img.klubok.com/img/used/fake/m/{item_id}_1.jpg", "is_fixed": False,
         "is_p": True, "link": f"https://klubok.com/item-fake-{item_id}", "moderated": 0,
         "name": name, "price": 500 + n % 40 * 50, "promoted": False,
-        "renew_date": f"2026-11-17T10:{n // 60 % 60:02d}:{n % 60:02d}Z", "sold": False,
+        # KLB-013: термін — після `Server.clock` за замовчуванням (24.11 18:00): нічого не прострочено
+        "renew_date": f"2026-11-27T10:{n // 60 % 60:02d}:{n % 60:02d}Z", "sold": False,
     }  # fmt: skip  # адреси-пастки: сервер їх записує
 
 
@@ -370,7 +378,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
         elif parts.path == f"/users/{USER}/manage":
             self.server.manage_reads += 1
-            due = self.server.overdue()
+            due = self.server.renewable()
             link = (
                 f'<a href="/renew/all" class="b-tabs__item__link"> Обновить все ({len(due)}) </a>'
             )
@@ -403,8 +411,11 @@ class _Handler(BaseHTTPRequestHandler):
         srv = self.server
         offset = int((params.get("offset") or ["0"])[0])
         limit = int((params.get("limit") or ["60"])[0])
+        tab = (params.get("type") or ["0"])[0]
+        tab = tab if tab in ("1", "2", "3") else "0"  # живий: невідомий `type` — як 0
         srv.item_reads.append(offset)
-        fault = srv.items_fault.get(offset)
+        srv.item_tabs.append(int(tab))
+        fault = srv.tab_fault.get(int(tab), srv.items_fault.get(offset))
         if isinstance(fault, int):
             self._send(fault, b"{}", "application/json")
             return
@@ -424,12 +435,20 @@ class _Handler(BaseHTTPRequestHandler):
             start = offset - 1
             if offset + limit >= len(srv.listings):
                 srv.shift_reads -= 1
-        ordered = srv.listings
+        renewable = srv.renewable()
+        expired = {item["id"] for item in srv.overdue()}
+        tabs = [len(srv.listings) - len(renewable), len(renewable), 0, 0]
+        if tab == "0":  # KLB-013: прострочене зникає з «Активные», ще не прострочене — і там, і там
+            ordered = [item for item in srv.listings if item["id"] not in expired]
+            count = tabs[0] if srv.items_count is None else srv.items_count
+        elif tab == "1":
+            ordered, count = renewable, len(renewable)
+        else:
+            ordered, count = [], 0
         if srv.unstable_ties:  # як живий: `ORDER BY renew_date` без другого ключа (KLB-006)
             ordered = sorted(ordered, key=lambda item: (item["renew_date"], srv.random.random()))
         page_items = ordered[start : start + limit]
-        count = len(srv.listings) if srv.items_count is None else srv.items_count
-        body = {"items": page_items, "items_count": count, "tabs_count": [count, 0, 0, 0],
+        body = {"items": page_items, "items_count": count, "tabs_count": tabs,
                 "status": "success"}  # fmt: skip
         self._send(200, json.dumps(body, ensure_ascii=False).encode("utf-8"), "application/json")
 
@@ -519,6 +538,8 @@ class Server(ThreadingHTTPServer):
         # KLB-003
         self.listings = [listing(n) for n in range(listings)]
         self.items_fault: dict[int, int | str] = {}  # offset → HTTP-статус чи "notjson"
+        self.tab_fault: dict[int, int | str] = {}  # KLB-013: `type` вкладки → те саме
+        self.item_tabs: list[int] = []  # `type` кожного запиту get-items (поруч з `item_reads`)
         self.items_count: int | None = None  # None — справжня довжина списку
         self.shift_reads = 0  # скільки повних читань «зсунуться»
         self.item_reads: list[int] = []
@@ -546,24 +567,39 @@ class Server(ThreadingHTTPServer):
         self.shutdown()
         self.server_close()
 
-    def overdue(self) -> list[dict[str, Any]]:
-        """Оголошення, яким уже можна «Обновить» (`renew_date` ≤ `clock`)."""
+    def _due(self, ahead: timedelta) -> list[dict[str, Any]]:
+        edge = self.clock + ahead
         return [
-            item for item in self.listings
-            if datetime.fromisoformat(item["renew_date"]) <= self.clock
-        ]  # fmt: skip
+            item for item in self.listings if datetime.fromisoformat(item["renew_date"]) <= edge
+        ]
+
+    def overdue(self) -> list[dict[str, Any]]:
+        """Прострочені (`renew_date` ≤ `clock`): їх немає в `type=0`, лише в `type=1` (KLB-013)."""
+        return self._due(timedelta(0))
+
+    def renewable(self) -> list[dict[str, Any]]:
+        """Вкладка «Обновить» (`type=1`): прострочені й ті, кому лишилось ≤ `RENEW_AHEAD` (живий
+        18.11: 4 оголошення за ≈ 2 год до терміну). Це ж число — у «Обновить все (N)»."""
+        return self._due(RENEW_AHEAD)
+
+    def expire(self, count: int) -> None:
+        """KLB-013: перші `count` оголошень прострочені добу тому (як 18.11: 1780 з 1798)."""
+        stamp = (self.clock - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for item in self.listings[:count]:
+            item["renew_date"] = stamp
 
     def renew_overdue(self) -> None:
-        """KLB-004 (Фаза 0): «Обновить все» чіпає лише прострочені — термін = зараз + 7 діб."""
+        """KLB-004 (Фаза 0): «Обновить все» чіпає лише вкладку «Обновить» — термін = зараз + 7 діб."""
         stamp = (self.clock + timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        for item in self.overdue():
+        for item in self.renewable():
             item["renew_date"] = stamp
 
     def renew_all(self, groups: int = 29) -> None:
         """«Обновить все»: `renew_date` однакова до секунди в групах (11.11: 29 значень на 1787)."""
         total = len(self.listings)
+        day = (self.clock + timedelta(days=7)).strftime("%Y-%m-%d")
         for n, item in enumerate(self.listings):
-            item["renew_date"] = f"2026-11-17T17:06:{n * groups // total:02d}Z"
+            item["renew_date"] = f"{day}T17:06:{n * groups // total:02d}Z"
         self.unstable_ties = True
 
 
