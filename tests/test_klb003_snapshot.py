@@ -48,7 +48,8 @@ def read_row(conn):
 
 def test_full_snapshot_1787_in_one_request(conn, server):
     assert refresh(conn, server) == 1787
-    assert server.item_reads == [0] and server.item_limits == [snapshot.PAGE_ALL]
+    assert server.item_reads == [0, 0] and server.item_tabs == [0, 1]  # «Активные» + «Обновить»
+    assert server.item_limits == [snapshot.PAGE_ALL] * 2
     assert len(listings(conn)) == 1787
     assert read_row(conn)["count"] == 1787
 
@@ -97,7 +98,7 @@ def test_renew_all_ties_are_read_whole_in_one_request(conn, server):
     server.renew_all()
     waits = []
     assert refresh(conn, server, waits) == 1787
-    assert server.item_limits == [snapshot.PAGE_ALL] and waits == []
+    assert server.item_limits == [snapshot.PAGE_ALL] * 2 and waits == []
     assert len(listings(conn)) == 1787
 
 
@@ -131,7 +132,7 @@ def test_capped_list_is_merged_by_id_over_passes(conn, server):
     snap = snapshot.read(unstable_first_pass(server), lambda: None, waits.append, lines.append)
     assert len(snap.items) == 1787 == len({item["id"] for item in snap.items})
     assert waits == [snapshot.RETRY_WAIT]  # два проходи
-    assert server.item_limits == [snapshot.PAGE] * (1 + 60)
+    assert server.item_limits == [snapshot.PAGE] * (1 + 60 + 1)  # + «Обновить» (порожня)
     assert "одним запитом 60 різних з 1787" in lines[0]
 
 
@@ -181,7 +182,9 @@ def test_not_converged_after_all_passes_writes_nothing(conn, server):
         refresh(conn, server, waits)
     assert error.value.code == snapshot.FAILED and "1787 різних з 1790" in error.value.text
     assert waits == [snapshot.RETRY_WAIT] * (snapshot.PASSES - 1)
-    assert len(server.item_reads) == 1 + 1 + snapshot.PAGE_BUDGET  # межа запитів на знімок
+    # 2 — перший знімок (дві вкладки); далі «Активные»: весь список + межа сторінок, до «Обновить»
+    # не дійшло
+    assert len(server.item_reads) == 2 + 1 + snapshot.PAGE_BUDGET
     assert listings(conn) == before and tuple(read_row(conn)) == before_read
 
 

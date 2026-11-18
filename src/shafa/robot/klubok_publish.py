@@ -1,9 +1,11 @@
 """KLB-003 D2/D4/D5: сесія публікації на Клубку — по одній Картці з черги KLB-002.
 
 Порядок: обірвані сесії Клубку → `crash`, `queue.recover` → рядок `sessions` (`site = 'klubok'`) →
-вхід (`/item/add`: є форма і `#user_id` = 198135, інакше стоп `klubok_login`) → знімок її оголошень
-(`klubok.snapshot`) → KLB-004: «Обновить все», якщо сьогодні ще не оновлювали й є прострочені
-(`klubok_renew`, той самий Chrome; 429 — стоп) → цикл: `queue.take` (щоразу заново: ліміт доби, дублі) → `queue.start` → свіжа
+вхід (`/item/add`: є форма і `#user_id` = 198135, інакше стоп `klubok_login`) → KLB-004/KLB-013:
+«Обновить все», якщо є посилання «Обновить все (N)» і сьогодні ще не оновлювали (`klubok_renew`,
+той самий Chrome; знімок «до» й «після» — там; 429 — стоп) → знімок її оголошень (`klubok.snapshot`),
+якщо «Обновить все» його не записало (`klubok_snapshot_drop` при посиланні — «Схоже, оголошення
+прострочені (N)…») → цикл: `queue.take` (щоразу заново: ліміт доби, дублі) → `queue.start` → свіжа
 форма → `KlubokDriver.fill` + `verify` → квиток → клік `#btn-submit` (чи людина, `--human-click`) →
 відповідь `add-edit-used`:
 
@@ -247,17 +249,19 @@ class Run:
         opened = self.session.open_form()
         if not opened.ok or self.session.user_id() != form.KLUBOK_USER:
             raise Stop(LOGIN)
-        try:
-            snapshot.refresh(
-                self.conn, self.session.fetch_text,
-                pause=lambda: self.sleep(random.uniform(*self.opts.page_pause)),
-                wait=self.sleep, log=self.log,
-            )  # fmt: skip
-        except snapshot.SnapshotError as error:
-            raise Stop(error.code, error.text) from None
+        # KLB-013: спершу «Обновить все» (воно саме робить знімок «до» і «після»; падіння знімка
+        # «до» не зупиняє, якщо посилання є) — інакше 1780 прострочених зупиняли б сесію на знімку
+        snapped = self._renew() if self.opts.renew else False
+        if not snapped:
+            try:
+                snapshot.refresh(
+                    self.conn, self.session.fetch_text,
+                    pause=lambda: self.sleep(random.uniform(*self.opts.page_pause)),
+                    wait=self.sleep, log=self.log,
+                )  # fmt: skip
+            except snapshot.SnapshotError as error:
+                raise Stop(error.code, klubok_renew.explain(self.session, error)) from None
         self._check_429()
-        if self.opts.renew:
-            self._renew()
         while True:
             if self.stopping():
                 raise Stop(STOPPED)
@@ -278,17 +282,19 @@ class Run:
             self._now("pause", until=until, last=self._last(taken.cards[0]))
             self.sleep(pause)
 
-    def _renew(self) -> None:
-        """KLB-004: «Обновить все» до першої Картки (квиток — лише до квитка публікації)."""
+    def _renew(self) -> bool:
+        """KLB-004: «Обновить все» до першої Картки (квиток — лише до квитка публікації).
+        True — знімок у ньому вже записано."""
         self._now("renew")
         try:
-            klubok_renew.renew_once(
-                self.conn, self.session, snapped=True, now=self.today, human=self.opts.human,
+            outcome = klubok_renew.renew_once(
+                self.conn, self.session, logged_in=True, now=self.today, human=self.opts.human,
                 human_wait=self.opts.human_wait, sleep=self.sleep, log=self.log,
                 page_pause=self.opts.page_pause, settle=self.opts.settle,
             )  # fmt: skip
         except klubok_renew.RenewStop as stop:
             raise Stop(stop.code, stop.text) from None
+        return outcome.snapped
 
     def _check_429(self) -> None:
         if self.session.too_many:

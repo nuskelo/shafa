@@ -38,6 +38,7 @@ def said(monkeypatch):
 @pytest.fixture
 def server():
     srv = fake.Server(delay=(0.01, 0.05), seed=1, listings=20)
+    srv.expire(20)  # KLB-013: усі 20 прострочені добу тому — лише у вкладці «Обновить»
     yield srv
     srv.close()
 
@@ -136,12 +137,26 @@ def at(days=0.0):
 
 def test_judge():
     after = {1: at(7), 2: at(7), 3: at(1)}
-    assert renew.judge([1, 2], 3, after, 3, NOW).ok
-    bad = renew.judge([1, 2, 3], 3, after, 3, NOW)
+    gone = renew.Link(False)
+    assert renew.judge([1, 2], 2, 3, after, 0, 3, NOW, gone).ok
+    bad = renew.judge([1, 2, 3], 3, 3, after, 0, 3, NOW, gone)
     assert not bad.ok and bad.renewed == [1, 2]  # 2 з 3 < 95 %
-    assert not renew.judge([1, 2], 10, after, 3, NOW).ok  # активних < 90 %
-    assert renew.judge([], 3, after, 3, NOW, renew.Link(False)).ok
-    assert not renew.judge([], 3, after, 3, NOW, renew.Link(True, 2)).ok
+    assert not renew.judge([1, 2], 2, 10, after, 0, 3, NOW, gone).ok  # активних < 90 %
+    assert not renew.judge([1, 2], 2, 3, after, 0, 3, NOW, renew.Link(True, 2)).ok  # посилання є
+    assert not renew.judge([1, 2], 2, 3, after, 0, 3, NOW, None).ok  # сторінку не прочитано
+
+
+def test_judge_klb013_tab_and_link():
+    """KLB-013: P — вкладка «Обновить» до GET, без знімка до — N з посилання; після — ≤ 5 %."""
+    after = {i: at(7) for i in range(1, 101)}
+    ids = list(range(1, 101))
+    assert renew.judge(ids, 100, 100, after, 5, 100, NOW, renew.Link(True, 5)).ok  # 5 % — ще так
+    left = renew.judge(ids, 100, 100, after, 6, 100, NOW, renew.Link(False))
+    assert not left.ok and "лишилось 6 з 100" in left.text
+    assert not renew.judge(ids, 100, 100, after, 0, 100, NOW, renew.Link(True, 6)).ok
+    blind = renew.judge(None, 1780, 0, after, 0, 1798, NOW, renew.Link(False))  # знімка до немає
+    assert blind.ok and blind.text == "оновлено 1780 з 1780"
+    assert not renew.judge(None, 1780, 0, after, 90, 1798, NOW, renew.Link(False)).ok
 
 
 def listings(conn, *dates, read=NOW):
@@ -212,15 +227,16 @@ def test_second_renew_in_same_session_is_blocked(conn, server, session, tmp_path
 
 
 def test_not_due_no_renew_requests(conn, server, session, said, tmp_path):
-    out = do_renew(conn, session, tmp_path, now=datetime(2026, 11, 16, 12, tzinfo=UTC))
-    assert out.code == kr.NOT_DUE and out.text == "Наступне оновлення: 17.11 10:00"
-    assert renew_hits(server) == [] and server.manage_reads == 0 and said == []
+    server.clock = datetime(2026, 11, 16, 12, tzinfo=UTC)  # прострочені з 23.11 18:00 — ще ні
+    out = do_renew(conn, session, tmp_path, now=server.clock)
+    assert out.code == kr.NOT_DUE and out.text == "Наступне оновлення: 23.11 18:00"
+    assert renew_hits(server) == [] and server.manage_reads == 1 and said == []
 
 
 def test_no_link_on_manage_page_means_no_get(conn, server, session, said, tmp_path):
     server.clock = datetime(2026, 11, 16, tzinfo=UTC)  # Клубок: ще нічого не прострочено
     out = do_renew(conn, session, tmp_path)
-    assert out.code == kr.NO_LINK and out.overdue == 20
+    assert out.code == kr.NO_LINK and out.overdue == 0  # вкладка «Обновить» порожня
     assert renew_hits(server) == [] and server.manage_reads == 1
     assert [k for k, *_ in said] == ["klubok.renew_skip"]
     assert "day" not in renew.load(tmp_path)
@@ -315,7 +331,8 @@ def test_human_does_not_click(conn, chromium, server, said, tmp_path):  # noqa: 
 
 def test_publish_session_renews_first(conn, root, chromium, server, said):  # noqa: F811
     # справжній годинник: знімок пишеться з `datetime.now`, а черга не бере старший за добу
-    server.clock = datetime.now(UTC)  # штучні оголошення прострочені з 17.11 10:00 UTC
+    server.clock = datetime.now(UTC)
+    server.expire(20)  # прострочені добу тому за справжнім годинником
     add(conn, root, 7301)
     add(conn, root, 7302, **OTHER_PAIR)
     s = fake.FakeSession(None, server.base, context=chromium.new_context(), publishing=True)

@@ -772,15 +772,14 @@ def _klubok_renew(conn, session, human: bool, log) -> int:
     except klubok_renew.RenewStop as stop:
         log(f"Зупинка ({stop.code}): {stop.text}")
         return 1
-    log(f"Обновить все: {outcome.text}")
-    return 0 if outcome.ok else 1
+    return 0 if outcome.ok else 1  # KLB-013: підсумок уже надруковано в `Renewer` — не вдруге
 
 
 def _klubok_snapshot(conn, root, session, log) -> int:
     import random
 
     from shafa.klubok import refresh, snapshot
-    from shafa.robot import klubok_form, klubok_publish
+    from shafa.robot import klubok_form, klubok_publish, klubok_renew
 
     opened = session.open_form()
     if not opened.ok or session.user_id() != klubok_form.KLUBOK_USER:
@@ -795,7 +794,7 @@ def _klubok_snapshot(conn, root, session, log) -> int:
             wait=lambda s: klubok_publish.nap(s, lambda: False), log=log,
         )  # fmt: skip
     except snapshot.SnapshotError as error:
-        log(f"Знімок не записано: {error.text}")
+        log(f"Знімок не записано: {klubok_renew.explain(session, error)}")
         return 1
     refresh.refresh(conn, root)  # KLB-010: дублі за свіжим знімком — у черзі одразу
     return 0
