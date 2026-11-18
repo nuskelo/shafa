@@ -3,12 +3,14 @@
 Факт (Фаза 0): `GET /renew/all` оновлює лише **прострочені** оголошення; у кожного свій термін —
 `renew_date` у `get-items` = мить оновлення + 7 діб. Тож оновлення буває й щодня малими групами.
 
-* `due` — найраніший `renew_date` її активних у знімку; `overdue` — прострочені на мить `at`.
+* `due` — найраніший `renew_date` її активних у знімку (KLB-013: прострочені теж там, `sold = 0` зі
+  старим `renew_date`, — вкладка «Обновить»); `overdue` — прострочені на мить `at`.
 * `link` — посилання «Обновить все (N)» на сторінці керування (`/users/198135/manage`): немає —
   GET не робимо, навіть якщо знімок каже інакше (Ітерація 1, в).
-* `judge` (Ітерація 1, б): прострочені до GET — P; успіх — ≥ 95 % з P мають `renew_date` > зараз
-  + 6 діб **і** активних ≥ 90 % від знімка до. P порожнє, а посилання було — успіх, якщо після GET
-  посилання зникло.
+* `judge` (KLB-013): P — id вкладки «Обновить» за знімком до GET, а без нього — N з посилання.
+  Успіх — посилання після GET зникло (чи N після ≤ 5 % від N), у «Обновить» лишилось ≤ 5 % від P,
+  активних ≥ 90 % від знімка до, і (коли id з P відомі) ≥ 95 % з них мають `renew_date` > зараз +
+  6 діб.
 * Не частіше одного GET на місцеву добу: `klubok-renew.json` у теці даних (`day` пишеться **до**
   GET). Там же підсумок для панелі й тривоги.
 """
@@ -30,6 +32,7 @@ AT_DEFAULT = "20:00"
 OFF = ("", "off", "ні", "no", "0", "false")
 FRESH = timedelta(days=6)  # після оновлення `renew_date` має бути далі, ніж зараз + 6 діб
 SHARE = 0.95  # стільки з прострочених мають оновитись
+LEFT = 0.05  # KLB-013: у «Обновить» і в «Обновить все (N)» після GET — не більше 5 % від до
 KEEP = 0.9  # активних після — не менше 90 % від знімка до
 AHEAD = timedelta(hours=1)  # щоденний запуск: є термін ≤ зараз + 1 год
 STALE = timedelta(hours=24)  # … або знімок старший за добу
@@ -105,25 +108,41 @@ class Verdict:
 
 
 def judge(
-    before: list[int],
+    before: list[int] | None,
+    link_before: int | None,
     active_before: int,
     after: dict[int, datetime | None],
+    left: int,
     active_after: int,
     now: datetime,
-    link_after: Link | None = None,
+    link_after: Link | None,
 ) -> Verdict:
-    """Ітерація 1 (б). `before` — P (прострочені до GET), `after` — `renew_date` активних після."""
+    """KLB-013 (б). `before` — id вкладки «Обновить» за знімком до GET (None — знімка до немає),
+    `link_before` — N з «Обновить все (N)», `after` — `renew_date` активних після, `left` — скільки
+    в «Обновить» після, `link_after` — посилання після (None — сторінку не прочитано)."""
     if active_before and active_after < KEEP * active_before:
         return Verdict(False, f"активних було {active_before}, стало {active_after}")
     edge = now + FRESH
-    renewed = [i for i in before if (moment := after.get(i)) is not None and moment > edge]
-    if not before:
-        if link_after is not None and not link_after.present:
-            return Verdict(True, "посилання «Обновить все» зникло")
-        return Verdict(False, "посилання «Обновить все» не зникло")
-    if len(renewed) >= SHARE * len(before):
-        return Verdict(True, f"оновлено {len(renewed)} з {len(before)}", renewed)
-    return Verdict(False, f"оновлено лише {len(renewed)} з {len(before)} прострочених", renewed)
+    known = before or []
+    renewed = [i for i in known if (moment := after.get(i)) is not None and moment > edge]
+    if link_after is None:
+        return Verdict(False, "сторінку керування після оновлення не прочитано", renewed)
+    if link_after.present and not (
+        link_after.count is not None and link_before
+        and link_after.count <= LEFT * link_before
+    ):  # fmt: skip
+        shown = "" if link_after.count is None else f" ({link_after.count})"
+        return Verdict(False, f"посилання «Обновить все»{shown} не зникло", renewed)
+    total = len(before) if before is not None else link_before
+    if total is None:
+        if left:
+            return Verdict(False, f"у вкладці «Обновить» лишилось {left}", renewed)
+        return Verdict(True, "посилання «Обновить все» зникло, вкладка «Обновить» порожня")
+    if left > LEFT * total:
+        return Verdict(False, f"у вкладці «Обновить» лишилось {left} з {total}", renewed)
+    if before and len(renewed) < SHARE * len(before):
+        return Verdict(False, f"оновлено лише {len(renewed)} з {len(before)}", renewed)
+    return Verdict(True, f"оновлено {total - left} з {total}", renewed)
 
 
 # --- Стан (тека даних) ---

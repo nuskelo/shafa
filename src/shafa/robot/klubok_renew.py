@@ -1,12 +1,15 @@
 """KLB-004: «Обновить все» на Клубку робить робот (`robot --klubok-renew`, початок сесії публікації,
 щоденний запуск у програмі).
 
-`renew` (Ітерація 1): вхід → свіжий знімок (до GET) → сьогодні GET уже був — нічого → найраніший
-`renew_date` > зараз — «Наступне оновлення: …», нічого → читання сторінки керування: посилання
-«Обновить все (N)» немає — нічого (тиха подія) → позначка доби → **один** GET `/renew/all` за
-`RenewTicket` (`page.goto`; у `--human-click` тисне людина) → пауза 5–10 с → новий знімок →
-`renew.judge`: успіх — тиха `klubok.renew` і `renewed_at`; інакше гучна `klubok.renew_failed`.
-429 / немає входу / знімок не вдався — `RenewStop` з кодом (як у публікації). Повтору немає.
+`renew` (KLB-013): вхід → знімок «до» (`type=0` ∪ `type=1`; **не вдався — це ще не стоп**, лише
+нічого не записано й P невідоме) → сьогодні GET уже був — нічого → сторінка керування (лише
+читання): посилання «Обновить все (N)» немає — нічого (термін попереду — «Наступне оновлення: …»,
+інакше тиха подія) → позначка доби → **один** GET `/renew/all` за `RenewTicket` (`page.goto`; у
+`--human-click` тисне людина) → пауза 5–10 с → знімок «після» (не вдався — стоп) і сторінка
+керування → `renew.judge`: успіх — тиха `klubok.renew` і `renewed_at`; інакше гучна
+`klubok.renew_failed`. Знімок «до» не вдався, а GET не буде (посилання немає, сьогодні вже було) —
+`RenewStop` з його кодом; `klubok_snapshot_drop` при посиланні — текст «Схоже, оголошення прострочені
+(N)…» (`drop_text`). 429 / немає входу — `RenewStop` одразу. Повтору немає.
 
 `Daily` — за зразком `rehearse.Nightly`, але без `GRACE`: о `SHAFA_KLUBOK_RENEW_AT` і пізніше того ж
 дня, коли `SHAFA_KLUBOK`, робот вільний і `renew.wanted`; позначка доби — лише після запуску.
@@ -50,8 +53,11 @@ class Outcome:
     code: str
     text: str
     link: int | None = None  # N з «Обновить все (N)»
-    overdue: int = 0  # |P| за знімком до
+    overdue: int = 0  # |P|: вкладка «Обновить» за знімком до (без нього — N)
     renewed: int = 0
+    snapped: bool = (
+        False  # KLB-013: у цьому запуску знімок записано (сесії публікації ще один не треба)
+    )
 
     @property
     def ok(self) -> bool:
@@ -60,6 +66,26 @@ class Outcome:
 
 def _fmt(moment: datetime, now: datetime) -> str:
     return f"{moment.astimezone(now.tzinfo):%d.%m %H:%M}"
+
+
+def drop_text(link: renew.Link | None, text: str) -> str:
+    """KLB-013 п. 5: знімок упав, а посилання «Обновить все (N)» є — причина, скоріше, прострочення."""
+    if link is None or not link.present:
+        return text
+    shown = "" if link.count is None else f" ({link.count})"
+    return f"Схоже, оголошення прострочені{shown} — потрібне «Обновить все» (знімок не записано)"
+
+
+def explain(session: form.Session, error: snapshot.SnapshotError) -> str:
+    """Текст зупинки знімка: для `klubok_snapshot_drop` — зазирнути на сторінку керування (лише
+    читання). Будь-яка помилка читання — текст як був."""
+    if error.code != snapshot.DROPPED:
+        return error.text
+    try:
+        status, html = session.fetch_text(form.MANAGE_PATH)
+    except Exception:  # noqa: BLE001 — лише пояснення, зупинка все одно буде
+        return error.text
+    return drop_text(renew.link(html) if status == 200 else None, error.text)
 
 
 class Renewer:
@@ -86,83 +112,114 @@ class Renewer:
             raise RenewStop(TOO_MANY, f"Клубок відповів 429 (забагато запитів): "
                                       f"{self.session.too_many[0]}")  # fmt: skip
 
-    def _snapshot(self) -> None:
+    def _snapshot(self) -> snapshot.Read:
+        """Знімок «після» (і для сесії публікації): не вдався — `RenewStop`."""
         try:
-            snapshot.refresh(
-                self.conn, self.session.fetch_text,
-                pause=lambda: self.sleep(random.uniform(*self.page_pause)),
-                wait=self.sleep, log=self.log,
-            )  # fmt: skip
+            snap, _count = self._take()
         except snapshot.SnapshotError as error:
             raise RenewStop(error.code, error.text) from None
         self._check_429()
+        return snap
+
+    def _take(self) -> tuple[snapshot.Read, int]:
+        return snapshot.take(
+            self.conn, self.session.fetch_text,
+            pause=lambda: self.sleep(random.uniform(*self.page_pause)),
+            wait=self.sleep, log=self.log,
+        )  # fmt: skip
+
+    def _before(self) -> tuple[snapshot.Read | None, snapshot.SnapshotError | None]:
+        """Знімок «до» (KLB-013): помилка — не стоп (крім 429), лише нічого не записано."""
+        try:
+            snap, _count = self._take()
+        except snapshot.SnapshotError as error:
+            if error.code == TOO_MANY:
+                raise RenewStop(error.code, error.text) from None
+            self.log(f"Знімок до «Обновить все» не записано: {error.text}")
+            return None, error
+        self._check_429()
+        return snap, None
 
     def _manage(self) -> renew.Link | None:
         status, html = self.session.fetch_text(form.MANAGE_PATH)
         self._check_429()
         return renew.link(html) if status == 200 else None
 
-    def run(self, snapped: bool = False) -> Outcome:
-        """`snapped` — свіжий знімок щойно зроблено (початок сесії публікації)."""
-        if not snapped:
+    def run(self, logged_in: bool = False) -> Outcome:
+        """`logged_in` — вхід уже перевірено (початок сесії публікації)."""
+        if not logged_in:
             opened = self.session.open_form()
             if not opened.ok or self.session.user_id() != form.KLUBOK_USER:
                 raise RenewStop(LOGIN, LOGIN_TEXT)
-            self._snapshot()
+        snap, broken = self._before()
+        snapped = snap is not None
         now = self.now()
         if renew.done_on(now.date(), self.data_dir):
+            if broken is not None:
+                raise RenewStop(broken.code, drop_text(self._manage(), broken.text))
             self.log("Обновить все: сьогодні вже оновлювали — наступне завтра")
-            return Outcome(DONE_TODAY, "сьогодні вже оновлювали")
-        first = renew.due(self.conn)
-        if first is None or first > now:
-            text = f"Наступне оновлення: {_fmt(first, now)}" if first else "Термін невідомий"
-            self.log(f"Обновить все: {text}")
-            return Outcome(NOT_DUE, text)
-        before = renew.overdue(self.conn, now)
-        active_before = renew.active_count(self.conn)
+            return Outcome(DONE_TODAY, "сьогодні вже оновлювали", snapped=snapped)
         page = self._manage()
-        if page is None:
-            text = "сторінку керування не прочитано — нічого не оновлював"
-            self.log(f"Обновить все: {text}")
-            events.emit("klubok.renew_skip", f"Клубок: «Обновить все» — {text}")
-            return Outcome(NO_PAGE, text, overdue=len(before))
-        if not page.present:
-            text = f"прострочених немає (посилання немає; за знімком — {len(before)})"
-            self.log(f"Обновить все: {text}")
-            events.emit("klubok.renew_skip", f"Клубок: «Обновить все» — {text}")
-            return Outcome(NO_LINK, text, overdue=len(before))
+        if page is None or not page.present:
+            if broken is not None:
+                raise RenewStop(broken.code, broken.text)
+            return self._nothing(now, page, len(snap.renewable))
+        before = sorted(snap.renewable) if snap is not None else None
+        active_before = renew.active_count(self.conn) if snap is not None else 0
+        total = len(before) if before is not None else (page.count or 0)
         shown = "?" if page.count is None else page.count
-        self.log(f"Обновить все ({shown}); прострочених за знімком: {len(before)}")
+        where = (f"у вкладці «Обновить» за знімком: {total}" if before is not None
+                 else "знімка до немає")  # fmt: skip
+        self.log(f"Обновить все ({shown}); {where}")
         sent = self._send(now)
         if not sent:
             text = "«Обновить все» не натиснуто — нічого не оновлено"
             self.log(f"Обновить все: {text}")
             events.emit("klubok.renew_skip", f"Клубок: {text}")
-            return Outcome(NOT_CLICKED, text, page.count, len(before))
+            return Outcome(NOT_CLICKED, text, page.count, total, snapped=snapped)
         try:
             self._check_429()
             self.sleep(random.uniform(*self.settle))
-            self._snapshot()
-            after_link = self._manage() if not before else None
+            after = self._snapshot()
+            after_link = self._manage()
         except RenewStop as stop:
-            self._failed(now, stop.text, page.count, len(before))
+            self._failed(now, stop.text, page.count, total)
             raise
         verdict = renew.judge(
-            before, active_before, renew.renew_dates(self.conn), renew.active_count(self.conn),
-            now, after_link,
+            before, page.count, active_before, renew.renew_dates(self.conn),
+            len(after.renewable), renew.active_count(self.conn), now, after_link,
         )  # fmt: skip
         if not verdict.ok:
-            return self._failed(now, verdict.text, page.count, len(before))
+            return self._failed(now, verdict.text, page.count, total, after)
         marked = renew.mark_ok(self.conn, verdict.renewed, now)
         count = renew.active_count(self.conn)
         renew.save(self.data_dir, ok=True, text=verdict.text, count=count, link=page.count,
-                   overdue=len(before), renewed=len(verdict.renewed))  # fmt: skip
+                   overdue=total, renewed=len(verdict.renewed))  # fmt: skip
         text = (f"Клубок: «Обновить все» — {verdict.text} (посилання: {shown}), активних {count}"
                 + (f", виставлених програмою {marked}" if marked else ""))  # fmt: skip
         self.log(text)
-        events.emit("klubok.renew", text, data={"link": page.count, "overdue": len(before),
-                                                "renewed": len(verdict.renewed)})  # fmt: skip
-        return Outcome(RENEWED, verdict.text, page.count, len(before), len(verdict.renewed))
+        events.emit("klubok.renew", text, data={
+            "link": page.count, "overdue": total, "renewed": len(verdict.renewed),
+            "tabs": list(after.tabs) if after.tabs else None,
+        })  # fmt: skip
+        return Outcome(RENEWED, verdict.text, page.count, total, len(verdict.renewed), True)
+
+    def _nothing(self, now: datetime, page: renew.Link | None, renewable: int) -> Outcome:
+        """Посилання немає (чи сторінку не прочитано) — GET не робимо; знімок «до» записано."""
+        if page is None:
+            text = "сторінку керування не прочитано — нічого не оновлював"
+            code = NO_PAGE
+        else:
+            first = renew.due(self.conn)
+            if first is not None and first > now:
+                text = f"Наступне оновлення: {_fmt(first, now)}"
+                self.log(f"Обновить все: {text}")
+                return Outcome(NOT_DUE, text, snapped=True)
+            text = f"прострочених немає (посилання немає; у вкладці «Обновить» — {renewable})"
+            code = NO_LINK
+        self.log(f"Обновить все: {text}")
+        events.emit("klubok.renew_skip", f"Клубок: «Обновить все» — {text}")
+        return Outcome(code, text, overdue=renewable, snapped=True)
 
     def _send(self, now: datetime) -> bool:
         """Один GET `/renew/all`. Позначка доби: робот — до запиту; `--human-click` — лише коли guard
@@ -181,18 +238,21 @@ class Renewer:
         mark()
         return self.session.renew_all()
 
-    def _failed(self, now: datetime, why: str, link: int | None, overdue: int) -> Outcome:
+    def _failed(
+        self, now: datetime, why: str, link: int | None, overdue: int,
+        after: snapshot.Read | None = None,
+    ) -> Outcome:  # fmt: skip
         renew.save(self.data_dir, ok=False, text=why, link=link, overdue=overdue)
         text = f"{FAILED_TEXT}: {why}"
         self.log(text)
         events.emit("klubok.renew_failed", f"Клубок: {text}", loud=True,
                     data={"link": link, "overdue": overdue})  # fmt: skip
-        return Outcome(FAILED, why, link, overdue)
+        return Outcome(FAILED, why, link, overdue, snapped=after is not None)
 
 
 def renew_once(conn: sqlite3.Connection, session: form.Session, **kwargs: Any) -> Outcome:
-    snapped = kwargs.pop("snapped", False)
-    return Renewer(conn, session, **kwargs).run(snapped=snapped)
+    logged_in = kwargs.pop("logged_in", False)
+    return Renewer(conn, session, **kwargs).run(logged_in=logged_in)
 
 
 # --- Щоденний запуск у програмі ---
