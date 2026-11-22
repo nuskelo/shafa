@@ -57,12 +57,13 @@ from shafa.folders import (
     list_folders,
     old_root,
 )
+from shafa.klubok import auto as klubok_auto
 from shafa.klubok import dupcheck as klubok_dupcheck
 from shafa.klubok import fields as klubok_fields
 from shafa.klubok import queue as klubok_queue
 from shafa.klubok import refresh as klubok_refresh
 from shafa.klubok import screen as klubok_screen
-from shafa.robot import browser, control, klubok_control, klubok_publish, lock, publish, rehearse
+from shafa.robot import browser, control, klubok_control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
 from shafa.scan import NO_SECTION_TEXT, OLD_NO_SECTION_TEXT, STICKY, scan
@@ -1670,9 +1671,9 @@ class App:
                 state = self.klubok_state(conn)
                 if not state.can_start or state.left < 1:
                     return redirect(f"{back}{sep}msg=klubok_cannot_start")
-                limit = min(state.left, klubok_publish.LIMIT_RANGE[1])
-                args = ["--klubok-publish", "--db", str(self.db_path), "--root", str(self.root)]
-                self._klubok_spawn([*args, "--limit", str(limit), *fake])
+                self._klubok_spawn(
+                    klubok_control.start_args(self.db_path, self.root, state.left, self.fake_shafa)
+                )
                 return redirect(f"{back}{sep}msg=klubok_started")
             if action == "login":
                 if self.fake_shafa:
@@ -2983,7 +2984,10 @@ def settings_blocks() -> list[tuple[str, list]]:
             site.SEND_SETTING, site.WAIT_SETTING, site.SOLD_SETTING, site.FUSE_SETTING
         ),
         "«Мої речі» на Шафі": (listings_mod.DAYS_SETTING,),
-        "Клубок": (klubok_queue.FLAG, klubok_queue.LIMIT_SETTING, klubok_queue.FROM_SETTING),
+        "Клубок": (
+            klubok_queue.FLAG, klubok_queue.LIMIT_SETTING, klubok_auto.AUTO_SETTING,
+            klubok_auto.AT_SETTING, klubok_queue.FROM_SETTING,
+        ),
     }  # fmt: skip
     taken = {name for names in own.values() for name in names}
     blocks = [("Ліміти й робот", [o for o in options.OPTIONS if o.name not in taken])]

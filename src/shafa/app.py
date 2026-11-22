@@ -15,7 +15,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from shafa import config, db, events, fill, photos, places, review, web
-from shafa.robot import control, klubok_control, klubok_renew, lock, publish, rehearse
+from shafa.robot import control, klubok_auto, klubok_control, klubok_renew, lock, publish, rehearse
 
 LOCK_NAME = "ui.lock"
 URL_NAME = "ui.url"
@@ -118,6 +118,18 @@ def klubok_daily(path: Path) -> klubok_renew.Daily:
     )
 
 
+def klubok_auto_start(path: Path) -> klubok_auto.Auto:
+    """KLB-014: Клубок виставляє сам — після сесії Шафи чи о `SHAFA_KLUBOK_AUTO_AT` (21:00)."""
+    root = root_dir()
+    return klubok_auto.Auto(
+        command=lambda left: klubok_control.start_args(path, root, left),
+        spawn=lambda args: control.spawn(args, log=klubok_control.log_path()),
+        busy=lock.busy,
+        log=control.log_line,
+        connect=lambda: db.connect(path),
+    )
+
+
 def start(
     open_browser: Callable[[str], object] = webbrowser.open,
     port: int = web.DEFAULT_PORT,
@@ -172,6 +184,9 @@ def start(
         ).start()
         threading.Thread(
             target=klubok_daily(path).run, args=(night_stop,), daemon=True, name="klubok-renew"
+        ).start()
+        threading.Thread(
+            target=klubok_auto_start(path).run, args=(night_stop,), daemon=True, name="klubok-auto"
         ).start()
         if app.start_bot() == "bot_started":
             print("Бот запускається окремим процесом (журнал — bot-run.log у теці даних)")

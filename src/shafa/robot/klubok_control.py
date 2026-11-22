@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from shafa import config
-from shafa.klubok import queue, renew, snapshot
+from shafa.klubok import auto, queue, renew, snapshot
 from shafa.robot import control, klubok_publish, lock
 
 LOG_NAME = "klubok-run.log"
@@ -111,12 +111,21 @@ class State:
     listings: str = ""  # «Ваших оголошень на Клубку: 1787 · перечитано сьогодні о 10:00»
     renew: str = ""  # KLB-004: «Обновить все: наступне 24.11 о 16:33» / «… оновлено сьогодні …»
     renew_warn: bool = False  # прострочено > 12 год чи оновлення не підтвердилось — жовте
+    auto: str = ""  # KLB-014: «Автостарт: сьогодні після сесії Шафи або о 21:00» / «запущено …»
+    auto_warn: bool = False
     mini: str = ""
     details: list[str] = field(default_factory=list)
 
 
 def log_path() -> Path:
     return config.data_dir() / LOG_NAME
+
+
+def start_args(db_path: Path, root: Path, left: int, fake: bool = False) -> list[str]:
+    """Аргументи `--klubok-publish` для кнопки «Старт» і автостарту (KLB-014) — одне місце."""
+    limit = min(left, klubok_publish.LIMIT_RANGE[1])
+    args = ["--klubok-publish", "--db", str(db_path), "--root", str(root), "--limit", str(limit)]
+    return [*args, "--fake-klubok"] if fake else args
 
 
 def mark_login(now: datetime | None = None) -> None:
@@ -354,6 +363,7 @@ def state(
     )
     plan_today = min(left, queued) if enabled else 0
     renewal = renew.status(conn, now)
+    automatic = auto.status(conn, now)
     if code == "busy_shafa" and mode == "rehearse":
         text = "Зараз йде пробна перевірка Шафи — «Старт» Клубку стане доступний після неї"
     return State(
@@ -363,7 +373,7 @@ def state(
         last=last_run(last, now) if last is not None else "",
         last_session=last["id"] if last is not None else None,
         listings=listings_line(conn, now), mini=mini or SHORT[code], details=details,
-        renew=renewal.line, renew_warn=renewal.warn,
+        renew=renewal.line, renew_warn=renewal.warn, auto=automatic.line, auto_warn=automatic.warn,
         waves=by_wave, shown_started=min(started, day_limit) if day_limit else started,
         today_plan=plan_today, eta=eta_text(plan_today) if plan_today else "",
     )  # fmt: skip

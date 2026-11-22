@@ -10,6 +10,7 @@ from pathlib import Path
 
 from shafa import config, places, site, summer
 from shafa.batch import BATCH_SETTING, DAILY_USD, MONEY_SETTING, WAIT_DAYS, WAIT_SETTING
+from shafa.klubok import auto as klubok_auto
 from shafa.klubok import queue as klubok
 from shafa.robot import listings
 from shafa.robot.publish import (
@@ -32,7 +33,7 @@ class Option:
     label: str
     hint: str
     default: str
-    kind: str  # int / money / date / path / flag
+    kind: str  # int / money / date / time / path / flag
 
 
 OPTIONS = (
@@ -140,6 +141,21 @@ OPTIONS = (
         "int",
     ),
     Option(
+        klubok_auto.AUTO_SETTING,
+        "Виставляти на Клубок самому щодня",
+        "Програма сама запускає Клубок після сесії Шафи (кнопка «Старт» не потрібна). Програма "
+        "має бути відкрита.",
+        "1",
+        "flag",
+    ),
+    Option(
+        klubok_auto.AT_SETTING,
+        "Якщо сесії Шафи не було — запустити Клубок о (ГГ:ХХ)",
+        "наприклад 21:00; порожньо — лише після сесії Шафи",
+        klubok_auto.AT_DEFAULT,
+        "time",
+    ),
+    Option(
         klubok.FROM_SETTING,
         "На Клубок — пости з номером більше за",
         "старіші пости на Клубок не йдуть (їх там уже виставлено вручну)",
@@ -168,6 +184,8 @@ def current() -> dict[str, str]:
         values[ROOT_SETTING] = str(places.default_root())
     if values[summer.SETTING].lower() == summer.OFF:  # у полі — порожньо
         values[summer.SETTING] = ""
+    if values[klubok_auto.AT_SETTING].lower() in klubok_auto.OFF:  # у полі — порожньо
+        values[klubok_auto.AT_SETTING] = ""
     for option in OPTIONS:
         if option.kind == "flag":
             flag = (values[option.name] or "").lower() in ("1", "так", "yes", "true")
@@ -216,6 +234,17 @@ def check(form: dict[str, str]) -> tuple[dict[str, str], dict[str, str], list[st
                 values[option.name] = summer.show(summer.parse(raw))
             except summer.DateError:
                 errors[option.name] = "дата ДД.ММ, наприклад 01.03, або порожньо"
+        elif option.kind == "time":
+            if not raw:  # порожнє = лише після Шафи; у `.env` порожнє означало б «типово»
+                values[option.name] = "off"
+                continue
+            try:
+                hours, minutes = (int(part) for part in raw.split(":"))
+                if not (0 <= hours < 24 and 0 <= minutes < 60):
+                    raise ValueError(raw)
+                values[option.name] = f"{hours:02d}:{minutes:02d}"
+            except ValueError:
+                errors[option.name] = "час ГГ:ХХ, наприклад 21:00, або порожньо"
         elif option.kind == "money":
             # «$», пробіли й кома — як пише людина: «2,5 $»
             cleaned = raw.replace("$", "").replace("\xa0", "").replace(" ", "").replace(",", ".")
