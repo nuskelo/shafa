@@ -111,6 +111,12 @@
       <button name="action" value="klubok_dup_yes" class="reject">Так, дубль</button>
       <button name="action" value="klubok_dup_other" class="approve">Інша пара — виставити</button>
     </form>
+    {% elif row.retryable %}
+    <form method="post" action="/klubok/item/{{ card.id }}" class="row-actions">
+      <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ list_url }}"><input type="hidden" name="stay" value="list">
+      <button name="action" value="klubok_retry_form" class="approve">Спробувати ще раз</button>
+      <a class="button" href="{{ open_url }}">Відкрити Картку</a>
+    </form>
     {% else %}
     <div class="row-actions"><a class="button" href="{{ open_url }}">Відкрити Картку</a></div>
     {% endif %}

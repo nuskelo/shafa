@@ -29,6 +29,12 @@
     <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">
     <button name="action" value="klubok_retry">Ні, не опубліковано — повернути в чергу</button>
   </form>
+  {% elif kad["problem_code"] in klubok_retryable %}
+  <p>Форма Клубку не заповнилась: {{ kad["problem_text"] or "" }}. Оголошення не публікувалось — запит не йшов.</p>
+  <form method="post" action="{{ item_action }}" class="decide">
+    <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="from" value="{{ nav.back }}">
+    <button name="action" value="klubok_retry_form" class="approve">Спробувати ще раз</button>
+  </form>
   {% else %}
   <p>Що зробити: скажіть Власнику — він подивиться журнал робота.</p>
   <details><summary>Подробиці для Власника</summary><p>{{ kad["problem_code"] }}: {{ kad["problem_text"] or "" }}</p></details>

@@ -119,6 +119,7 @@ MESSAGES = {
     "klubok_rejected_done": "Добре — на Клубок ця пара не піде. На перевірку більше нічого немає",
     "klubok_cannot_approve": "Схвалити не можна — причина вгорі Картки",
     "klubok_retry": "Добре — пара знову в черзі Клубку",
+    "klubok_retry_form": "Добре — пара знову в черзі Клубку, робот спробує ще раз",
     "klubok_confirmed": "Добре — позначено як виставлене на Клубку",
     "klubok_robot_busy": "Робот зараз працює — зачекайте, поки він закінчить",
     "klubok_synced": "Чергу Клубку перераховано",
@@ -559,6 +560,7 @@ class App:
         self.env.globals["archive_reason"] = archive_reason
         self.env.globals["plural"] = plural
         self.env.globals["site"] = "shafa"  # KLB-009: сторінки Клубку передають `site="klubok"`
+        self.env.globals["klubok_retryable"] = klubok_queue.BEFORE_CLICK  # KLB-015
         self.env.globals["ktabs"] = klubok_screen.TABS
         self.env.globals["wave_text"] = klubok_screen.wave_text
 
@@ -1622,9 +1624,14 @@ class App:
                 if stay and from_:  # KLB-010: рішення просто в рядку «Проблем» — рядок зникає
                     return redirect(with_msg(from_, action if done else "stale"))
                 return redirect(back(msg=action if done else "stale"))
-            if action in ("klubok_confirm", "klubok_retry"):
+            if action in ("klubok_confirm", "klubok_retry", "klubok_retry_form"):
                 if lock.busy(self.lock_file):  # як `--klubok-confirm`: не під час роботи робота
                     return redirect(back(msg="klubok_robot_busy"))
+                if action == "klubok_retry_form":  # KLB-015: помилка форми до кліку
+                    done = klubok_queue.retry_form(conn, item_id)
+                    if stay and from_:
+                        return redirect(with_msg(from_, action if done else "stale"))
+                    return redirect(back(msg=action if done else "stale"))
                 if action == "klubok_retry":
                     done = klubok_queue.retry(conn, item_id)
                     return redirect(back(msg="klubok_retry" if done else "stale"))
