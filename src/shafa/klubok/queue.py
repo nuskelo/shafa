@@ -45,6 +45,8 @@ POST_GONE, POST_DONE = "klubok_post_gone", "klubok_post_done"
 DUPLICATE, DUP_YES, UNCERTAIN = "klubok_duplicate", "klubok_dup_yes", "klubok_uncertain"
 OFF, SNAPSHOT_OLD, LIMIT_REACHED = "klubok_off", "klubok_snapshot_old", "klubok_limit"
 EMPTY = "klubok_queue_empty"
+# KLB-015: помилка форми ДО кліку «Опубликовать» — запит публікації не йшов, пару можна повернути в чергу.
+BEFORE_CLICK = ("klubok_field_missing", "klubok_verify", "klubok_photos")
 
 # Причини простою мовою — для екрана й `klubok-queue` (англійських кодів людина не бачить).
 REASONS = {
@@ -446,6 +448,29 @@ def retry(conn: sqlite3.Connection, item_id: int) -> bool:
     events.emit(
         "klubok.retry",
         f"Клубок: пост {post[0] if post else '?'} — «не опубліковано», повернуто в чергу",
+        data={"item": item_id},
+    )
+    return True
+
+
+def retry_form(conn: sqlite3.Connection, item_id: int) -> bool:
+    """KLB-015: «Спробувати ще раз» — `problem` з кодом `BEFORE_CLICK` → `queued`. `klubok_uncertain`,
+    `klubok_captcha`, дублі й решта — відмова, нічого не змінюється (там запит міг піти). Подія в журнал."""
+    stamp = now()
+    marks = ", ".join("?" for _ in BEFORE_CLICK)
+    with conn:
+        cursor = conn.execute(
+            "UPDATE klubok_ads SET state = ?, problem_code = NULL, problem_text = NULL, "
+            "queued_at = ?, updated_at = ? "
+            f"WHERE item_id = ? AND state = ? AND problem_code IN ({marks})",
+            (QUEUED, stamp, stamp, item_id, PROBLEM, *BEFORE_CLICK),
+        )
+    if cursor.rowcount != 1:
+        return False
+    post = conn.execute("SELECT post_id FROM items WHERE id = ?", (item_id,)).fetchone()
+    events.emit(
+        "klubok.retry",
+        f"Клубок: пост {post[0] if post else '?'} — помилка форми, повторюємо",
         data={"item": item_id},
     )
     return True

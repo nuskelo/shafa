@@ -273,13 +273,19 @@
 {% set order = card.fields["photo_order"] %}
 <div class="card-cols{% if card.status == "problem" %} solo{% endif %}">
   <section class="left" aria-label="Фото і текст поста">
+    {# KLB-015: на Клубку фото Картки на диску немає — запасне з Експорту (шлях лише з бази) #}
+    {% set pre = "/klubok" if site == "klubok" else "" %}
+    {% set kshot = klubok_shot(card) if site == "klubok" else None %}
     <div class="gallery">
-      {% if card.photos %}
-      <a class="big" href="/photo/{{ card.id }}/{{ card.photos[0].position }}" title="Клік — на весь екран"><img src="/photo/{{ card.id }}/{{ card.photos[0].position }}" alt="Фото"></a>
+      {% if kshot == "spare" %}
+      <a class="big" href="{{ pre }}/photo/{{ card.id }}/{{ card.photos[0].position if card.photos else 1 }}" title="Клік — на весь екран"><img src="{{ pre }}/photo/{{ card.id }}/{{ card.photos[0].position if card.photos else 1 }}" alt="Фото з Експорту"></a>
+      <p class="meta kspare">фото з Експорту</p>
+      {% elif card.photos %}
+      <a class="big" href="{{ pre }}/photo/{{ card.id }}/{{ card.photos[0].position }}" title="Клік — на весь екран"><img src="{{ pre }}/photo/{{ card.id }}/{{ card.photos[0].position }}" alt="Фото"></a>
       <div class="thumbs">
         {% for photo in card.photos %}
-        <a class="photo" href="/photo/{{ card.id }}/{{ photo.position }}" title="{{ photo.file_name }}"{% if loop.first %} aria-current="true"{% endif %}>
-          <img src="/thumb/{{ card.id }}/{{ photo.position }}" alt="Фото {{ loop.index }}" loading="lazy">
+        <a class="photo" href="{{ pre }}/photo/{{ card.id }}/{{ photo.position }}" title="{{ photo.file_name }}"{% if loop.first %} aria-current="true"{% endif %}>
+          <img src="{{ pre }}/thumb/{{ card.id }}/{{ photo.position }}" alt="Фото {{ loop.index }}" loading="lazy">
         </a>
         {% endfor %}
       </div>

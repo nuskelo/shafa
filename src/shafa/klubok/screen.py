@@ -96,6 +96,11 @@ class Row:
     auto: str | None = None  # KLB-011: рішення програми — "dup" (Архів) / "other" (Схвалені)
 
     @property
+    def retryable(self) -> bool:
+        """KLB-015: помилка форми до кліку — є кнопка «Спробувати ще раз»."""
+        return self.code in queue.BEFORE_CLICK
+
+    @property
     def price(self) -> int | None:
         """Ціна Клубку: «лише Клубок» — поле Картки (з поста, можна правити), інакше з поста."""
         return fields.klubok_price(self.card)

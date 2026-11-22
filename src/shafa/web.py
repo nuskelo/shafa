@@ -119,6 +119,7 @@ MESSAGES = {
     "klubok_rejected_done": "Добре — на Клубок ця пара не піде. На перевірку більше нічого немає",
     "klubok_cannot_approve": "Схвалити не можна — причина вгорі Картки",
     "klubok_retry": "Добре — пара знову в черзі Клубку",
+    "klubok_retry_form": "Добре — пара знову в черзі Клубку, робот спробує ще раз",
     "klubok_confirmed": "Добре — позначено як виставлене на Клубку",
     "klubok_robot_busy": "Робот зараз працює — зачекайте, поки він закінчить",
     "klubok_synced": "Чергу Клубку перераховано",
@@ -559,6 +560,8 @@ class App:
         self.env.globals["archive_reason"] = archive_reason
         self.env.globals["plural"] = plural
         self.env.globals["site"] = "shafa"  # KLB-009: сторінки Клубку передають `site="klubok"`
+        self.env.globals["klubok_shot"] = self.klubok_shot  # KLB-015
+        self.env.globals["klubok_retryable"] = klubok_queue.BEFORE_CLICK  # KLB-015
         self.env.globals["ktabs"] = klubok_screen.TABS
         self.env.globals["wave_text"] = klubok_screen.wave_text
 
@@ -1346,6 +1349,8 @@ class App:
             return self.klubok_tab(name, request)
         if name == "sessions" and get:
             return self.sessions_page(request, site="klubok")
+        if (match := _PHOTO.fullmatch(path.removeprefix("/klubok"))) and get:  # KLB-015
+            return self.photo(match[1], int(match[2]), int(match[3]), spare=True)
         if (match := _KLUBOK_SESSION.fullmatch(path)) and get:
             return self.session_page(int(match[1]), request, site="klubok")
         if name == "panel" and get:
@@ -1622,9 +1627,14 @@ class App:
                 if stay and from_:  # KLB-010: рішення просто в рядку «Проблем» — рядок зникає
                     return redirect(with_msg(from_, action if done else "stale"))
                 return redirect(back(msg=action if done else "stale"))
-            if action in ("klubok_confirm", "klubok_retry"):
+            if action in ("klubok_confirm", "klubok_retry", "klubok_retry_form"):
                 if lock.busy(self.lock_file):  # як `--klubok-confirm`: не під час роботи робота
                     return redirect(back(msg="klubok_robot_busy"))
+                if action == "klubok_retry_form":  # KLB-015: помилка форми до кліку
+                    done = klubok_queue.retry_form(conn, item_id)
+                    if stay and from_:
+                        return redirect(with_msg(from_, action if done else "stale"))
+                    return redirect(back(msg=action if done else "stale"))
                 if action == "klubok_retry":
                     done = klubok_queue.retry(conn, item_id)
                     return redirect(back(msg="klubok_retry" if done else "stale"))
@@ -2360,8 +2370,31 @@ class App:
         finally:
             conn.close()
 
-    def photo(self, kind: str, item_id: int, position: int) -> Response:
-        """Фото лише з папок Карток у базі: шлях будується з бази, не із запиту."""
+    def _photo_file(self, folder_name: str, file_name: str, status: str) -> Path | None:
+        """Файл фото Картки на диску: шлях з бази (не із запиту), лише всередині своєї теки."""
+        root = (
+            old_root() if is_old(folder_name) else klubok_root() if is_klubok(folder_name)
+            else self.root
+        ).resolve()  # fmt: skip
+        folders = [item_folder(self.root, folder_name).resolve()]
+        if status == Status.PUBLISHED:  # робот переносить папку в «Опубліковано» (TD-016)
+            folders.insert(0, root / PUBLISHED_DIR / base_name(folder_name))
+        path = next((p for f in folders if (p := (f / file_name).resolve()).is_file()), None)
+        return path if path is not None and path.is_relative_to(root) else None
+
+    def klubok_shot(self, card: review.Card) -> str | None:
+        """KLB-015: що показати на вкладках Клубку — `disk` (перше фото Картки є на диску),
+        `spare` (немає, але є запасне з Експорту), інакше None. Для шаблонів."""
+        if card.photos:
+            first = card.photos[0].file_name
+            if self._photo_file(card.folder_name, first, card.status):
+                return "disk"
+        return "spare" if klubok_fields.spare_photo(card.post_id) else None
+
+    def photo(self, kind: str, item_id: int, position: int, spare: bool = False) -> Response:
+        """Фото лише з папок Карток у базі: шлях будується з бази, не із запиту.
+        `spare` (KLB-015, лише вкладки Клубку): немає фото Картки на диску — запасне фото поста
+        `<дані>/klubok-old/<N>/1.jpg`; Шафа ходить без нього."""
         conn = self.connect()
         try:
             row = conn.execute(
@@ -2371,19 +2404,15 @@ class App:
                 """,
                 (item_id, position),
             ).fetchone()
+            post = conn.execute("SELECT post_id FROM items WHERE id = ?", (item_id,)).fetchone()
         finally:
             conn.close()
-        if row is None:
-            return text(404, "Фото не знайдено")
-        name = row["folder_name"]
-        root = (
-            old_root() if is_old(name) else klubok_root() if is_klubok(name) else self.root
-        ).resolve()
-        folders = [item_folder(self.root, row["folder_name"]).resolve()]
-        if row["status"] == Status.PUBLISHED:  # робот переносить папку в «Опубліковано» (TD-016)
-            folders.insert(0, root / PUBLISHED_DIR / base_name(row["folder_name"]))
-        path = next((p for f in folders if (p := (f / row["file_name"]).resolve()).is_file()), None)
-        if path is None or not path.is_relative_to(root):
+        path = None
+        if row is not None:
+            path = self._photo_file(row["folder_name"], row["file_name"], row["status"])
+        if path is None and spare and post is not None:
+            path = klubok_fields.spare_photo(post["post_id"])
+        if path is None:
             return text(404, "Фото не знайдено")
         try:
             if kind == "thumb":
