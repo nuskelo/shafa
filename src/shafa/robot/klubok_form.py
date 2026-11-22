@@ -525,9 +525,7 @@ class KlubokDriver:
                 polling=SELECT_POLL * 1000,
             )
         except _playwright_error():
-            have = select.evaluate(
-                "s => Array.from(s.options).map(o => o.textContent.trim())"
-            )
+            have = select.evaluate("s => Array.from(s.options).map(o => o.textContent.trim())")
             shown = ", ".join(repr(t) for t in have[:12]) + (" …" if len(have) > 12 else "")
             raise _ListMissing(
                 f"У списку категорій немає «{where}» (чекали {SELECT_WAIT:.0f} с, форму "

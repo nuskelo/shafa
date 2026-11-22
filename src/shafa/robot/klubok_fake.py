@@ -408,7 +408,10 @@ class _Handler(BaseHTTPRequestHandler):
         elif parts.path == "/item/add":
             self.server.opens += 1
             scenario = self._scenario()
-            late = {"late_categories": LATE_MS, "late_once": 600_000 if self.server.opens == 1 else 0}
+            late = {
+                "late_categories": LATE_MS,
+                "late_once": 600_000 if self.server.opens == 1 else 0,
+            }
             body = page(
                 self.server.snapshot, scenario, self.server.submit != "nosend",
                 self.server.user, late.get(scenario, 0),
