@@ -35,6 +35,8 @@ KLB-008: старі пости хвилі в чергу Клубку (етало
 Власника); з `--fake-klubok` — на підставному Клубку й на копії бази (файл не змінюється).
 `--klubok-renew --db … [--human-click]` — KLB-004: «Обновить все» на Клубку, якщо є прострочені й
 сьогодні ще не оновлювали (один GET `/renew/all`; `--human-click` — тисне людина).
+`--klubok-marksold --db … [--human-click] [--limit N]` — KLB-005: позначити проданим на Клубку те, на що
+Вікторія сказала «Так, продано» (один GET на оголошення, ≤ 20; перевірка — вкладка «Проданные»).
 `python -m shafa robot --publish --db … [--limit N]` — ПУБЛІКАЦІЯ схвалених (живий сайт!);
 `--pause | --resume | --stop --db …` — керування запущеною публікацією (поточний товар дописується).
 `python -m shafa bot --db … --root … [--check]` — Telegram-бот: пост від Продавчині → прев'ю →
@@ -289,6 +291,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="KLB-004: «Обновить все» на Клубку, якщо є прострочені (живий сайт!)",
     )  # fmt: skip
     mode.add_argument(
+        "--klubok-marksold", action="store_true",
+        help="KLB-005: позначити проданим на Клубку підтверджене «Так, продано» (живий сайт!)",
+    )  # fmt: skip
+    mode.add_argument(
         "--klubok-confirm", action="store_true",
         help="KLB-007: підтвердити, що невпевнена публікація відбулась (--post P --klubok-id N)",
     )  # fmt: skip
@@ -344,13 +350,16 @@ def run_control(parser: argparse.ArgumentParser, args: argparse.Namespace) -> in
 def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if args.pause or args.resume or args.stop:
         return run_control(parser, args)
-    if args.human_click and not (args.klubok_publish or args.klubok_renew):
-        parser.error("--human-click лише з --klubok-publish чи --klubok-renew")
+    if args.human_click and not (args.klubok_publish or args.klubok_renew or args.klubok_marksold):
+        parser.error("--human-click лише з --klubok-publish, --klubok-renew чи --klubok-marksold")
     if args.klubok_confirm:
         return run_klubok_confirm(parser, args)
     if args.klubok_id is not None:
         parser.error("--klubok-id лише з --klubok-confirm")
-    if args.klubok_login or args.klubok_snapshot or args.klubok_publish or args.klubok_renew:
+    if (
+        args.klubok_login or args.klubok_snapshot or args.klubok_publish or args.klubok_renew
+        or args.klubok_marksold
+    ):  # fmt: skip
         return run_klubok(parser, args)
     if args.klubok_dry_fill or args.fake_klubok:
         return run_klubok_dry_fill(parser, args)
@@ -656,7 +665,14 @@ def run_klubok(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
             klubok_queue.from_post()
         except klubok_queue.SetupError as error:
             parser.error(str(error))
-    needs_db = args.klubok_snapshot or args.klubok_publish or args.klubok_renew
+    if args.klubok_marksold:
+        from shafa.klubok import sold as klubok_sold
+
+        if args.limit is not None and not 1 <= args.limit <= klubok_sold.LIMIT:
+            parser.error(f"--klubok-marksold: --limit від 1 до {klubok_sold.LIMIT}")
+    needs_db = (
+        args.klubok_snapshot or args.klubok_publish or args.klubok_renew or args.klubok_marksold
+    )
     if needs_db and (args.db is None or not args.db.is_file()):
         parser.error(f"Базу не знайдено: {args.db}")
     if args.fake_klubok and args.klubok_login:
@@ -667,6 +683,8 @@ def run_klubok(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
         mode = "klubok-snapshot"
     elif args.klubok_renew:
         mode = "klubok-renew"
+    elif args.klubok_marksold:
+        mode = "klubok-marksold"
     else:
         mode = "klubok-publish"
     try:
@@ -728,17 +746,20 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
                 session: klubok_form.Session = klubok_fake.FakeSession(
                     p, server.base, headless=False, publishing=args.klubok_publish,
                     human=args.human_click, renewing=args.klubok_renew,
+                    marking=args.klubok_marksold,
                 )  # fmt: skip
             else:
                 session = klubok_form.LiveSession(
                     p, publishing=args.klubok_publish, human=args.human_click,
-                    renewing=args.klubok_renew,
+                    renewing=args.klubok_renew, marking=args.klubok_marksold,
                 )  # fmt: skip
             try:
                 if args.klubok_snapshot:
                     return _klubok_snapshot(conn, root, session, log)
                 if args.klubok_renew:
                     return _klubok_renew(conn, session, args.human_click, log)
+                if args.klubok_marksold:
+                    return _klubok_marksold(conn, session, args, stop, log)
                 opts = klubok_publish.Options(
                     limit=args.limit, post_id=args.post[0] if args.post else None,
                     human=args.human_click,
@@ -773,6 +794,28 @@ def _klubok_renew(conn, session, human: bool, log) -> int:
         log(f"Зупинка ({stop.code}): {stop.text}")
         return 1
     return 0 if outcome.ok else 1  # KLB-013: підсумок уже надруковано в `Renewer` — не вдруге
+
+
+def _klubok_marksold(conn, session, args, stop: list[bool], log) -> int:
+    """KLB-005: «продано» підтвердженим. 0 — нічого чи все підтвердилось; 1 — ні або стоп."""
+    from shafa.klubok import sold
+    from shafa.robot import klubok_marksold, klubok_publish
+
+    try:
+        outcome = klubok_marksold.mark_sold(
+            conn, session, limit=args.limit or sold.LIMIT, human=args.human_click, log=log,
+            sleep=lambda s: klubok_publish.nap(s, lambda: bool(stop)),
+            stopping=lambda: bool(stop), page_pause=klubok_publish.PAGE_PAUSE,
+        )  # fmt: skip
+    except klubok_marksold.MarkStop as error:
+        log(f"Зупинка ({error.code}): {error.text}")
+        return 1
+    if outcome.code == klubok_marksold.NOTHING:
+        log("Клубок: позначати проданим нічого («Так, продано» ще ніхто не натиснув)")
+    else:
+        log(f"Клубок: позначено проданим {len(outcome.removed)}, не підтвердилось "
+            f"{len(outcome.failed)}, не натиснуто {len(outcome.skipped)}")  # fmt: skip
+    return 0 if outcome.ok else 1
 
 
 def _klubok_snapshot(conn, root, session, log) -> int:
