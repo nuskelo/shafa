@@ -18,7 +18,7 @@ from pathlib import Path
 
 from shafa import rules
 from shafa.db import Status
-from shafa.klubok import dupcheck, fields, queue
+from shafa.klubok import dupcheck, fields, queue, sold
 from shafa.review import Card, _matches, load_card
 
 TABS = {
@@ -61,10 +61,39 @@ def counts(conn: sqlite3.Connection) -> dict[str, int]:
     )
     for key, state in STATES.items():
         out[key] = by_state.get(state, 0)
+    out["decide"] += sold.pending(conn)  # KLB-005: блок «Схоже, продано»
     out["archive"] = by_state.get(queue.SKIPPED, 0) + len(_archived_klubok(conn))
     out["sessions"] = conn.execute(
         "SELECT count(*) FROM sessions WHERE site = 'klubok'"
     ).fetchone()[0]
+    return out
+
+
+@dataclass
+class SoldRow:
+    """KLB-005: рядок блоку «Схоже, продано» — питання (`ask`) і наша Картка, якщо вона є (а)."""
+
+    ask: sold.Ask
+    card: Card | None = None
+
+    @property
+    def photo(self) -> str | None:
+        """Фото її оголошення — лише з `img.klubok.com`."""
+        photo = self.ask.photo
+        return photo if photo and photo.startswith(LISTING_PHOTO) else None
+
+    @property
+    def name(self) -> str:
+        if self.ask.name:
+            return self.ask.name
+        return (self.card.fields["title"].value or "") if self.card is not None else ""
+
+
+def sold_rows(conn: sqlite3.Connection) -> list[SoldRow]:
+    out = []
+    for ask in sold.asks(conn):
+        card = load_card(conn, ask.key) if ask.kind == sold.AD else None
+        out.append(SoldRow(ask, card))
     return out
 
 

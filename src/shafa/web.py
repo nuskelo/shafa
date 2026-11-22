@@ -63,6 +63,7 @@ from shafa.klubok import fields as klubok_fields
 from shafa.klubok import queue as klubok_queue
 from shafa.klubok import refresh as klubok_refresh
 from shafa.klubok import screen as klubok_screen
+from shafa.klubok import sold as klubok_sold
 from shafa.robot import browser, control, klubok_control, lock, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
@@ -119,6 +120,8 @@ MESSAGES = {
     "klubok_rejected_done": "Добре — на Клубок ця пара не піде. На перевірку більше нічого немає",
     "klubok_cannot_approve": "Схвалити не можна — причина вгорі Картки",
     "klubok_retry": "Добре — пара знову в черзі Клубку",
+    "klubok_sold_yes": "Добре — робот позначить проданим на Клубку на початку наступної сесії",
+    "klubok_sold_no": "Добре — більше не питаємо про цю пару",
     "klubok_retry_form": "Добре — пара знову в черзі Клубку, робот спробує ще раз",
     "klubok_confirmed": "Добре — позначено як виставлене на Клубку",
     "klubok_robot_busy": "Робот зараз працює — зачекайте, поки він закінчить",
@@ -1357,6 +1360,8 @@ class App:
             return self.klubok_panel(request)
         if name == "robot" and post:
             return self.klubok_robot_post(request)
+        if name == "sold" and post:  # KLB-005: «Схоже, продано» — «Так» / «Ні»
+            return self.klubok_sold_post(request)
         if match := _KLUBOK_ITEM.fullmatch(path):
             if get:
                 return self.klubok_card_page(int(match[1]), request)
@@ -1441,6 +1446,7 @@ class App:
                 rows=found,
                 groups=klubok_screen.groups(found) if tab == "archive" else [],
                 auto=klubok_screen.auto_summary(conn) if tab == "decide" else None,
+                sold_rows=klubok_screen.sold_rows(conn) if tab == "decide" and not query else [],
                 marks={r.card.id: klubok_mark(r, tab, self.root) for r in found},
                 wave=wave,
                 wave_pills=pills,
@@ -1667,6 +1673,25 @@ class App:
         if urlsplit(back).path == "/klubok/review":
             return with_msg(back, f"{message}_done")
         return with_msg(back, message)
+
+    def klubok_sold_post(self, request: Request) -> Response:
+        """KLB-005: відповідь на «Схоже, продано». Лише база; робот знімає пізніше."""
+        kind = (request.form.get("kind") or [""])[0]
+        raw = (request.form.get("key") or [""])[0]
+        answer = (request.form.get("answer") or [""])[0]
+        back = "/klubok/decide"
+        if (
+            kind not in (klubok_sold.AD, klubok_sold.LISTING)
+            or not raw.isdigit()
+            or answer not in ("yes", "no")
+        ):
+            return self.error(400, UNKNOWN_ACTION)
+        conn = self.connect()
+        try:
+            done = klubok_sold.answer(conn, kind, int(raw), answer == "yes")
+        finally:
+            conn.close()
+        return redirect(with_msg(back, f"klubok_sold_{answer}" if done else "stale"))
 
     def klubok_robot_post(self, request: Request) -> Response:
         action = (request.form.get("action") or [""])[0]

@@ -68,7 +68,35 @@
 {% if current == "decide" and auto and (auto.dups or auto.others) %}
 <p class="kauto-sum">Програма вирішила: {{ plural(auto.dups, "дубль", "дублі", "дублів") }}, {{ plural(auto.others, "інша пара", "інші пари", "інших пар") }} · вам лишилось {{ auto.left }}</p>
 {% endif %}
-{% if not rows %}
+{% if current == "decide" and sold_rows %}
+{# KLB-005: пост виставленої пари зник з каналу — без її «Так» нічого не знімаємо #}
+<section class="ksold" aria-label="Схоже, продано">
+  <h2>Схоже, продано ({{ sold_rows | length }})</h2>
+  <ul class="problems">
+  {% for s in sold_rows %}
+    {% set a = s.ask %}
+    <li class="problem-row ksold-row">
+      <span class="shot">{% if s.card and klubok_shot(s.card) %}<img src="/klubok/thumb/{{ s.card.id }}/{{ s.card.photos[0].position if s.card.photos else 1 }}" alt="" loading="lazy">{% elif s.photo %}<img src="{{ s.photo }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}<span class="noshot">немає фото</span>{% endif %}</span>
+      <div class="why-box">
+        <div class="kind-line">
+          <span class="kind">{% if a.waiting %}Чекає робота — зніме з Клубку{% else %}Схоже, продано{% endif %}</span>
+          <span class="meta">{% if a.post_id %}Пост {{ a.post_id }}{% endif %}{% if a.kind == "listing" %} · ваше оголошення{% endif %}</span>
+        </div>
+        <span class="name">{{ s.name or "без назви" }}</span>
+        <p class="meta">Чому: пост {{ a.post_id }} зник з каналу{% if a.gone_at %} {{ a.gone_at | dmy }}{% endif %}.{% if link(a.url) %} · <a href="{{ link(a.url) }}" target="_blank" rel="noopener noreferrer">Відкрити на Клубку</a>{% endif %}</p>
+        {% if a.note %}<p class="todo">Минулого разу не вдалося: {{ a.note }}</p>{% endif %}
+      </div>
+      <form method="post" action="/klubok/sold" class="row-actions">
+        <input type="hidden" name="token" value="{{ token }}"><input type="hidden" name="kind" value="{{ a.kind }}"><input type="hidden" name="key" value="{{ a.key }}">
+        {% if not a.waiting %}<button name="answer" value="yes" class="approve">Так, продано — зняти з Клубку</button>{% endif %}
+        <button name="answer" value="no"{% if not a.waiting %} class="reject"{% endif %}>{% if a.waiting %}Ні, не знімати{% else %}Ні, ще продається{% endif %}</button>
+      </form>
+    </li>
+  {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% if not rows and not (current == "decide" and sold_rows) %}
 <p class="empty">{% if query %}Нічого не знайдено.{% elif wave %}У цьому фільтрі нічого немає.{% else %}Тут поки порожньо.{% endif %}</p>
 {% elif current == "archive" %}
 {% for reason, items in groups %}
