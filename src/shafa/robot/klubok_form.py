@@ -30,6 +30,8 @@ FORM_SELECTOR = "#addItemForm"
 FORM_WAIT = 30.0  # с: форма з'являється не одразу
 PHOTO_WAIT = 30.0  # с на одне фото: завантажилось і з'явилось у `formData.images`
 FIELD_WAIT = 5.0  # с чекаємо поле чи список форми
+SELECT_WAIT = 15.0  # KLB-015: с чекаємо опцію категорії (список приходить із запиту)
+SELECT_POLL = 0.25  # с між перевірками опції
 BRAND_WAIT = 6.0  # с чекаємо підказки бренду
 BRAND_TYPE_DELAY = 40  # мс між літерами, як у людини (сторінка чекає 500 мс після останньої)
 SUFFIX = "(Кирилиця)"
@@ -55,6 +57,10 @@ def _playwright_error() -> type[Exception]:
     from playwright.sync_api import Error
 
     return Error
+
+
+class _ListMissing(Exception):
+    """KLB-015: опції категорії не з'явились — `choose_category` відкриє форму знову."""
 
 
 class KlubokError(Exception):
@@ -469,7 +475,28 @@ class KlubokDriver:
         self.session.click(target, what)
 
     def choose_category(self, leaf: catalog.Leaf) -> None:
-        """Шлях листка по селектах: категорія → підкатегорія → ціль (4-й рівень — в optgroup)."""
+        """Шлях листка по селектах: категорія → підкатегорія → ціль (4-й рівень — в optgroup).
+        KLB-015: списки вантажаться асинхронно (`/api/1/categors`) — кожен рівень чекає потрібну
+        опцію до `SELECT_WAIT`; не з'явилась — форма відкривається знову (один раз), шлях
+        проходиться з початку; лише тоді помилка з переліком наявних опцій."""
+        try:
+            self._pick_path(leaf)
+        except _ListMissing:
+            opened = self.session.open_form()
+            if not opened.ok:
+                raise KlubokError(
+                    "klubok_field_missing",
+                    "Форма Клубку не відкрилась повторно, поки чекали список категорій",
+                ) from None
+            try:
+                self._pick_path(leaf)
+            except _ListMissing as again:
+                raise KlubokError("klubok_field_missing", str(again)) from None
+        self.page.wait_for_function(
+            "id => String(formData.categoryId()) === id", arg=str(leaf.id), timeout=5_000
+        )
+
+    def _pick_path(self, leaf: catalog.Leaf) -> None:
         path = leaf.path
         self._select("#category", path[0])
         self._select("select[name=subcategory]", path[1])
@@ -477,31 +504,36 @@ class KlubokDriver:
             self._select("select[name=targetcategory]", path[2])
         elif len(path) == 4:
             self._select("select[name=targetcategory]", path[3], group=path[2])
-        self.page.wait_for_function(
-            "id => String(formData.categoryId()) === id", arg=str(leaf.id), timeout=5_000
-        )
 
     def _select(self, selector: str, name: str, group: str | None = None) -> None:
         select = self.loc(selector)
+        where = f"{group} / {name}" if group else name
         try:
-            select.wait_for(state="visible", timeout=FIELD_WAIT * 1000)
+            select.wait_for(state="visible", timeout=SELECT_WAIT * 1000)
         except _playwright_error():
-            raise KlubokError(
-                "klubok_field_missing", f"На формі немає списку категорій: {name}"
-            ) from None
-        index = select.evaluate(
-            """(s, [name, group]) => {
-              const options = Array.from(s.options);
-              return options.findIndex(o =>
+            raise _ListMissing(f"На формі немає списку категорій: {where}") from None
+        finder = """(s, [name, group]) => Array.from(s.options).findIndex(o =>
                 o.textContent.trim() === name &&
                 (group === null || (o.parentElement.tagName === 'OPTGROUP' &&
-                                    o.parentElement.label === group)));
-            }""",
-            [name, group],
-        )
-        if index < 0:
-            where = f"{group} / {name}" if group else name
-            raise KlubokError("klubok_field_missing", f"У списку категорій немає «{where}»")
+                                    o.parentElement.label === group)))"""
+        try:  # опції приходять із запиту: чекаємо потрібну, а не лише сам список
+            self.page.wait_for_function(
+                f"([sel, name, group]) => {{ const s = document.querySelector(sel);"
+                f" return !!s && ({finder})(s, [name, group]) >= 0; }}",
+                arg=[selector, name, group],
+                timeout=SELECT_WAIT * 1000,
+                polling=SELECT_POLL * 1000,
+            )
+        except _playwright_error():
+            have = select.evaluate(
+                "s => Array.from(s.options).map(o => o.textContent.trim())"
+            )
+            shown = ", ".join(repr(t) for t in have[:12]) + (" …" if len(have) > 12 else "")
+            raise _ListMissing(
+                f"У списку категорій немає «{where}» (чекали {SELECT_WAIT:.0f} с, форму "
+                f"відкривали двічі). Є: {shown or 'порожньо'}"
+            ) from None
+        index = select.evaluate(finder, [name, group])
         select.select_option(index=index)
 
     def brand(self, brand: str) -> None:

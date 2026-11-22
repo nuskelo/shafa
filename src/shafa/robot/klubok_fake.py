@@ -51,7 +51,10 @@ SCENARIOS = {
     "evil": "сторінка ще й надсилає щось на чужий сайт (guard має заблокувати)",
     "error429": "відповідь на відправку — «низька оцінка reCAPTCHA» (/error429)",
     "brand_none": "довідник брендів порожній",
+    "late_categories": "KLB-015: категорії вантажаться із затримкою 3 с (перша Картка сесії)",
+    "late_once": "KLB-015: перше відкриття форми — категорії не приходять, повторне — одразу",
 }
+LATE_MS = 3000
 DELAY = (0.1, 1.5)  # скільки секунд сервер «приймає» одне фото
 BRANDS = [
     "Ecco Golf", "Ecco (Кирилиця)", "Nike (Кирилиця)", "Zara (Кирилиця)", "Salomon (Кирилиця)",
@@ -138,7 +141,7 @@ PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 </form>
 <script>
 var TREE = %(tree)s, FILTERS = %(filters)s, SIZES = %(sizes)s, COLORS = %(colors)s;
-var SCENARIO = %(scenario)s, SENDS = %(sends)s;
+var SCENARIO = %(scenario)s, SENDS = %(sends)s, CAT_DELAY = %(cat_delay)s;
 // Підставна reCAPTCHA: як справжня, ходить POST на google.com (тут — /google/…); не пустили — токена немає.
 window.grecaptcha = {ready: function (f) { f(); },
   execute: function () {
@@ -211,7 +214,10 @@ $("#filter15").appendChild(check("color", 99, "Разноцветное", "🌈 
   formData.userItem.color = Number(i.value); }, "radio"));
 
 reset(selects.category);
-TREE.forEach(function (n, i) { option(selects.category, n.name, i); });
+function fillCategories() {
+  TREE.forEach(function (n, i) { option(selects.category, n.name, i); });
+}
+if (CAT_DELAY) setTimeout(fillCategories, CAT_DELAY); else fillCategories();
 selects.category.addEventListener("change", function () {
   formData.category = selects.category.value === "" ? null : TREE[selects.category.value];
   formData.subcategory = formData.targetcategory = null;
@@ -338,7 +344,11 @@ def tree(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def page(
-    snapshot: dict[str, Any], scenario: str = "ok", sends: bool = True, user: str = USER
+    snapshot: dict[str, Any],
+    scenario: str = "ok",
+    sends: bool = True,
+    user: str = USER,
+    cat_delay: int = 0,
 ) -> str:
     if scenario == "login":
         return LOGIN_PAGE
@@ -350,6 +360,7 @@ def page(
         "colors": COLORS,
         "scenario": scenario,
         "sends": sends,
+        "cat_delay": cat_delay,
     }
     return PAGE % (
         {k: json.dumps(v, ensure_ascii=False).replace("</", "<\\/") for k, v in values.items()}
@@ -395,9 +406,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif parts.path == "/signup":
             self._send(200, SIGNUP_PAGE.encode("utf-8"), "text/html; charset=utf-8")
         elif parts.path == "/item/add":
+            self.server.opens += 1
+            scenario = self._scenario()
+            late = {"late_categories": LATE_MS, "late_once": 600_000 if self.server.opens == 1 else 0}
             body = page(
-                self.server.snapshot, self._scenario(), self.server.submit != "nosend",
-                self.server.user,
+                self.server.snapshot, scenario, self.server.submit != "nosend",
+                self.server.user, late.get(scenario, 0),
             ).encode("utf-8")  # fmt: skip
             self._send(200, body, "text/html; charset=utf-8")
         elif parts.path == "/api/get-items":
@@ -532,6 +546,7 @@ class Server(ThreadingHTTPServer):
         self.random = random.Random(seed)
         self.counter = itertools.count(900_000_001)
         self.hits: list[tuple[str, str]] = []
+        self.opens = 0  # скільки разів віддано /item/add (KLB-015: «перше відкриття»)
         self.traps: list[str] = []  # запити на адреси «Обновить все» тощо, що дійшли до сервера
         self.uploaded = 0
         self.submits = 0
