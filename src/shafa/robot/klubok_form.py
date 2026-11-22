@@ -79,9 +79,10 @@ class Session:
 
     def _setup(
         self, allow_upload: bool, publishing: bool = False, human: bool = False,
-        renewing: bool = False,
+        renewing: bool = False, marking: bool = False,
     ) -> None:  # fmt: skip
-        """`publishing` — сесія публікації KLB-003 (квиток, reCAPTCHA); `human` — «Опубликовать»
+        """`marking` — KLB-005 `--klubok-marksold` (квитки «продано»; у сесії публікації — лише до
+        першого квитка Картки). `publishing` — сесія публікації KLB-003 (квиток, reCAPTCHA); `human` — «Опубликовать»
         тисне людина (`--human-click`), робот кнопку не чіпає ніколи. `renewing` — KLB-004
         `--klubok-renew` (квиток «Обновить все»; у сесії публікації — лише на її початку)."""
         self.allow_upload = allow_upload
@@ -89,6 +90,8 @@ class Session:
         self.human = human
         self.renewing = renewing
         self.renew_ticket: klubok_guard.RenewTicket | None = None
+        self.marking = marking
+        self.marksold_ticket: klubok_guard.MarkSoldTicket | None = None
         self.on_renew: Callable[[], None] | None = None  # guard пропустив «Обновить все» (RENEWED)
         self.blocked: list[tuple[str, str]] = []
         self.uploads = 0
@@ -133,9 +136,12 @@ class Session:
         allowed, reason = klubok_guard.request_verdict(
             request.method, url, request.headers.get("content-type", ""), self.allow_upload,
             publishing=self.publishing, ticket=self.ticket, renew=self.renew_ticket,
+            marksold=self.marksold_ticket,
         )  # fmt: skip
         if allowed and reason == klubok_guard.SUBMITTED:
             self._send_submit(route)
+        elif allowed and reason == klubok_guard.MARKSOLD:
+            route.continue_()
         elif allowed and reason == klubok_guard.RENEWED:
             if self.on_renew is not None:  # позначка доби — до того, як запит піде (KLB-004)
                 with contextlib.suppress(Exception):
@@ -236,6 +242,51 @@ class Session:
             with contextlib.suppress(_playwright_error()):
                 self.page.wait_for_load_state("load", timeout=30_000)
         return ticket.used
+
+    # --- KLB-005: «Пометить как проданное» ---
+
+    def issue_marksold_ticket(self, klubok_id: int) -> klubok_guard.MarkSoldTicket:
+        """Квиток на один GET «продано» одного оголошення: лише `--klubok-marksold` чи сесія
+        публікації до першого квитка Картки. Попередній квиток гасне (новий — інший id)."""
+        if not (self.marking or self.publishing):
+            raise Forbidden("«Продано» — лише в --klubok-marksold чи на початку публікації")
+        if self.ticket is not None:
+            raise Forbidden("«Продано» — лише на початку сесії публікації")
+        self.marksold_ticket = klubok_guard.MarkSoldTicket(klubok_id)
+        return self.marksold_ticket
+
+    def drop_marksold(self) -> None:
+        self.marksold_ticket = None
+
+    def marksold(self, klubok_id: int) -> bool:
+        """Робот: один `page.goto` рівно на `/users/198135?pg=marksold&id=<id>` за новим квитком.
+        True — guard пропустив запит (Клубок його отримав чи міг отримати). Квиток знімається."""
+        ticket = self.issue_marksold_ticket(klubok_id)
+        try:
+            with contextlib.suppress(_playwright_error()):  # редирект/обрив — покаже `type=2`
+                self.page.goto(self.site_url(f"{klubok_guard.MARKSOLD_PATH}?{ticket.query}"),
+                               wait_until="load")  # fmt: skip
+            return ticket.used
+        finally:
+            self.drop_marksold()
+
+    def wait_marksold_click(self, klubok_id: int, limit: float) -> bool:
+        """`--human-click`: людина сама тисне «Пометить как проданное» біля цього оголошення
+        (guard пропустить лише його id). Квиток знімається."""
+        ticket = self.issue_marksold_ticket(klubok_id)
+        deadline = time.monotonic() + limit
+        try:
+            while not ticket.used and time.monotonic() < deadline:
+                try:
+                    self.page.wait_for_timeout(250)
+                except _playwright_error():  # вікно закрили
+                    break
+            if ticket.used:
+                with contextlib.suppress(_playwright_error()):
+                    self.page.wait_for_load_state("load", timeout=30_000)
+            return ticket.used
+        finally:
+            self.drop_marksold()
 
     def click_submit(self) -> None:
         """Клік «Опубликовать» роботом: лише `#btn-submit`, живий квиток, не `--human-click`."""
@@ -388,9 +439,10 @@ class LiveSession(Session):
 
     def __init__(
         self, playwright: Any, publishing: bool = False, human: bool = False,
-        renewing: bool = False,
+        renewing: bool = False, marking: bool = False,
     ) -> None:  # fmt: skip
-        self._setup(allow_upload=True, publishing=publishing, human=human, renewing=renewing)
+        self._setup(allow_upload=True, publishing=publishing, human=human, renewing=renewing,
+                    marking=marking)  # fmt: skip
         profile = profile_dir()
         profile.mkdir(parents=True, exist_ok=True)
         self.context = playwright.chromium.launch_persistent_context(

@@ -5,7 +5,8 @@
   більше не береться — рядок хвилі видалено, Картки «лише Клубок» цього поста (ще не на Клубку) —
   в Архів «не для Клубку». Повтор нічого не змінює, тож можна кликати на кожному старті; кожна
   зміна — рядок у журнал подій (`klubok.waves`).
-* `refresh` — `reclassify` + `queue.sync` (лише коли Клубок увімкнено й налаштування цілі).
+* `refresh` — `reclassify` + `queue.sync` (лише коли Клубок увімкнено й налаштування цілі) +
+  KLB-005 `sold.detect` («схоже, продано»: пост виставленої пари зник з каналу — питання на екрані).
 * `Background` — те саме в окремому потоці (≈ 2,5 с на копії 12.11 — екран не чекає): після
   старту програми, налаштувань Клубку, «Перечитати мої оголошення», кінця сесії робота. Кличе той,
   хто змінив дані; GET-сторінки нічого не пишуть.
@@ -20,7 +21,7 @@ from pathlib import Path
 
 from shafa import db, events, review
 from shafa.db import Status
-from shafa.klubok import queue, waves
+from shafa.klubok import queue, sold, waves
 
 ARCHIVABLE = (Status.NEW, Status.REVIEW, Status.APPROVED, Status.PROBLEM)
 ON_KLUBOK = ("publishing", "published", "sold_asked", "sold", "removed")
@@ -106,9 +107,11 @@ def refresh(conn: sqlite3.Connection, root: Path, today: datetime | None = None)
     if not queue.enabled():
         return None
     try:
-        return len(queue.sync(conn, root, today))
+        done = len(queue.sync(conn, root, today))
     except queue.SetupError:
         return None
+    sold.detect(conn)  # KLB-005: без мережі; `known_gone` — нічна перевірка каналу
+    return done
 
 
 Dups = Callable[[sqlite3.Connection, Path], object]

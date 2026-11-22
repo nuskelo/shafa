@@ -21,6 +21,10 @@ KLB-003 — лише в режимі публікації (`publishing=True`; dr
    читання). Інших чужих POST — ні.
 `/payment/{id}` і `/error429` лишаються заблокованими: після відповіді `add-edit-used` сторінка
 сама переходить туди — це очікувано (позначка в `blocked`), а не причина зупинки.
+
+KLB-005: `MarkSoldTicket(id)` — один GET рівно `https://klubok.com/users/198135?pg=marksold&id=<id>`
+(той самий порядок параметрів, що на сайті; інші параметри, інший id, інший користувач — блок).
+Перевіряється **до** `dangerous`, як і «Обновить все»; без квитка `marksold` — блок, як було.
 """
 
 import re
@@ -40,6 +44,9 @@ SUBMIT_URL = f"https://{HOST}{SUBMIT_PATH}"
 RENEW_PATH = "/renew/all"  # KLB-004: «Обновить все» — лише за `RenewTicket`
 RENEW_URL = f"https://{HOST}{RENEW_PATH}"
 RENEWED = "«Обновить все» за квитком"  # причина в `request_verdict`: запит оновлення пішов
+USER_ID = "198135"  # її акаунт (той самий, що `snapshot.USER`)
+MARKSOLD_PATH = f"/users/{USER_ID}"  # KLB-005: «Пометить как проданное» — лише за `MarkSoldTicket`
+MARKSOLD = "«Пометить как проданное» за квитком"  # причина в `request_verdict`
 SUBMIT_BUTTON = "btn-submit"  # id кнопки «Опубликовать»
 RECAPTCHA = "https://www.google.com/recaptcha/"
 SUBMITTED = "публікація за квитком"  # причина в `request_verdict`: запит публікації пішов
@@ -101,6 +108,50 @@ class RenewTicket:
             return False
         self.used = True
         return True
+
+
+class MarkSoldTicket:
+    """KLB-005: дозвіл рівно на один GET «Пометить как проданное» одного оголошення."""
+
+    def __init__(self, klubok_id: int) -> None:
+        if isinstance(klubok_id, bool) or not isinstance(klubok_id, int) or klubok_id <= 0:
+            raise ValueError("id оголошення Клубку — додатне ціле")
+        self.klubok_id = klubok_id
+        self.used = False
+
+    @property
+    def alive(self) -> bool:
+        return not self.used
+
+    @property
+    def query(self) -> str:
+        return f"pg=marksold&id={self.klubok_id}"
+
+    def use(self) -> bool:
+        if self.used:
+            return False
+        self.used = True
+        return True
+
+
+def marksold_url(klubok_id: int) -> str:
+    return f"https://{HOST}{MARKSOLD_PATH}?pg=marksold&id={klubok_id}"
+
+
+def marksold_request(method: str, url: str, ticket: MarkSoldTicket) -> bool:
+    """Запит — рівно «продано» оголошення з квитка: GET, https, klubok.com, шлях і запит точно."""
+    parts = urlsplit(url)
+    return (
+        method.upper() == "GET"
+        and parts.scheme == "https"
+        and parts.hostname == HOST
+        and parts.port is None
+        and parts.path == MARKSOLD_PATH
+        and parts.query == ticket.query
+        and not parts.fragment
+        and not parts.username
+        and not parts.password
+    )
 
 
 def renew_request(method: str, url: str) -> bool:
@@ -177,6 +228,7 @@ def request_verdict(
     publishing: bool = False,
     ticket: Ticket | None = None,
     renew: RenewTicket | None = None,
+    marksold: MarkSoldTicket | None = None,
 ) -> tuple[bool, str]:
     """Чи пропустити запит браузера (дозволено, причина). `publishing`/`ticket` — лише сесія
     публікації KLB-003: квиток гасне, коли пропущено запит публікації. `renew` — KLB-004: квиток
@@ -187,6 +239,10 @@ def request_verdict(
         if not renew.use():
             return False, "«Обновить все»: квиток уже використано"
         return True, RENEWED
+    if marksold is not None and marksold_request(method, url, marksold):
+        if not marksold.use():
+            return False, "«Пометить как проданное»: квиток уже використано"
+        return True, MARKSOLD
     if not is_klubok(parts.hostname):
         if method in READ_METHODS:
             return True, "читання (чужий хост: шрифти, стилі, скрипти)"

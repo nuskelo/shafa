@@ -5,7 +5,8 @@
 «Обновить все», якщо є посилання «Обновить все (N)» і сьогодні ще не оновлювали (`klubok_renew`,
 той самий Chrome; знімок «до» й «після» — там; 429 — стоп) → знімок її оголошень (`klubok.snapshot`),
 якщо «Обновить все» його не записало (`klubok_snapshot_drop` при посиланні — «Схоже, оголошення
-прострочені (N)…») → цикл: `queue.take` (щоразу заново: ліміт доби, дублі) → `queue.start` → свіжа
+прострочені (N)…») → KLB-005: «продано» для підтверджених Вікторією (`klubok_marksold`, ≤ 20, до
+першого квитка Картки; 429/вхід/капча — стоп) → цикл: `queue.take` (щоразу заново: ліміт доби, дублі) → `queue.start` → свіжа
 форма → `KlubokDriver.fill` + `verify` → квиток → клік `#btn-submit` (чи людина, `--human-click`) →
 відповідь `add-edit-used`:
 
@@ -39,7 +40,7 @@ from shafa import config, events
 from shafa.db import now
 from shafa.klubok import queue, refresh, snapshot
 from shafa.robot import klubok_form as form
-from shafa.robot import klubok_renew, publish
+from shafa.robot import klubok_marksold, klubok_renew, publish
 from shafa.robot.klubok_guard import Forbidden
 
 SUBMIT_WAIT = 60.0  # с на відповідь `add-edit-used` після кліку робота
@@ -89,6 +90,9 @@ class Options:
     page_pause: tuple[float, float] = PAGE_PAUSE
     renew: bool = True  # KLB-004: «Обновить все» на початку сесії
     settle: tuple[float, float] = klubok_renew.SETTLE
+    marksold: bool = True  # KLB-005: «продано» для підтверджених — до першої пари
+    marksold_pause: tuple[float, float] = klubok_marksold.PAUSE
+    marksold_settle: tuple[float, float] = klubok_marksold.SETTLE
 
 
 @dataclass
@@ -262,6 +266,8 @@ class Run:
             except snapshot.SnapshotError as error:
                 raise Stop(error.code, klubok_renew.explain(self.session, error)) from None
         self._check_429()
+        if self.opts.marksold:
+            self._marksold()
         while True:
             if self.stopping():
                 raise Stop(STOPPED)
@@ -295,6 +301,19 @@ class Run:
         except klubok_renew.RenewStop as stop:
             raise Stop(stop.code, stop.text) from None
         return outcome.snapped
+
+    def _marksold(self) -> None:
+        """KLB-005: «продано» підтвердженим Вікторією — після знімка, до першого квитка Картки."""
+        self._now("marksold")
+        try:
+            klubok_marksold.mark_sold(
+                self.conn, self.session, logged_in=True, human=self.opts.human,
+                human_wait=self.opts.human_wait, sleep=self.sleep, stopping=self.stopping,
+                log=self.log, pause=self.opts.marksold_pause, settle=self.opts.marksold_settle,
+                page_pause=self.opts.page_pause,
+            )  # fmt: skip
+        except klubok_marksold.MarkStop as stop:
+            raise Stop(stop.code, stop.text) from None
 
     def _check_429(self) -> None:
         if self.session.too_many:

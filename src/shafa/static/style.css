@@ -911,6 +911,10 @@ html[data-theme="dark"] .sp-actions .sp-stop { color: #1f0c09; }
 .krow .num { font-weight: 700; color: var(--muted); min-width: 2.5ch; text-align: right; }
 .kgroup h2 { font-size: 1.05rem; margin: 1rem 0 0.5rem; }
 .kgroup + .kgroup { margin-top: 8px; }
+/* KLB-005: «Схоже, продано» над «Проблемами» Клубку */
+.ksold { margin-bottom: 20px; }
+.ksold h2 { font-size: 1.05rem; margin: 0.5rem 0; }
+.ksold-row { border-left-color: var(--line-strong); }
 .ksync { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 0 0 1rem; }
 @media (max-width: 640px) {
   .sites { order: 1; }

@@ -69,6 +69,10 @@ KINDS = {
     "klubok.renew": Kind("🔄"),  # KLB-004: «Обновить все» підтверджено (тихо)
     "klubok.renew_skip": Kind("🔄"),  # KLB-004: прострочених немає / не натиснуто (тихо)
     "klubok.renew_failed": Kind("⚠️", loud=True),  # KLB-004: оновлення не підтвердилось
+    "klubok.sold_asked": Kind("🏷"),  # KLB-005: «схоже, продано» — питання на екрані (тихо)
+    "klubok.sold_answer": Kind("🏷"),  # KLB-005: відповідь Вікторії «Так» / «Ні» (тихо)
+    "klubok.sold": Kind("🏷"),  # KLB-005: оголошення позначено проданим, Клубок підтвердив (тихо)
+    "klubok.sold_failed": Kind("⚠️", loud=True),  # KLB-005: «продано» не підтвердилось
     "klubok.dup_stop": Kind("⚠️"),  # KLB-011: Клубок відповів 429/403 — перевірку дублів зупинено
     # пости каналу (`scan.py`, `changes.py`, `robot/publish.py`, `site.py`)
     "post.new": Kind("📥"),
