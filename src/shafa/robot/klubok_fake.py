@@ -18,9 +18,13 @@ KLB-004: `/users/198135/manage` — посилання «Обновить все
 порожня; `GET /renew/all` (`renews` рахує, що дійшли) → режим `RENEWS` і 302 на сторінку
 керування; 429 — `too_many.add("/renew/all")`; без входу — сценарії `login`/`signup`.
 
+KLB-005: `GET /users/198135?pg=marksold&id=N` (рівно так) → `marksolds` рахує, режим `MARKSOLDS`
+(`ok` — оголошення переходить у `type=2` з `sold: true`; `stale` — нічого не змінюється; `hidden` —
+зникає з активних, але в `type=2` зі `sold: false`, як сховане) і 302 на сторінку керування.
+
 KLB-013 (як живий 18.11): `get-items` з `type=0` — «Активные» без прострочених (`renew_date` ≤
 `clock`), `items_count` = `tabs_count[0]`; `type=1` — «Обновить» (`renew_date` ≤ `clock` +
-`RENEW_AHEAD`); `type=2`, `3` — порожньо, інший `type` — як 0; `tabs_count` — чотири числа.
+`RENEW_AHEAD`); `type=2` — продані/сховані (KLB-005), `3` — порожньо, інший `type` — як 0; `tabs_count` — чотири числа.
 Типово нічого не прострочено; `expire(N)` — перші N прострочені (сценарій «1780 з 1798»);
 `tab_fault` — помилка однієї вкладки.
 
@@ -81,6 +85,11 @@ RENEW_AHEAD = timedelta(hours=2)  # KLB-013: у «Обновить» — за с
 RENEWS = {
     "ok": "прострочені отримують renew_date = зараз + 7 діб",
     "stale": "запит прийнято, але нічого не оновилось (renew_date ті самі)",
+}
+MARKSOLDS = {
+    "ok": "оголошення стає проданим (`type=2`, `sold: true`)",
+    "stale": "запит прийнято, але нічого не змінилось",
+    "hidden": "зникло з активних, але в `type=2` — сховане (`sold: false`)",
 }
 MANAGE_PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <title>Объявления — підставний Клубок</title></head><body>
@@ -387,6 +396,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Location", f"/users/{USER}/manage")
             self.send_header("Content-Length", "0")
             self.end_headers()
+        elif parts.path == f"/users/{USER}" and parts.query.startswith("pg=marksold&id="):
+            self._marksold(parts.query)
         elif parts.path == f"/users/{USER}/manage":
             self.server.manage_reads += 1
             due = self.server.renewable()
@@ -424,6 +435,20 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._send(404, b"{}", "application/json")
 
+    def _marksold(self, query: str) -> None:
+        """KLB-005: «Пометить как проданное» одного оголошення (режим `Server.marksold_mode`)."""
+        srv = self.server
+        number = query.removeprefix("pg=marksold&id=")
+        srv.marksolds.append(int(number) if number.isdigit() else -1)
+        found = next((i for i in srv.listings if str(i["id"]) == number), None)
+        if found is not None and srv.marksold_mode in ("ok", "hidden"):
+            srv.listings.remove(found)
+            srv.sold.append(found | {"sold": srv.marksold_mode == "ok"})
+        self.send_response(302)
+        self.send_header("Location", f"/users/{USER}/manage")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _items(self, params: dict[str, list[str]]) -> None:
         srv = self.server
         offset = int((params.get("offset") or ["0"])[0])
@@ -454,12 +479,14 @@ class _Handler(BaseHTTPRequestHandler):
                 srv.shift_reads -= 1
         renewable = srv.renewable()
         expired = {item["id"] for item in srv.overdue()}
-        tabs = [len(srv.listings) - len(renewable), len(renewable), 0, 0]
+        tabs = [len(srv.listings) - len(renewable), len(renewable), len(srv.sold), 0]
         if tab == "0":  # KLB-013: прострочене зникає з «Активные», ще не прострочене — і там, і там
             ordered = [item for item in srv.listings if item["id"] not in expired]
             count = tabs[0] if srv.items_count is None else srv.items_count
         elif tab == "1":
             ordered, count = renewable, len(renewable)
+        elif tab == "2":  # KLB-005: «проданные и скрытые»
+            ordered, count = list(srv.sold), len(srv.sold)
         else:
             ordered, count = [], 0
         if srv.unstable_ties:  # як живий: `ORDER BY renew_date` без другого ключа (KLB-006)
@@ -578,6 +605,10 @@ class Server(ThreadingHTTPServer):
         self.renew_mode = "ok"  # режим `RENEWS`
         self.renews = 0  # GET /renew/all, що дійшли до сервера
         self.manage_reads = 0
+        # KLB-005
+        self.marksold_mode = "ok"  # режим `MARKSOLDS`
+        self.marksolds: list[int] = []  # id з GET «продано», що дійшли до сервера
+        self.sold: list[dict[str, Any]] = []  # вкладка `type=2`
         self.base = f"http://127.0.0.1:{self.server_address[1]}"
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
@@ -643,11 +674,13 @@ class FakeSession(form.Session):
         publishing: bool = False,
         human: bool = False,
         renewing: bool = False,
+        marking: bool = False,
     ) -> None:
         """`context` — готовий контекст браузера (тести); без нього — тимчасовий профіль Chrome."""
         if scenario not in SCENARIOS:
             raise ValueError(f"невідомий сценарій підставного Клубку: {scenario}")
-        self._setup(allow_upload, publishing=publishing, human=human, renewing=renewing)
+        self._setup(allow_upload, publishing=publishing, human=human, renewing=renewing,
+                    marking=marking)  # fmt: skip
         self.base = base
         self.scenario = scenario
         self.profile = None if context else tempfile.TemporaryDirectory(prefix="fake-klubok-")
