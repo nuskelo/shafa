@@ -18,6 +18,10 @@ KLB-006: посторінково (`limit=60`) список нестабільн
 ще не прострочені з «Обновить»), а об'єднання — не менше `tabs_count[0]`. Не зійшлось чи помилка будь-
 якої вкладки — `Incomplete` / `SnapshotError` (`klubok_snapshot_failed`), нічого не пишемо.
 
+KLB-005: `sold_ids` — один запит вкладки `type=2` («проданные и скрытые»), id лише з `sold: true`
+(для перевірки «продано» роботом; сам знімок цю вкладку не читає). У `save` — продане руками:
+виставлене програмою, чиє оголошення щойно зникло з активних і «Обновить», — тихо `sold`.
+
 `save` — лише прочитане повністю, в одній транзакції: upsert за `id` (`post_id`, `asked_at`,
 `brand`, `category_id`, `added_at` наявних рядків не чіпаються), чого немає в жодній вкладці —
 `sold = 1` (рядок лишається), `klubok_listings_read.count` = активні + прострочені. Їх менше ніж 90 %
@@ -33,7 +37,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from shafa.klubok import dup
+from shafa.klubok import dup, sold
 
 USER = "198135"  # її акаунт на Клубку (`docs/klubok.md`)
 PAGE = 60
@@ -43,6 +47,7 @@ PAGE_BUDGET = 3 * 30  # сторінок на одну вкладку разом
 MAX_PAGES = 60  # сторінок в одному проході
 DROP = 0.9  # активних + прострочених менше ніж 90 % від попереднього знімка — не пишемо
 ACTIVE, RENEWABLE = 0, 1  # `type` у get-items: вкладки «Активные» і «Обновить» (KLB-013)
+SOLD_TAB = 2  # KLB-005: «проданные и скрытые» — продане має `sold: true`
 TAB_NAMES = ("активні", "«Обновить»", "продані", "четверта")
 RETRY_WAIT = 60.0  # с між посторінковими проходами
 LINK = "https://klubok.com/"
@@ -249,6 +254,7 @@ def save(conn: sqlite3.Connection, snap: Read, now: datetime | None = None) -> i
             if r[0] not in ids
         ]
         conn.executemany("UPDATE klubok_listings SET sold = 1 WHERE id = ?", gone)
+        sold.manual_sold(conn, [g[0] for g in gone])  # KLB-005: продане руками — тихо `sold`
         conn.execute(
             "UPDATE klubok_ads SET url = (SELECT l.url FROM klubok_listings l "
             "WHERE l.id = klubok_ads.klubok_id) WHERE url IS NULL AND klubok_id IS NOT NULL "
@@ -287,6 +293,15 @@ def take(
     count = save(conn, snap)
     log(f"Клубок: прочитано її активних оголошень — {count} ({snap.tabs_text()})")
     return snap, count
+
+
+def sold_ids(fetch: Callable[[str], tuple[int, str]]) -> frozenset[int]:
+    """KLB-005: id з вкладки «проданные и скрытые» (`type=2`) лише з `sold: true` — один запит.
+    Неповна відповідь (менше, ніж `items_count`) — `Incomplete`: «немає» тоді нічого не доводить."""
+    items, count = _page(*fetch(items_path(0, PAGE_ALL, SOLD_TAB)), "вкладка «Проданные»")
+    if len({item["id"] for item in items}) < count:
+        raise Incomplete(FAILED, f"Вкладка «Проданные» не вся: {len(items)} з {count}")
+    return frozenset(item["id"] for item in items if item.get("sold") is True)
 
 
 def missing(conn: sqlite3.Connection, klubok_ids: list[int]) -> list[int]:
