@@ -71,7 +71,7 @@
 {% if current == "decide" and sold_rows %}
 {# KLB-005: пост виставленої пари зник з каналу — без її «Так» нічого не знімаємо #}
 <section class="ksold" aria-label="Схоже, продано">
-  <h2>Схоже, продано ({{ sold_rows | length }})</h2>
+  <h2>Схоже, продано ({{ sold_total }})</h2>
   <ul class="problems">
   {% for s in sold_rows %}
     {% set a = s.ask %}
@@ -94,6 +94,7 @@
     </li>
   {% endfor %}
   </ul>
+  {% if sold_total > sold_rows | length %}<p class="meta ksold-more">Ще {{ sold_total - sold_rows | length }} — з'являться, коли відповісте на ці.</p>{% endif %}
 </section>
 {% endif %}
 {% if not rows and not (current == "decide" and sold_rows) %}

@@ -10,6 +10,10 @@
   зник, не прив'язане до (а). Колонок відповіді в `klubok_listings` немає (база 19, без міграції),
   тож відповідь лежить в `asked_at`: `NULL` — ще не питали (показуємо), `<час>|yes` — «Так»,
   чекає робота, `<час>|no` — «Ні», більше не показуємо.
+* KLB-016: оголошення, прив'язане за фото до перепосту (`link.load_groups`, `<дані>/klubok-link.json`),
+  не питаємо, поки інший пост групи живий (нічна перевірка бачила його й не зникло). Файлу немає чи
+  він битий — питаємо як завжди (людина однаково підтверджує).
+* Екран — по `PAGE` (30) питань: спершу без відповіді, найстаріші зникнення першими; решта — «ще N».
 * Продане руками (оголошення зникло з її активних і «Обновить» — `snapshot.save`, тут `detect` —
   наздоганяє старі дані): `published`/`sold_asked` → тихо `sold`, без питання.
 * Робот: `targets` → один GET «продано» на оголошення → `removed` (`removed_at`, оголошення `sold = 1`)
@@ -27,6 +31,7 @@ AD, LISTING = "ad", "listing"
 YES, NO = "yes", "no"
 SEP = "|"
 LIMIT = 20  # оголошень «продано» за сесію робота
+PAGE = 30  # KLB-016: питань на екрані за раз
 
 
 @dataclass(frozen=True)
@@ -84,6 +89,43 @@ _LISTINGS = (
 )
 
 
+Groups = dict[int, list[int]]
+
+
+def _groups(groups: Groups | None) -> Groups:
+    if groups is not None:
+        return groups
+    from shafa.klubok import link
+
+    return link.load_groups()
+
+
+def _held(conn: sqlite3.Connection, groups: Groups, listing_id: int, post_id: int) -> bool:
+    """KLB-016: інший пост групи перепосту ще живий — пара продається, не питаємо."""
+    others = [p for p in groups.get(listing_id, ()) if p != post_id]
+    if post_id not in groups.get(listing_id, ()) or not others:
+        return False
+    marks = ",".join("?" * len(others))
+    return (
+        conn.execute(
+            f"SELECT 1 FROM post_checks WHERE post_id IN ({marks}) AND checked_at IS NOT NULL "
+            "AND gone_at IS NULL LIMIT 1",
+            others,
+        ).fetchone()
+        is not None
+    )
+
+
+def _listings(
+    conn: sqlite3.Connection, groups: Groups, tail: str = "", params: tuple = ()
+) -> list[sqlite3.Row]:
+    """(б) з `_LISTINGS`, крім тих, чий перепост ще живий."""
+    return [
+        r for r in conn.execute(_LISTINGS + tail, params).fetchall()
+        if not _held(conn, groups, r["id"], r["post_id"])
+    ]  # fmt: skip
+
+
 def manual_sold(conn: sqlite3.Connection, ids: list[int] | None = None) -> int:
     """Продане руками: виставлене програмою, чиє оголошення вже не серед її активних (`sold = 1` у
     знімку; `ids` — щойно зниклі в `snapshot.save`), — тихо `sold`. У транзакції того, хто кличе."""
@@ -120,7 +162,7 @@ def detect(conn: sqlite3.Connection) -> list[int]:
             ).rowcount
             if changed:
                 asked.append(item_id)
-    fresh = len(asked) + sum(1 for r in conn.execute(_LISTINGS) if r["asked_at"] is None)
+    fresh = len(asked) + sum(1 for r in _listings(conn, _groups(None)) if r["asked_at"] is None)
     if asked:
         events.emit(
             "klubok.sold_asked",
@@ -133,8 +175,10 @@ def detect(conn: sqlite3.Connection) -> list[int]:
 # --- екран ---
 
 
-def asks(conn: sqlite3.Connection) -> list[Ask]:
-    """Блок «Схоже, продано»: (а) `sold_asked` і (б) її оголошення без відповіді чи з «Так»."""
+def asks(conn: sqlite3.Connection, groups: Groups | None = None) -> list[Ask]:
+    """Блок «Схоже, продано»: (а) `sold_asked` і (б) її оголошення без відповіді чи з «Так».
+    Порядок: спершу без відповіді, далі «чекає робота»; усередині — найстаріші зникнення першими."""
+    groups = _groups(groups)
     out = []
     for r in conn.execute(
         "SELECT k.item_id, k.klubok_id, k.url, k.sold_ok_at, k.problem_text, i.post_id, "
@@ -150,7 +194,7 @@ def asks(conn: sqlite3.Connection) -> list[Ask]:
             r["sold_ok_at"] is not None, r["problem_text"],
         )  # fmt: skip
         out.append(ask)
-    for r in conn.execute(_LISTINGS + " ORDER BY c.gone_at, l.id"):
+    for r in _listings(conn, groups, " ORDER BY c.gone_at, l.id"):
         answer = answer_of(r["asked_at"])
         if r["asked_at"] is not None and answer != YES:
             continue
@@ -159,7 +203,14 @@ def asks(conn: sqlite3.Connection) -> list[Ask]:
             r["gone_at"], answer == YES,
         )  # fmt: skip
         out.append(ask)
+    out.sort(key=lambda a: (a.waiting, a.gone_at or "", a.kind, a.key))
     return out
+
+
+def page(conn: sqlite3.Connection, size: int = PAGE) -> tuple[list[Ask], int]:
+    """KLB-016: перші `size` питань і скільки їх усього (решта — «ще N» на екрані)."""
+    every = asks(conn)
+    return every[: max(size, 0)], len(every)
 
 
 def answer(conn: sqlite3.Connection, kind: str, key: int, yes: bool) -> bool:
@@ -182,7 +233,8 @@ def answer(conn: sqlite3.Connection, kind: str, key: int, yes: bool) -> bool:
                 )
             done = cursor.rowcount == 1
         elif kind == LISTING:
-            row = conn.execute(_LISTINGS + " AND l.id = ?", (key,)).fetchone()
+            found = _listings(conn, _groups(None), " AND l.id = ?", (key,))
+            row = found[0] if found else None
             current = None if row is None else answer_of(row["asked_at"])
             shown = row is not None and (row["asked_at"] is None or current == YES)
             if not shown or (yes and current == YES):

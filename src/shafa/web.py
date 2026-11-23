@@ -1439,6 +1439,9 @@ class App:
                     (n, f"Хвиля {n}", count, klubok_list_url(tab, query, n))
                     for n, count in klubok_screen.wave_counts(every).items()
                 ]
+            sold_rows, sold_total = [], 0
+            if tab == "decide" and not query:  # KLB-005; KLB-016 — по `sold.PAGE`
+                sold_rows, sold_total = klubok_screen.sold_rows(conn)
             return self.page(
                 "klubok_list.html",
                 **self._klubok_chrome(conn, request),
@@ -1446,7 +1449,8 @@ class App:
                 rows=found,
                 groups=klubok_screen.groups(found) if tab == "archive" else [],
                 auto=klubok_screen.auto_summary(conn) if tab == "decide" else None,
-                sold_rows=klubok_screen.sold_rows(conn) if tab == "decide" and not query else [],
+                sold_rows=sold_rows,
+                sold_total=sold_total,
                 marks={r.card.id: klubok_mark(r, tab, self.root) for r in found},
                 wave=wave,
                 wave_pills=pills,
