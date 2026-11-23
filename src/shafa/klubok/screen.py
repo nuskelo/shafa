@@ -89,12 +89,14 @@ class SoldRow:
         return (self.card.fields["title"].value or "") if self.card is not None else ""
 
 
-def sold_rows(conn: sqlite3.Connection) -> list[SoldRow]:
+def sold_rows(conn: sqlite3.Connection) -> tuple[list[SoldRow], int]:
+    """KLB-016: рядки блоку «Схоже, продано» — не більше `sold.PAGE` — і скільки питань усього."""
     out = []
-    for ask in sold.asks(conn):
+    shown, total = sold.page(conn)
+    for ask in shown:
         card = load_card(conn, ask.key) if ask.kind == sold.AD else None
         out.append(SoldRow(ask, card))
-    return out
+    return out, total
 
 
 @dataclass
