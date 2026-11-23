@@ -29,6 +29,9 @@ KLB-008: старі пости хвилі в чергу Клубку (етало
 Клубку з «Проблем» вирішує програма (фото → ШІ → людина); `--dry-run` — копія бази в пам'яті, база
 не змінюється, ШІ не питається (у звіті — скільки Карток і запитів піде на ШІ й ≈ ціна; фото кешуються
 в `<дані>/klubok-photos`); `--limit` — запитів ШІ.
+`python -m shafa klubok-link --export <тека Експорту> [--dry-run] [--db …] [--root …]` — KLB-016: її
+активні оголошення на Клубку ↔ пости каналу за фото (`post_id` лише в порожнє, група перепосту —
+`<дані>/klubok-link.json`); `--dry-run` — копія бази в пам'яті, нічого не пише (≤ 60 рядків).
 `python -m shafa robot --klubok-login` — KLB-003: вхід у Клубок руками (профіль `<дані>/klubok-profile`);
 `--klubok-snapshot --db …` — знімок її оголошень (лише читання сайту); `--klubok-publish --db … --root …
 --limit N [--post P] [--human-click]` — ПУБЛІКАЦІЯ на Клубку з черги (живий сайт, лише з дозволу
@@ -262,6 +265,14 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--limit", type=int, default=None, help="найбільше запитів ШІ (типово 40)")
     cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
     cmd.add_argument("--photos", type=Path, help=argparse.SUPPRESS)  # тека кешу фото
+    _add_root(cmd)
+    cmd = commands.add_parser(
+        "klubok-link", help="її оголошення на Клубку ↔ пости каналу за фото (KLB-016)"
+    )
+    cmd.add_argument("--export", type=Path, required=True, help="папка Експорту (або result.json)")
+    cmd.add_argument("--dry-run", action="store_true", help="лише звіт, нічого не пише")
+    cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
+    cmd.add_argument("--photos", type=Path, help=argparse.SUPPRESS)  # тека кешу мініатюр
     _add_root(cmd)
     cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
@@ -1231,6 +1242,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_klubok_import(parser, args)
     if args.command == "klubok-dups":
         return run_klubok_dups(parser, args)
+    if args.command == "klubok-link":
+        return run_klubok_link(parser, args)
     if args.command == "robot":
         return run_robot(parser, args)
     if args.command == "bot":
@@ -1391,6 +1404,41 @@ def run_klubok_dups(parser: argparse.ArgumentParser, args: argparse.Namespace) -
     if args.dry_run:
         lines.insert(0, "Пробний прогін: база не змінюється.")
     print("\n".join(lines))
+    return 1 if report.stopped else 0
+
+
+def run_klubok_link(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from datetime import datetime
+
+    from shafa import app
+    from shafa.klubok import link, photo_dup, preview
+
+    export = args.export / "result.json" if args.export.is_dir() else args.export
+    if not export.is_file():
+        parser.error(f"Експорт не знайдено: {export}")
+    root = _root(parser, args)
+    path = args.db or app.db_path()
+    if not path.is_file():
+        parser.error(f"Базу не знайдено: {path}")
+    try:
+        posts = read_channel_export(export)  # KLB-010 (N1): лише Експорт Каналу
+    except ExportError as error:
+        print(error)
+        return 2
+    try:
+        conn = preview.open_copy(path) if args.dry_run else db.connect(path)
+    except (preview.CopyError, RuntimeError) as error:
+        print(error)
+        return 2
+    try:
+        photos = photo_dup.Photos(args.photos or photo_dup.cache_dir())
+        report = link.run(
+            conn, posts, export.parent, root, photos, write=not args.dry_run,
+            today=datetime.now().astimezone(), progress=lambda text: print(text, flush=True),
+        )  # fmt: skip
+    finally:
+        conn.close()
+    print("\n".join(report.lines()))
     return 1 if report.stopped else 0
 
 
