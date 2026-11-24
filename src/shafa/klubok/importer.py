@@ -7,16 +7,20 @@
   коли вона схвалена/опублікована на Шафі. Фото еталона немає — одне фото з Експорту в
   `<дані>/klubok-old/<N>/1.jpg` (запасне, `fields.spare_photo`). Картка Шафи не змінюється;
 * лише Картки Шафи в архіві (продано, відкладено) — не імпортуємо;
-* Картки немає — грубе зіставлення з її оголошеннями (`waves.Matcher`): «є» — не імпортуємо;
-  інакше нова Картка `klubok-<N>` (`only_klubok = 1`, `new` → ШІ) з одним фото й текстом поста в
+* Картки немає — KLB-017 (TD-077): «вже на Клубку» лише за фото (`klubok-link`, KLB-016): пост —
+  `post_id` її активного оголошення (`klubok_listings`, `sold = 0`) чи в групі перепосту активного
+  оголошення (`link.load_groups`); не імпортуємо. Текстовий `waves.Matcher` — лише для звіту («за
+  текстом схоже: …» поруч з «імпортуємо»). `klubok-link` ще не робили (файлу груп немає чи жодного
+  `post_id` у знімку) — відмова (`ImportFailed`), інакше імпортували б усе підряд. Інакше нова Картка `klubok-<N>` (`only_klubok = 1`, `new` → ШІ) з одним фото й текстом поста в
   `<дані>/klubok-old/<N>/`. Пост без фото чи з проблемою тексту (ціна, кілька товарів) — не
   імпортуємо, рядок у звіті.
 `apply=False` (`--dry-run`) — нічого не пише ні в базу, ні на диск.
 """
 
+import re
 import sqlite3
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -31,12 +35,15 @@ from shafa.folders import (
     list_photos,
     photo_folder,
 )
-from shafa.klubok import queue, waves
+from shafa.klubok import link, queue, waves
 from shafa.scan import find_problem, save_posts
 
 TEXT_NAME = "текст.txt"
 LINES_MAX = 60
-SHOW = 15  # рядків «вже на Клубку» / «не імпортовано» у звіті
+SHOW = 15  # прикладів «раніше вважались на Клубку за текстом» (KLB-017)
+SHOW_OTHER = 5  # прикладів «вже на Клубку» / «не імпортовано» у звіті
+
+_PHRASE_END = re.compile(r"[.!]\s+(?=[\dА-ЯІЇЄҐ])")  # «стані. 38 розмір» — так, «Dr. Martens» — ні
 
 NEW, ETALON, ETALON_WAIT, ON_KLUBOK = "new", "etalon", "etalon_wait", "on_klubok"
 DONE, KLUBOK_CARD, ARCHIVED, NO_PHOTO, TEXT = "done", "klubok_card", "archived", "no_photo", "text"
@@ -53,6 +60,10 @@ class Decision:
     action: str
     note: str = ""  # «вже на Клубку»: назва оголошення; проблема тексту
     spare: bool = False  # еталону потрібне запасне фото
+    text_match: str = (
+        ""  # KLB-017: за текстом схоже на її оголошення (до KLB-017 — «вже на Клубку»)
+    )
+    first: str = ""  # перша фраза поста — для звіту
 
 
 @dataclass
@@ -87,7 +98,7 @@ class Report:
                 f"з них потрібне запасне фото: {sum(d.spare for d in self.of(ETALON))}"
             ),
             f"Еталон Шафи ще не схвалений (чекає Шафи): {len(self.of(ETALON_WAIT))}",
-            f"Уже на Клубку за текстом (не імпортуємо): {len(self.of(ON_KLUBOK))}",
+            f"Уже на Клубку за фото (не імпортуємо): {len(self.of(ON_KLUBOK))}",
             f"Архів Шафи — продано/відкладено (не імпортуємо): {len(self.of(ARCHIVED))}",
             f"Без фото в Експорті (не імпортуємо): {len(self.of(NO_PHOTO))}",
             f"Проблема тексту (не імпортуємо): {len(self.of(TEXT))}",
@@ -99,6 +110,17 @@ class Report:
         similar = Counter(d.note for d in new if d.note)
         if similar:
             out.append(f"  серед нових: {_counts(similar)}")
+        was = [d for d in self.decisions if d.text_match]
+        if was:
+            by = Counter(d.action for d in was)
+            out.append(
+                f"Раніше вважались на Клубку за текстом, тепер імпортуємо: {len(was)} (нова Картка "
+                f"{by[NEW]}, без фото {by[NO_PHOTO]}, проблема тексту {by[TEXT]}):"
+            )
+            out += [
+                f"  {d.post_id}: {d.first[:60]} · за текстом схоже: {d.text_match}"[:140]
+                for d in was[:SHOW]
+            ]
         for title, action in (
             ("Уже на Клубку", ON_KLUBOK),
             ("Без фото", NO_PHOTO),
@@ -106,8 +128,8 @@ class Report:
         ):
             items = self.of(action)
             if items:
-                out.append(f"{title} (перші {min(len(items), SHOW)}):")
-                out += [f"  {d.post_id}: {d.note}"[:110] for d in items[:SHOW]]
+                out.append(f"{title} (перші {min(len(items), SHOW_OTHER)}):")
+                out += [f"  {d.post_id}: {d.note}"[:110] for d in items[:SHOW_OTHER]]
         return out[:LINES_MAX]
 
 
@@ -122,6 +144,32 @@ def _snapshot(conn: sqlite3.Connection, today: datetime) -> tuple[str, bool]:
     fresh = queue.snapshot_fresh(conn, today)
     text = f"прочитано {row['read_at']}, оголошень {row['count']}"
     return text + ("" if fresh else " — старший за добу"), fresh
+
+
+def linked_posts(conn: sqlite3.Connection, data_dir: Path | None = None) -> dict[int, str]:
+    """KLB-017: пости, прив'язані за фото до її активних оголошень → «<id> «назва»».
+
+    `post_id` активного оголошення та всі пости його групи перепосту (`link.load_groups`).
+    `klubok-link` ще не робили (файлу груп немає чи жодного `post_id`) — `ImportFailed`.
+    """
+    active = {
+        r["id"]: (r["name"], r["post_id"])
+        for r in conn.execute("SELECT id, name, post_id FROM klubok_listings WHERE sold = 0")
+    }
+    if not link.groups_path(data_dir).is_file() or not any(p for _, p in active.values()):
+        raise ImportFailed(
+            "Її оголошення ще не зіставлені з постами за фото — спершу klubok-link "
+            "(без нього «вже на Клубку» не визначити, імпортувались би всі пости підряд)"
+        )
+    found: dict[int, str] = {}
+    for listing_id, (name, post_id) in active.items():
+        if post_id is not None:
+            found.setdefault(post_id, f"{listing_id} «{name}»")
+    for listing_id, group in link.load_groups(data_dir).items():
+        if listing_id in active:
+            for post_id in group:
+                found.setdefault(post_id, f"{listing_id} «{active[listing_id][0]}» (перепост)")
+    return found
 
 
 def _matcher(conn: sqlite3.Connection) -> waves.Matcher:
@@ -146,8 +194,9 @@ def decide(
     root: Path,
     export_dir: Path,
     matcher: waves.Matcher,
+    linked: dict[int, str],
 ) -> Decision:
-    """Що робити з постом цієї хвилі (нічого не пише)."""
+    """Що робити з постом цієї хвилі (нічого не пише); `linked` — `linked_posts`."""
     post_id = post.post_id
     if conn.execute("SELECT 1 FROM klubok_waves WHERE post_id = ?", (post_id,)).fetchone():
         return Decision(post_id, kind, DONE)
@@ -170,20 +219,28 @@ def decide(
         ).fetchone()
     ):
         return Decision(post_id, kind, ARCHIVED)
-    found = matcher.match(post.text)
-    if found.verdict == waves.ON and found.listing is not None:
-        return Decision(post_id, kind, ON_KLUBOK, f"{found.listing.id} «{found.listing.name}»")
+    if post_id in linked:
+        return Decision(post_id, kind, ON_KLUBOK, linked[post_id])
+    found = matcher.match(post.text)  # KLB-017: лише для звіту, нічого не вирішує
+    text_match = (
+        f"{found.listing.id} «{found.listing.name}»"
+        if found.verdict == waves.ON and found.listing is not None
+        else ""
+    )
+    first = _PHRASE_END.split(waves.first_line(post.text), maxsplit=1)[0]
     source = export_dir / post.photo if post.photo else None
     if source is None or not source.is_file():
-        return Decision(post_id, kind, NO_PHOTO, waves.first_line(post.text))
+        return Decision(post_id, kind, NO_PHOTO, first, text_match=text_match, first=first)
     name = klubok_folder_name(post_id)
     problem = find_problem(
         Folder(name, post_id, (SPARE_PHOTO,)), {post_id: post.text}, {post_id: [name]}
     )
     if problem:
-        return Decision(post_id, kind, TEXT, problem[1])
+        return Decision(post_id, kind, TEXT, problem[1], text_match=text_match, first=first)
     note = {waves.SIMILAR: "схоже", waves.NO_LATIN: "без бренду латиницею"}.get(found.verdict, "")
-    return Decision(post_id, kind, NEW, note)
+    if text_match:
+        note = "за текстом схоже"
+    return Decision(post_id, kind, NEW, note, text_match=text_match, first=first)
 
 
 def _write_folder(post: Post, export_dir: Path) -> bool:
@@ -212,7 +269,7 @@ def _apply(
     if d.action != NEW:
         return d
     if not _write_folder(post, export_dir):
-        return Decision(d.post_id, d.kind, NO_PHOTO, "фото не відкривається")
+        return replace(d, action=NO_PHOTO, note="фото не відкривається")
     name = klubok_folder_name(d.post_id)
     with conn:
         save_posts(conn, {d.post_id: post})
@@ -241,6 +298,7 @@ def run(
     *,
     apply: bool,
     today: datetime,
+    data_dir: Path | None = None,
 ) -> Report:
     """Пости хвилі `wave` (1 чи 4) з Експорту → рішення; `apply` — записати (див. модуль)."""
     if wave not in (1, 4):
@@ -253,6 +311,7 @@ def run(
     if apply and not fresh:
         raise ImportFailed(f"Знімок її оголошень на Клубку не свіжий ({snapshot}) — спершу "
                            "robot --klubok-snapshot")  # fmt: skip
+    linked = linked_posts(conn, data_dir)
     report = Report(wave, limit, apply, snapshot)
     matcher = _matcher(conn)
     for post_id in sorted(posts):
@@ -268,7 +327,7 @@ def run(
         if target != wave:
             report.other_wave += 1
             continue
-        decision = decide(conn, post, kind, root, export_dir, matcher)
+        decision = decide(conn, post, kind, root, export_dir, matcher, linked)
         if apply:
             decision = _apply(conn, decision, post, export_dir, wave)
         report.decisions.append(decision)
