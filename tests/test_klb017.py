@@ -276,7 +276,7 @@ def ai_run(conn, root, export_dir, tmp_path, posts, judge, net=None, apply=False
         (STRICT_AD, "unsure", importer.ON_KLUBOK),  # не впевнений → суворий текст
         (LOOSE_AD, "yes", importer.ON_KLUBOK),
         (LOOSE_AD, "no", importer.NEW),
-        (LOOSE_AD, "unsure", importer.NEW),
+        (LOOSE_AD, "unsure", importer.ON_KLUBOK),  # ітерація 3: не впевнений → на Клубку
     ],
 )
 def test_ai_verdict_decides(conn, root, export_dir, tmp_path, ad, said, action):
@@ -293,18 +293,30 @@ def test_ai_verdict_decides(conn, root, export_dir, tmp_path, ad, said, action):
 
 
 @pytest.mark.parametrize("strict", [True, False])
-def test_ai_not_asked_falls_back_to_strict_text(conn, root, export_dir, tmp_path, strict):
+def test_ai_not_asked_waits_for_next_run(conn, root, export_dir, tmp_path, strict):
     snapshot(conn, listings=[STRICT_AD if strict else LOOSE_AD])
     with_photos(conn)
     linked(conn)
+    noise(export_dir / "photos" / "302.jpg", 3)  # 302 — інша пара, не перепост
+    posts = posts_of({301: WINTER, 302: WINTER})
     judge = FakeJudge(retry=True)
 
-    rep = ai_run(conn, root, export_dir, tmp_path, posts_of({301: WINTER, 302: WINTER}), judge)
+    rep = ai_run(conn, root, export_dir, tmp_path, posts, judge, apply=True)
 
     assert len(judge.calls) == 1  # бюджет вичерпано — далі ШІ не питаємо
-    expected = importer.ON_KLUBOK if strict else importer.NEW
-    assert {d.action for d in rep.decisions if d.post_id == 302} == {expected}  # 301 — перепост
-    assert rep.ai_stopped and any("ШІ-зір зупинено" in line for line in rep.lines())
+    assert [d.action for d in rep.decisions] == [importer.LATER, importer.LATER]
+    assert conn.execute("SELECT count(*) FROM klubok_waves").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM items").fetchone()[0] == 0
+    text = "\n".join(rep.lines())
+    assert "Повтор — ШІ не запитано, чекає наступного запуску: 2" in text
+    assert "ШІ-зір зупинено" in text
+
+    again = ai_run(conn, root, export_dir, tmp_path, posts, FakeJudge("no", "yes"), apply=True)
+
+    assert {d.post_id: d.action for d in again.decisions} == {
+        301: importer.NEW, 302: importer.ON_KLUBOK,
+    }  # fmt: skip
+    assert [r[0] for r in conn.execute("SELECT post_id FROM klubok_waves")] == [301]
 
 
 def test_klubok_429_stops_ai(conn, root, export_dir, tmp_path):
@@ -318,7 +330,7 @@ def test_klubok_429_stops_ai(conn, root, export_dir, tmp_path):
     rep = ai_run(conn, root, export_dir, tmp_path, posts_of({301: WINTER, 302: WINTER}), judge, net)
 
     assert judge.calls == [] and len(net.calls) == 1  # після 429 на Клубок більше не ходимо
-    assert [(d.action, d.ai) for d in rep.decisions] == [(importer.ON_KLUBOK, "none")] * 2
+    assert [(d.action, d.ai) for d in rep.decisions] == [(importer.LATER, "none")] * 2
 
 
 def test_dry_run_does_not_ask_ai(conn, root, export_dir, tmp_path, monkeypatch, capsys):
@@ -405,3 +417,23 @@ def test_newer_repost_after_import_adds_nothing(conn, root, export_dir):
         301: (importer.DONE, ""), 302: (importer.REPOST, "перепост 301"),
     }  # fmt: skip
     assert conn.execute("SELECT count(*) FROM items").fetchone()[0] == 1
+
+
+def test_report_shows_actual_ai_cost_of_this_run(conn, root, export_dir, tmp_path):
+    from test_dup001 import Client, reply
+
+    snapshot(conn, listings=[STRICT_AD])
+    with_photos(conn)
+    linked(conn)
+    with conn:  # давній запит до цього прогону не рахується
+        conn.execute(
+            "INSERT INTO ai_requests (item_id, model, input_tokens, output_tokens, cost_micro_usd, "
+            "created_at) VALUES (NULL, 'm', 1, 1, 2000000, '2026-11-01T10:00:00+00:00')"
+        )
+    client = Client(reply("no", "Інша пара", usage=(1000, 100)))
+    judge = shafa_dup.Judge(conn, lambda: client, lambda: 10**9, site=shafa_dup.KLUBOK)
+
+    rep = ai_run(conn, root, export_dir, tmp_path, posts_of({301: WINTER}), judge)
+
+    assert 0 < rep.ai_cost_micro < 2_000_000
+    assert any(f"запитів ШІ: 1 ({rep.ai_cost_micro / 1e6:.2f} $)" in x for x in rep.lines())
