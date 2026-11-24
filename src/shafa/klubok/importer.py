@@ -62,8 +62,9 @@ _PHRASE_END = re.compile(r"[.!]\s+(?=[\dА-ЯІЇЄҐ])")  # «стані. 38 р
 NEW, ETALON, ETALON_WAIT, ON_KLUBOK = "new", "etalon", "etalon_wait", "on_klubok"
 DONE, KLUBOK_CARD, ARCHIVED, NO_PHOTO, TEXT = "done", "klubok_card", "archived", "no_photo", "text"
 REPOST = "repost"  # перепост пари, яку імпортуємо з новішого поста
-AI_REQUEST_USD = 0.0068  # ≈ запит ШІ-зору (KLB-011, `dupcheck.AI_REQUEST_USD`)
-NOT_ASKED = "none"  # ШІ не запитано — вирішує суворий текст
+LATER = "later"  # ШІ не запитано — нічого не вирішуємо, пост чекає наступного запуску
+AI_REQUEST_USD = 0.0086  # ≈ запит ШІ-зору: прогін KLB-017 на копії 25.11 — 173 запити, 1,49 $
+NOT_ASKED = "none"  # ШІ не запитано (бюджет, ключ, мережа, 429, немає фото) → `LATER`
 
 
 class ImportFailed(Exception):
@@ -102,6 +103,7 @@ class Report:
     skipped_kinds: Counter = field(default_factory=Counter)  # одяг, інше
     decisions: list[Decision] = field(default_factory=list)
     ai_requests: int = 0
+    ai_cost_micro: int = 0  # фактично за цей прогін (`ai_requests`)
     ai_stopped: str = ""  # чому ШІ-зір зупинено посеред проходу (бюджет, ключ, Клубок 429)
 
     def of(self, action: str) -> list[Decision]:
@@ -128,23 +130,22 @@ class Report:
             return [
                 (
                     f"{head} → піде на ШІ: {n}, ≈ {n * AI_REQUEST_USD:.2f} $ "
-                    "(тут ШІ не питали: Б → на Клубку, А → імпорт)"
+                    "(тут ШІ не питали — прогноз: Б → на Клубку, А → імпорт)"
                 )
             ]
-        out = [
-            f"{head} · запитів ШІ: {self.ai_requests} (≈ {self.ai_requests * AI_REQUEST_USD:.2f} $)"
-        ]
+        out = [f"{head} · запитів ШІ: {self.ai_requests} ({self.ai_cost_micro / 1e6:.2f} $)"]
         if self.ai_stopped:
-            out.append(f"  ШІ-зір зупинено: {self.ai_stopped} — решта за суворим текстом")
+            out.append(f"  ШІ-зір зупинено: {self.ai_stopped} — решта чекає наступного запуску")
         for side in ("Б", "А"):
             rows = [d for d in cands if d.side == side]
             if rows:
                 said = Counter(d.ai or NOT_ASKED for d in rows)
                 on = sum(d.action == ON_KLUBOK for d in rows)
+                later = sum(d.action == LATER for d in rows)
                 out.append(
                     f"  {side}: так {said[shafa_dup.YES]} · ні {said[shafa_dup.NO]} · не впевнений "
                     f"{said[shafa_dup.UNSURE]} · не запитано {said[NOT_ASKED]} → на Клубку {on}, "
-                    f"імпорт {len(rows) - on}"
+                    f"імпорт {len(rows) - on - later}, повтор {later}"
                 )
         return out
 
@@ -172,6 +173,7 @@ class Report:
                 f"{len(self.strict())}"
             ),
             f"Перепост — імпортуємо лише найновіший пост: {len(self.of(REPOST))}",
+            f"Повтор — ШІ не запитано, чекає наступного запуску: {len(self.of(LATER))}",
             f"Архів Шафи — продано/відкладено (не імпортуємо): {len(self.of(ARCHIVED))}",
             f"Без фото в Експорті (не імпортуємо): {len(self.of(NO_PHOTO))}",
             f"Проблема тексту (не імпортуємо): {len(self.of(TEXT))}",
@@ -184,7 +186,7 @@ class Report:
         similar = Counter(d.note for d in new if d.note)
         if similar:
             out.append(f"  серед нових: {_counts(similar)}")
-        was = [d for d in self.decisions if d.text_match and d.action != ON_KLUBOK]
+        was = [d for d in self.decisions if d.text_match and d.action not in (ON_KLUBOK, LATER)]
         if was:
             by = Counter(d.action for d in was)
             out.append(
@@ -401,12 +403,16 @@ def decide(
 
 
 def settle(d: Decision) -> Decision:
-    """Кандидат ШІ-зору → «вже на Клубку»: ШІ «так», або суворий текст і ШІ не сказав «ні»
-    (не впевнений, не запитано, `--dry-run`). Інакше лишається шлях імпорту (нова / без фото / текст)."""
+    """Кандидат ШІ-зору (ітерація 3): ШІ «так» чи «не впевнений» → «вже на Клубку» (не впевнений —
+    здебільшого її каталожне фото тієї ж моделі); «ні» → шлях імпорту (нова / без фото / текст);
+    не запитано → `LATER` (нічого не пишемо, наступний запуск спитає знову). Без ШІ (`--dry-run`,
+    `ai == ""`) — прогноз за суворим текстом."""
     if d.cand_id is None or d.action == ON_KLUBOK:
         return d
-    if d.ai == shafa_dup.YES or (d.strict_hit and d.ai != shafa_dup.NO):
-        how = f"ШІ: {d.ai_why}" if d.ai == shafa_dup.YES else "суворий текст"
+    if d.ai == NOT_ASKED:
+        return replace(d, action=LATER, note=f"ШІ не запитано: {d.ai_why}")
+    if d.ai in (shafa_dup.YES, shafa_dup.UNSURE) or (not d.ai and d.strict_hit):
+        how = f"ШІ: {d.ai_why}" if d.ai else "суворий текст"
         return replace(
             d, action=ON_KLUBOK, by_text=True, note=f"{d.cand_id} «{d.cand_name}» ({how})"
         )
@@ -633,7 +639,11 @@ def run(
             continue
         report.decisions.append(decide(conn, post, kind, root, export_dir, matcher, linked, strict))
     if judge is not None and photos is not None:
+        last = conn.execute("SELECT coalesce(max(id), 0) FROM ai_requests").fetchone()[0]
         ask_ai(conn, report, posts, export_dir, judge, photos)
+        report.ai_cost_micro = conn.execute(
+            "SELECT coalesce(sum(cost_micro_usd), 0) FROM ai_requests WHERE id > ?", (last,)
+        ).fetchone()[0]
     report.decisions = [settle(d) for d in report.decisions]
     mark_reposts(conn, report, posts, export_dir)
     if apply:
