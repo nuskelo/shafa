@@ -1358,9 +1358,15 @@ def run_klubok_import(parser: argparse.ArgumentParser, args: argparse.Namespace)
         return 2
     try:
         today = datetime.now().astimezone()
+        judge = photos = None
+        if not args.dry_run:  # KLB-017: ШІ-зір лише в справжньому запуску (у денному бюджеті ШІ)
+            from shafa.klubok import dupcheck, photo_dup
+
+            judge, photos = dupcheck.make_judge(conn), photo_dup.Photos(photo_dup.cache_dir())
         report = importer.run(
-            conn, posts, export.parent, root, args.wave, apply=not args.dry_run, today=today
-        )
+            conn, posts, export.parent, root, args.wave, apply=not args.dry_run, today=today,
+            judge=judge, photos=photos,
+        )  # fmt: skip
         lines = report.lines()
         if not args.dry_run:  # KLB-010: черга одразу актуальна — без «Перерахувати чергу»
             count = refresh.refresh(conn, root, today)

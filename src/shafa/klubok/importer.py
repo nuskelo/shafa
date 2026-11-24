@@ -13,7 +13,12 @@
   текстом схоже: …» поруч з «імпортуємо»). `klubok-link` ще не робили (файлу груп немає чи жодного
   `post_id` у знімку) — відмова (`ImportFailed`), інакше імпортували б усе підряд.
   Ітерація 1 (рішення Архітектора 24.11): «вже на Клубку» ще й за **суворим текстом** (`Strict`) —
-  у неї на Клубку буває каталожне фото чи інший кадр. Інакше нова Картка `klubok-<N>` (`only_klubok = 1`, `new` → ШІ) з одним фото й текстом поста в
+  у неї на Клубку буває каталожне фото чи інший кадр.
+  Ітерація 2: пост «схоже за текстом» (старий `Matcher` «є» чи `Strict`) без фото-прив'язки —
+  ШІ-зір (`dup.Judge`, Клубок): фото поста з Експорту + велике фото її оголошення (`photo_dup.Photos`,
+  кеш). `yes` → «вже на Клубку»; `no` → імпорт; `unsure` / не запитано (бюджет, ключ, мережа, фото) →
+  суворий текст. `--dry-run` ШІ не питає (лише «піде на ШІ: N, ≈ $»). Перепости серед імпортованих
+  (фото ≤ `photo_dup.T1` і `link.same_text`) — імпортуємо лише найновіший пост групи. Інакше нова Картка `klubok-<N>` (`only_klubok = 1`, `new` → ШІ) з одним фото й текстом поста в
   `<дані>/klubok-old/<N>/`. Пост без фото чи з проблемою тексту (ціна, кілька товарів) — не
   імпортуємо, рядок у звіті.
 `apply=False` (`--dry-run`) — нічого не пише ні в базу, ні на диск.
@@ -27,6 +32,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
+from shafa import dup as shafa_dup
 from shafa.borh import copy_photo
 from shafa.db import Status, now
 from shafa.export import Post
@@ -38,13 +44,15 @@ from shafa.folders import (
     list_photos,
     photo_folder,
 )
-from shafa.klubok import dup, link, queue, waves
+from shafa.klubok import dup, link, photo_dup, queue, waves
+from shafa.klubok.photo_dup import FetchFailed, FetchStop
+from shafa.robot.listings import Listing
 from shafa.scan import find_problem, save_posts
 
 TEXT_NAME = "текст.txt"
 LINES_MAX = 60
 SHOW = 15  # прикладів «раніше вважались на Клубку за текстом» (KLB-017)
-SHOW_OTHER = 5  # прикладів «вже на Клубку» / «не імпортовано» у звіті
+SHOW_OTHER = 3  # прикладів «вже на Клубку» / «не імпортовано» у звіті
 
 PRICE_GAP = 0.10  # суворий текст: ціна поста vs її ціна
 _BAGS = frozenset(name for name, _ in dup.BAG_TYPES)  # без розміру — лише сумки/гаманці
@@ -53,6 +61,9 @@ _PHRASE_END = re.compile(r"[.!]\s+(?=[\dА-ЯІЇЄҐ])")  # «стані. 38 р
 
 NEW, ETALON, ETALON_WAIT, ON_KLUBOK = "new", "etalon", "etalon_wait", "on_klubok"
 DONE, KLUBOK_CARD, ARCHIVED, NO_PHOTO, TEXT = "done", "klubok_card", "archived", "no_photo", "text"
+REPOST = "repost"  # перепост пари, яку імпортуємо з новішого поста
+AI_REQUEST_USD = 0.0068  # ≈ запит ШІ-зору (KLB-011, `dupcheck.AI_REQUEST_USD`)
+NOT_ASKED = "none"  # ШІ не запитано — вирішує суворий текст
 
 
 class ImportFailed(Exception):
@@ -69,6 +80,15 @@ class Decision:
     by_text: bool = False  # «вже на Клубку» за суворим текстом, не за фото
     text_match: str = ""  # KLB-017: старий `Matcher` «є» (до KLB-017 — «вже на Клубку»)
     first: str = ""  # перша фраза поста — для звіту
+    strict_hit: bool = False  # Б: суворий текст каже «на Клубку» (А — ні)
+    cand_id: int | None = None  # її оголошення для ШІ-зору (суворий текст, інакше старий `Matcher`)
+    cand_name: str = ""
+    ai: str = ""  # yes / no / unsure / none (не запитано); "" — ШІ не для цього поста
+    ai_why: str = ""
+
+    @property
+    def side(self) -> str:
+        return "Б" if self.strict_hit else "А"
 
 
 @dataclass
@@ -81,12 +101,52 @@ class Report:
     other_wave: int = 0
     skipped_kinds: Counter = field(default_factory=Counter)  # одяг, інше
     decisions: list[Decision] = field(default_factory=list)
+    ai_requests: int = 0
+    ai_stopped: str = ""  # чому ШІ-зір зупинено посеред проходу (бюджет, ключ, Клубок 429)
 
     def of(self, action: str) -> list[Decision]:
         return [d for d in self.decisions if d.action == action]
 
     def strict(self) -> list[Decision]:
         return [d for d in self.of(ON_KLUBOK) if d.by_text]
+
+    def candidates(self) -> list[Decision]:
+        """Пости «схоже за текстом» без фото-прив'язки — для ШІ-зору."""
+        return [d for d in self.decisions if d.cand_id is not None]
+
+    def _ai_lines(self) -> list[str]:
+        cands = self.candidates()
+        if not cands:
+            return []
+        b = sum(d.strict_hit for d in cands)
+        head = (
+            f"Схоже за текстом без фото-прив'язки: {len(cands)} "
+            f"(Б — суворий текст {b}, А — {len(cands) - b})"
+        )
+        if not any(d.ai for d in cands):
+            n = len(cands)
+            return [
+                (
+                    f"{head} → піде на ШІ: {n}, ≈ {n * AI_REQUEST_USD:.2f} $ "
+                    "(тут ШІ не питали: Б → на Клубку, А → імпорт)"
+                )
+            ]
+        out = [
+            f"{head} · запитів ШІ: {self.ai_requests} (≈ {self.ai_requests * AI_REQUEST_USD:.2f} $)"
+        ]
+        if self.ai_stopped:
+            out.append(f"  ШІ-зір зупинено: {self.ai_stopped} — решта за суворим текстом")
+        for side in ("Б", "А"):
+            rows = [d for d in cands if d.side == side]
+            if rows:
+                said = Counter(d.ai or NOT_ASKED for d in rows)
+                on = sum(d.action == ON_KLUBOK for d in rows)
+                out.append(
+                    f"  {side}: так {said[shafa_dup.YES]} · ні {said[shafa_dup.NO]} · не впевнений "
+                    f"{said[shafa_dup.UNSURE]} · не запитано {said[NOT_ASKED]} → на Клубку {on}, "
+                    f"імпорт {len(rows) - on}"
+                )
+        return out
 
     def lines(self) -> list[str]:
         mode = "записано" if self.applied else "пробний прогін — нічого не записано"
@@ -108,9 +168,10 @@ class Report:
             f"Еталон Шафи ще не схвалений (чекає Шафи): {len(self.of(ETALON_WAIT))}",
             (
                 f"Уже на Клубку (не імпортуємо): {len(self.of(ON_KLUBOK))} · за фото "
-                f"{len(self.of(ON_KLUBOK)) - len(self.strict())} · за суворим текстом "
+                f"{len(self.of(ON_KLUBOK)) - len(self.strict())} · за текстом / ШІ "
                 f"{len(self.strict())}"
             ),
+            f"Перепост — імпортуємо лише найновіший пост: {len(self.of(REPOST))}",
             f"Архів Шафи — продано/відкладено (не імпортуємо): {len(self.of(ARCHIVED))}",
             f"Без фото в Експорті (не імпортуємо): {len(self.of(NO_PHOTO))}",
             f"Проблема тексту (не імпортуємо): {len(self.of(TEXT))}",
@@ -119,15 +180,17 @@ class Report:
                 f"{len(self.of(KLUBOK_CARD))}"
             ),
         ]
+        out += self._ai_lines()
         similar = Counter(d.note for d in new if d.note)
         if similar:
             out.append(f"  серед нових: {_counts(similar)}")
-        was = [d for d in self.decisions if d.text_match]
+        was = [d for d in self.decisions if d.text_match and d.action != ON_KLUBOK]
         if was:
             by = Counter(d.action for d in was)
             out.append(
                 f"Раніше вважались на Клубку за текстом, тепер імпортуємо: {len(was)} (нова Картка "
-                f"{by[NEW]}, без фото {by[NO_PHOTO]}, проблема тексту {by[TEXT]}):"
+                f"{by[NEW]}, перепост {by[REPOST]}, без фото {by[NO_PHOTO]}, проблема тексту "
+                f"{by[TEXT]}):"
             )
             out += [
                 f"  {d.post_id}: {d.first[:60]} · за текстом схоже: {d.text_match}"[:140]
@@ -135,7 +198,8 @@ class Report:
             ]
         photo = [d for d in self.of(ON_KLUBOK) if not d.by_text]
         for title, items in (
-            ("Уже на Клубку за суворим текстом", self.strict()),
+            ("Уже на Клубку за текстом / ШІ", self.strict()),
+            ("Перепост", self.of(REPOST)),
             ("Уже на Клубку за фото", photo),
             ("Без фото", self.of(NO_PHOTO)),
             ("Проблема тексту", self.of(TEXT)),
@@ -284,7 +348,8 @@ def decide(
     linked: dict[int, str],
     strict: Strict | None = None,
 ) -> Decision:
-    """Що робити з постом цієї хвилі (нічого не пише); `linked` — `linked_posts`."""
+    """Що робити з постом цієї хвилі (нічого не пише); `linked` — `linked_posts`.
+    Кандидат ШІ-зору повертається шляхом імпорту — підсумок робить `settle` (після ШІ)."""
     post_id = post.post_id
     if conn.execute("SELECT 1 FROM klubok_waves WHERE post_id = ?", (post_id,)).fetchone():
         return Decision(post_id, kind, DONE)
@@ -310,28 +375,174 @@ def decide(
     if post_id in linked:
         return Decision(post_id, kind, ON_KLUBOK, linked[post_id])
     same = strict.match(post.text) if strict is not None else None
-    if same is not None:
-        return Decision(post_id, kind, ON_KLUBOK, f"{same.id} «{same.name}»", by_text=True)
-    found = matcher.match(post.text)  # KLB-017: лише для звіту, нічого не вирішує
-    text_match = (
-        f"{found.listing.id} «{found.listing.name}»"
-        if found.verdict == waves.ON and found.listing is not None
-        else ""
-    )
-    first = _PHRASE_END.split(waves.first_line(post.text), maxsplit=1)[0]
+    found = matcher.match(post.text)  # старий текст: лише кандидат для ШІ й рядок звіту
+    on = found.verdict == waves.ON and found.listing is not None
+    text_match = f"{found.listing.id} «{found.listing.name}»" if on else ""
+    base = {
+        "text_match": text_match,
+        "first": _PHRASE_END.split(waves.first_line(post.text), maxsplit=1)[0],
+        "strict_hit": same is not None,
+        "cand_id": same.id if same else (found.listing.id if on else None),
+        "cand_name": same.name if same else (found.listing.name if on else ""),
+    }
     source = export_dir / post.photo if post.photo else None
     if source is None or not source.is_file():
-        return Decision(post_id, kind, NO_PHOTO, first, text_match=text_match, first=first)
+        return Decision(post_id, kind, NO_PHOTO, base["first"], **base)
     name = klubok_folder_name(post_id)
     problem = find_problem(
         Folder(name, post_id, (SPARE_PHOTO,)), {post_id: post.text}, {post_id: [name]}
     )
     if problem:
-        return Decision(post_id, kind, TEXT, problem[1], text_match=text_match, first=first)
+        return Decision(post_id, kind, TEXT, problem[1], **base)
     note = {waves.SIMILAR: "схоже", waves.NO_LATIN: "без бренду латиницею"}.get(found.verdict, "")
     if text_match:
         note = "за текстом схоже"
-    return Decision(post_id, kind, NEW, note, text_match=text_match, first=first)
+    return Decision(post_id, kind, NEW, note, **base)
+
+
+def settle(d: Decision) -> Decision:
+    """Кандидат ШІ-зору → «вже на Клубку»: ШІ «так», або суворий текст і ШІ не сказав «ні»
+    (не впевнений, не запитано, `--dry-run`). Інакше лишається шлях імпорту (нова / без фото / текст)."""
+    if d.cand_id is None or d.action == ON_KLUBOK:
+        return d
+    if d.ai == shafa_dup.YES or (d.strict_hit and d.ai != shafa_dup.NO):
+        how = f"ШІ: {d.ai_why}" if d.ai == shafa_dup.YES else "суворий текст"
+        return replace(
+            d, action=ON_KLUBOK, by_text=True, note=f"{d.cand_id} «{d.cand_name}» ({how})"
+        )
+    return d
+
+
+@dataclass
+class _Value:
+    value: object
+
+
+@dataclass
+class PostCard:
+    """Пост без Картки для `dup.Judge`: те, що суддя читає з Картки (назва, ціна, розміри)."""
+
+    post_id: int
+    post_text: str
+    fields: dict[str, _Value]
+    id: int | None = None  # запит ШІ — без Картки (`ai_requests.item_id` NULL)
+    only_klubok: bool = True
+
+
+def post_card(post: Post) -> PostCard:
+    text = post.text
+    sizes = sorted(post_sizes(text))
+    return PostCard(
+        post.post_id,
+        text,
+        {
+            "title": _Value(_PHRASE_END.split(waves.first_line(text), maxsplit=1)[0]),
+            "price": _Value(waves.price(text)),
+            "sizes": _Value([f"{x:g}".replace(".", ",") for x in sizes]),
+            "colors": _Value(None),
+        },
+    )
+
+
+def _their_listing(conn: sqlite3.Connection, listing_id: int) -> tuple[Listing, str | None]:
+    row = conn.execute(
+        "SELECT name, brand, price, sizes, url, photo FROM klubok_listings WHERE id = ?",
+        (listing_id,),
+    ).fetchone()
+    sizes = tuple(json.loads(row["sizes"] or "[]")) or tuple(dup.title_sizes(row["name"]))
+    listing = Listing(
+        listing_id, row["name"], row["brand"], "", sizes, row["url"] or "", price=row["price"]
+    )
+    return listing, row["photo"]
+
+
+def ask_ai(
+    conn: sqlite3.Connection,
+    report: Report,
+    posts: dict[int, Post],
+    export_dir: Path,
+    judge,
+    photos: photo_dup.Photos,
+) -> None:
+    """ШІ-зір для кожного кандидата (`Report.candidates`); підсумок — `settle`."""
+    for d in report.decisions:
+        if d.cand_id is None:
+            continue
+        verdict = _look(conn, d, posts[d.post_id], export_dir, judge, photos, report)
+        if verdict.asked:
+            report.ai_requests += 1
+        d.ai = verdict.same if verdict.asked else NOT_ASKED
+        d.ai_why = verdict.why
+
+
+def _look(conn, d, post, export_dir, judge, photos, report) -> shafa_dup.Verdict:
+    if report.ai_stopped:
+        return shafa_dup.unasked(report.ai_stopped)
+    ours = export_dir / post.photo if post.photo else None
+    if ours is None or not ours.is_file():
+        return shafa_dup.unasked("немає фото поста")
+    listing, url = _their_listing(conn, d.cand_id)
+    try:
+        theirs = photos.large(d.cand_id, url)
+    except FetchStop as error:
+        report.ai_stopped = str(error)
+        return shafa_dup.unasked(str(error))
+    except FetchFailed as error:
+        return shafa_dup.unasked(str(error))
+    verdict = judge(post_card(post), listing, ours, theirs)
+    if verdict.retry:  # бюджет, ключ, мережа ШІ — до кінця проходу не питаємо
+        report.ai_stopped = f"ШІ: {verdict.why}"
+    return verdict
+
+
+def mark_reposts(
+    conn: sqlite3.Connection, report: Report, posts: dict[int, Post], export_dir: Path
+) -> None:
+    """Перепости серед імпортованих: та сама пара в кількох постах без Картки (фото ≤ T1 і
+    `link.same_text`) — імпортуємо найновіший; уже імпортований раніше пост групи (Картка «лише
+    Клубок») — його й лишаємо, повтор нічого не дублює."""
+    imported = {
+        r[0]
+        for r in conn.execute(
+            "SELECT post_id FROM items WHERE only_klubok = 1 AND post_id IS NOT NULL"
+        )
+    }
+    pool = [d for d in report.decisions if d.action == NEW or d.post_id in imported]
+    hashes: dict[int, int] = {}
+    for d in pool:
+        post = posts[d.post_id]
+        try:
+            hashes[d.post_id] = photo_dup.ours_hash(export_dir / str(post.photo))
+        except (OSError, ValueError):
+            continue
+    ids = sorted(hashes)
+    sigs = {n: link.post_sig(posts[n].text) for n in ids}
+    parent = {n: n for n in ids}
+
+    def top(n: int) -> int:
+        while parent[n] != n:
+            parent[n] = parent[parent[n]]
+            n = parent[n]
+        return n
+
+    for i, a in enumerate(ids):
+        for b in ids[i + 1 :]:
+            if photo_dup.distance(hashes[a], hashes[b]) <= photo_dup.T1 and link.same_text(
+                sigs[a], sigs[b]
+            ):
+                parent[top(a)] = top(b)
+    groups: dict[int, list[int]] = {}
+    for n in ids:
+        groups.setdefault(top(n), []).append(n)
+    keep: dict[int, int] = {}
+    for members in groups.values():
+        done = [n for n in members if n in imported]
+        winner = max(done) if done else max(members)
+        keep.update({n: winner for n in members})
+    for i, d in enumerate(report.decisions):
+        winner = keep.get(d.post_id)
+        if d.action == NEW and winner is not None and winner != d.post_id:
+            report.decisions[i] = replace(d, action=REPOST, note=f"перепост {winner}")
 
 
 def _write_folder(post: Post, export_dir: Path) -> bool:
@@ -390,6 +601,8 @@ def run(
     apply: bool,
     today: datetime,
     data_dir: Path | None = None,
+    judge=None,
+    photos: photo_dup.Photos | None = None,
 ) -> Report:
     """Пости хвилі `wave` (1 чи 4) з Експорту → рішення; `apply` — записати (див. модуль)."""
     if wave not in (1, 4):
@@ -418,8 +631,13 @@ def run(
         if target != wave:
             report.other_wave += 1
             continue
-        decision = decide(conn, post, kind, root, export_dir, matcher, linked, strict)
-        if apply:
-            decision = _apply(conn, decision, post, export_dir, wave)
-        report.decisions.append(decision)
+        report.decisions.append(decide(conn, post, kind, root, export_dir, matcher, linked, strict))
+    if judge is not None and photos is not None:
+        ask_ai(conn, report, posts, export_dir, judge, photos)
+    report.decisions = [settle(d) for d in report.decisions]
+    mark_reposts(conn, report, posts, export_dir)
+    if apply:
+        report.decisions = [
+            _apply(conn, d, posts[d.post_id], export_dir, wave) for d in report.decisions
+        ]
     return report
