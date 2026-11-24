@@ -11,12 +11,15 @@
   `post_id` її активного оголошення (`klubok_listings`, `sold = 0`) чи в групі перепосту активного
   оголошення (`link.load_groups`); не імпортуємо. Текстовий `waves.Matcher` — лише для звіту («за
   текстом схоже: …» поруч з «імпортуємо»). `klubok-link` ще не робили (файлу груп немає чи жодного
-  `post_id` у знімку) — відмова (`ImportFailed`), інакше імпортували б усе підряд. Інакше нова Картка `klubok-<N>` (`only_klubok = 1`, `new` → ШІ) з одним фото й текстом поста в
+  `post_id` у знімку) — відмова (`ImportFailed`), інакше імпортували б усе підряд.
+  Ітерація 1 (рішення Архітектора 24.11): «вже на Клубку» ще й за **суворим текстом** (`Strict`) —
+  у неї на Клубку буває каталожне фото чи інший кадр. Інакше нова Картка `klubok-<N>` (`only_klubok = 1`, `new` → ШІ) з одним фото й текстом поста в
   `<дані>/klubok-old/<N>/`. Пост без фото чи з проблемою тексту (ціна, кілька товарів) — не
   імпортуємо, рядок у звіті.
 `apply=False` (`--dry-run`) — нічого не пише ні в базу, ні на диск.
 """
 
+import json
 import re
 import sqlite3
 from collections import Counter
@@ -35,7 +38,7 @@ from shafa.folders import (
     list_photos,
     photo_folder,
 )
-from shafa.klubok import link, queue, waves
+from shafa.klubok import dup, link, queue, waves
 from shafa.scan import find_problem, save_posts
 
 TEXT_NAME = "текст.txt"
@@ -43,6 +46,9 @@ LINES_MAX = 60
 SHOW = 15  # прикладів «раніше вважались на Клубку за текстом» (KLB-017)
 SHOW_OTHER = 5  # прикладів «вже на Клубку» / «не імпортовано» у звіті
 
+PRICE_GAP = 0.10  # суворий текст: ціна поста vs її ціна
+_BAGS = frozenset(name for name, _ in dup.BAG_TYPES)  # без розміру — лише сумки/гаманці
+_GO = re.compile(r"[ІіIi]дуть\s+на\s*(\d{1,2}(?:[,.]5)?)(?:\s*[-–/]\s*(\d{1,2}(?:[,.]5)?))?")
 _PHRASE_END = re.compile(r"[.!]\s+(?=[\dА-ЯІЇЄҐ])")  # «стані. 38 розмір» — так, «Dr. Martens» — ні
 
 NEW, ETALON, ETALON_WAIT, ON_KLUBOK = "new", "etalon", "etalon_wait", "on_klubok"
@@ -60,9 +66,8 @@ class Decision:
     action: str
     note: str = ""  # «вже на Клубку»: назва оголошення; проблема тексту
     spare: bool = False  # еталону потрібне запасне фото
-    text_match: str = (
-        ""  # KLB-017: за текстом схоже на її оголошення (до KLB-017 — «вже на Клубку»)
-    )
+    by_text: bool = False  # «вже на Клубку» за суворим текстом, не за фото
+    text_match: str = ""  # KLB-017: старий `Matcher` «є» (до KLB-017 — «вже на Клубку»)
     first: str = ""  # перша фраза поста — для звіту
 
 
@@ -79,6 +84,9 @@ class Report:
 
     def of(self, action: str) -> list[Decision]:
         return [d for d in self.decisions if d.action == action]
+
+    def strict(self) -> list[Decision]:
+        return [d for d in self.of(ON_KLUBOK) if d.by_text]
 
     def lines(self) -> list[str]:
         mode = "записано" if self.applied else "пробний прогін — нічого не записано"
@@ -98,7 +106,11 @@ class Report:
                 f"з них потрібне запасне фото: {sum(d.spare for d in self.of(ETALON))}"
             ),
             f"Еталон Шафи ще не схвалений (чекає Шафи): {len(self.of(ETALON_WAIT))}",
-            f"Уже на Клубку за фото (не імпортуємо): {len(self.of(ON_KLUBOK))}",
+            (
+                f"Уже на Клубку (не імпортуємо): {len(self.of(ON_KLUBOK))} · за фото "
+                f"{len(self.of(ON_KLUBOK)) - len(self.strict())} · за суворим текстом "
+                f"{len(self.strict())}"
+            ),
             f"Архів Шафи — продано/відкладено (не імпортуємо): {len(self.of(ARCHIVED))}",
             f"Без фото в Експорті (не імпортуємо): {len(self.of(NO_PHOTO))}",
             f"Проблема тексту (не імпортуємо): {len(self.of(TEXT))}",
@@ -121,12 +133,13 @@ class Report:
                 f"  {d.post_id}: {d.first[:60]} · за текстом схоже: {d.text_match}"[:140]
                 for d in was[:SHOW]
             ]
-        for title, action in (
-            ("Уже на Клубку", ON_KLUBOK),
-            ("Без фото", NO_PHOTO),
-            ("Проблема тексту", TEXT),
+        photo = [d for d in self.of(ON_KLUBOK) if not d.by_text]
+        for title, items in (
+            ("Уже на Клубку за суворим текстом", self.strict()),
+            ("Уже на Клубку за фото", photo),
+            ("Без фото", self.of(NO_PHOTO)),
+            ("Проблема тексту", self.of(TEXT)),
         ):
-            items = self.of(action)
             if items:
                 out.append(f"{title} (перші {min(len(items), SHOW_OTHER)}):")
                 out += [f"  {d.post_id}: {d.note}"[:110] for d in items[:SHOW_OTHER]]
@@ -172,6 +185,80 @@ def linked_posts(conn: sqlite3.Connection, data_dir: Path | None = None) -> dict
     return found
 
 
+def post_sizes(text: str) -> frozenset[float]:
+    """Розмір поста: той, на який «ідуть» («Вказаний 37, ідуть на 36» → 36; «36-36,5» — обидва),
+    інакше названий «N розмір» у першому рядку й на початку тексту."""
+    go = _GO.search(text)
+    if go:
+        return frozenset(float(g.replace(",", ".")) for g in go.groups() if g)
+    return frozenset(waves.sizes(waves.first_line(text) + " " + text[:300]))
+
+
+def _near(a: int | None, b: int | None) -> bool:
+    return bool(a and b and abs(a - b) <= PRICE_GAP * max(a, b))
+
+
+@dataclass(frozen=True)
+class _Ad:
+    id: int
+    name: str
+    price: int | None
+    sizes: frozenset[float]
+    words: frozenset[str]
+    subtype: str | None
+
+
+class Strict:
+    """Ітерація 1: «вже на Клубку» за суворим текстом — її активне оголошення, де разом:
+    спільне слово бренду латиницею; розмір рівно той самий (без розміру з обох боків — лише
+    сумки/гаманці того самого підтипу); ціна ±10 %; той самий підтип (`dup.subtype`), коли відомий
+    з обох боків."""
+
+    def __init__(self, rows) -> None:
+        self._index: dict[str, list[_Ad]] = {}
+        for listing_id, name, price, sizes_json in rows:
+            sizes = set(dup.title_sizes(name))
+            try:
+                sizes |= {str(x) for x in json.loads(sizes_json or "[]")}
+            except ValueError:
+                pass
+            ad = _Ad(
+                listing_id,
+                name,
+                price,
+                frozenset(float(x.replace(",", ".")) for x in sizes),
+                frozenset(waves.latin(name)),
+                dup.subtype(name),
+            )
+            for word in ad.words:
+                self._index.setdefault(word, []).append(ad)
+
+    def match(self, text: str) -> _Ad | None:
+        line = waves.first_line(text)
+        words = waves.latin(line)
+        sizes, price, kind = post_sizes(text), waves.price(text), dup.subtype(line)
+        seen = {ad.id: ad for w in sorted(words) for ad in self._index.get(w, ())}
+        for ad in sorted(seen.values(), key=lambda a: (-len(words & a.words), a.id)):
+            if not _near(price, ad.price):
+                continue
+            if kind and ad.subtype and kind != ad.subtype:
+                continue
+            if sizes or ad.sizes:
+                if sizes != ad.sizes:
+                    continue
+            elif not (kind and kind == ad.subtype and kind in _BAGS):
+                continue
+            return ad
+        return None
+
+
+def _strict(conn: sqlite3.Connection) -> Strict:
+    return Strict(
+        tuple(r)
+        for r in conn.execute("SELECT id, name, price, sizes FROM klubok_listings WHERE sold = 0")
+    )
+
+
 def _matcher(conn: sqlite3.Connection) -> waves.Matcher:
     return waves.Matcher(
         (r[0], r[1], r[2])
@@ -195,6 +282,7 @@ def decide(
     export_dir: Path,
     matcher: waves.Matcher,
     linked: dict[int, str],
+    strict: Strict | None = None,
 ) -> Decision:
     """Що робити з постом цієї хвилі (нічого не пише); `linked` — `linked_posts`."""
     post_id = post.post_id
@@ -221,6 +309,9 @@ def decide(
         return Decision(post_id, kind, ARCHIVED)
     if post_id in linked:
         return Decision(post_id, kind, ON_KLUBOK, linked[post_id])
+    same = strict.match(post.text) if strict is not None else None
+    if same is not None:
+        return Decision(post_id, kind, ON_KLUBOK, f"{same.id} «{same.name}»", by_text=True)
     found = matcher.match(post.text)  # KLB-017: лише для звіту, нічого не вирішує
     text_match = (
         f"{found.listing.id} «{found.listing.name}»"
@@ -313,7 +404,7 @@ def run(
                            "robot --klubok-snapshot")  # fmt: skip
     linked = linked_posts(conn, data_dir)
     report = Report(wave, limit, apply, snapshot)
-    matcher = _matcher(conn)
+    matcher, strict = _matcher(conn), _strict(conn)
     for post_id in sorted(posts):
         post = posts[post_id]
         if post_id > limit:
@@ -327,7 +418,7 @@ def run(
         if target != wave:
             report.other_wave += 1
             continue
-        decision = decide(conn, post, kind, root, export_dir, matcher, linked)
+        decision = decide(conn, post, kind, root, export_dir, matcher, linked, strict)
         if apply:
             decision = _apply(conn, decision, post, export_dir, wave)
         report.decisions.append(decision)
