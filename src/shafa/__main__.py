@@ -482,8 +482,9 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
                     load_declined=lambda s: listings.load_declined(s, log=log),
                     fetch_photo=lambda url: listings.fetch_photo(session, url),
                     page_photo=lambda url: listings.page_photo(session, url),
-                    photos_dir=duplicates_dir(args.db), presence=channel_presence(root, log),
-                    judge=duplicate_judge(conn),
+                    photos_dir=duplicates_dir(args.db), judge=duplicate_judge(conn),
+                    presence=(channel := channel_presence(root, log)) and channel.check,
+                    retry_after=lambda: channel.retry_after if channel else None,
                 ).start(limit, day_limit)  # fmt: skip
             except KeyboardInterrupt:  # звіт сесії вже надруковано
                 return 130
@@ -571,7 +572,8 @@ def duplicate_judge(conn):
 
 
 def channel_presence(root: Path, log):
-    """Перевірка «пост ще є в каналі» для робота (SITE-002) або None — бот не налаштований."""
+    """`Presence` для робота (SITE-002; ROBOT-020: `.check` і `.retry_after`) або None — бот не
+    налаштований."""
     from shafa.bot import presence, run
     from shafa.bot.telegram import Telegram
 
@@ -586,7 +588,7 @@ def channel_presence(root: Path, log):
         return None
     return presence.Presence(
         Telegram(token), settings.channel_id, chat, log=log, data_dir=config.data_dir()
-    ).check
+    )
 
 
 def duplicates_dir(db_path: Path) -> Path:

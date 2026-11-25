@@ -66,6 +66,7 @@ LAST = {  # причина зупинки останньої сесії — пр
     "photos": "Не всі фото завантажились на форму — Картку в Проблемах, натисніть «Старт» ще раз; "
     "повториться — скажіть Власнику",
     "slow": "Шафа довго не відповідала — натисніть «Старт» через 15–30 хв",
+    "telegram_busy": "Telegram не відповідає — спробуйте «Старт» за годину",
     "streak": "Кілька Карток поспіль не вдались — схоже, загальна причина; скажіть Власнику",
     "error": "Робот зупинився посеред роботи — натисніть «Старт», щоб продовжити; "
     "повториться — скажіть Власнику",
@@ -355,6 +356,14 @@ def _stage_lines(data: dict, now: datetime) -> tuple[str, str]:
         "retry": "Шафа відповідає повільно — коротка пауза й ще одна спроба",
         "between": "Зараз: переходить до наступного поста",
     }.get(stage or "", "")
+    if stage == "wait_channel":
+        until = _stamp(data.get("until"), now)
+        left = max(math.ceil((until - now).total_seconds() / 60), 1) if until else 1
+        doing = (
+            f"Telegram просить зачекати ~{left} хв — перевіряю, чи пост ще в каналі"
+            if data.get("asked")
+            else "Telegram не відповів — коротка пауза, потім перевірю ще раз, чи пост ще в каналі"
+        )
     if stage == "pause":
         until = _stamp(data.get("until"), now)
         left = math.ceil((until - now).total_seconds() / 60) if until else 0
