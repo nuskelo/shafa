@@ -192,13 +192,55 @@ def test_login_window_rechecks_right_after_closing(monkeypatch, said):
 # --- 3. Watch ---
 
 
-def watch(busy=False, folder=None):
+def watch(busy=False, folder=None, **kw):
     spawned, logs, clock = [], [], [NOW]
+    kw.setdefault("delay", timedelta(0))
     w = login_check.Watch(
         command=lambda: ["--login-check"], spawn=spawned.append, busy=lambda: busy,
-        log=logs.append, clock=lambda: clock[0], folder=folder,
+        log=logs.append, clock=lambda: clock[0], folder=folder, **kw,
     )  # fmt: skip
     return w, spawned, logs, clock
+
+
+def test_watch_waits_two_minutes_after_program_start(tmp_path):
+    """Екран і бот стартують першими: перша перевірка — не раніше ніж через 2 хв."""
+    w, spawned, _logs, clock = watch(folder=tmp_path, delay=login_check.START_DELAY)
+    assert login_check.START_DELAY == timedelta(minutes=2)
+    assert w.tick() is None
+    clock[0] = NOW + timedelta(minutes=1, seconds=59)
+    assert w.tick() is None and spawned == []
+    clock[0] = NOW + timedelta(minutes=2)
+    assert w.tick() == "started" and len(spawned) == 1
+
+
+def test_watch_does_not_open_chrome_until_first_login(tmp_path):
+    """Чиста установка (профілю робота немає): жодної перевірки, жодного процесу робота."""
+    profile = [False]
+    w, spawned, _logs, clock = watch(folder=tmp_path, ready=lambda: profile[0])
+    for hours in (0, 1, 30, 100):
+        clock[0] = NOW + timedelta(hours=hours)
+        assert w.tick() is None
+    assert spawned == []
+    profile[0] = True  # Продавчиня колись увійшла — профіль є
+    assert w.tick() == "started" and len(spawned) == 1
+
+
+def test_app_clean_start_without_profile_spawns_nothing(tmp_path, monkeypatch):
+    """Крок «Димова перевірка» windows-package: `app --no-browser` на чистому встановленні не
+    запускає робота (немає `robot.json`) — шафа-потік перевірки входу не стартує Chrome."""
+    from shafa import app, web
+    from shafa.robot import control
+
+    spawned = []
+    monkeypatch.setattr(control, "spawn", lambda *a, **kw: spawned.append(a))
+    assert not web._logged_in()  # тека даних порожня: профілю робота немає
+    w = app.shafa_login_watch()
+    w.born -= timedelta(hours=1)  # «2 хв після старту» уже минули
+    assert w.tick() is None and spawned == []
+    assert not (browser.profile_dir().parent / "robot.json").exists()
+    browser.profile_dir().mkdir(parents=True)
+    (browser.profile_dir() / "Default").write_text("x")  # вхід колись робили
+    assert w.tick() == "started" and spawned == [(["--login-check"],)]
 
 
 def test_watch_checks_at_start_then_once_a_day(tmp_path):
@@ -297,7 +339,7 @@ def app(conn, tmp_path, root, lock_file):
     probe.effect = lambda: None
     application = web.App(
         tmp_path / "база.sqlite", root, tmp_path / "thumbs", PORT, token=TOKEN,
-        spawner=spawner, lock_file=lock_file, login_probe=probe,
+        spawner=spawner, lock_file=lock_file, login_probe=probe, run=lambda job: job(),
     )  # fmt: skip
     application.spawner_calls, application.probe_calls, application.probe = (
         spawner.calls,
@@ -315,8 +357,8 @@ def now():
 def test_start_with_login_ok_goes(app):
     app.probe.effect = lambda: login_check.store.write(True, now())
     page = post(app, "/robot", action="start", back="/review")
-    assert "robot_started" in location(page) and len(app.spawner_calls) == 1
-    assert app.probe_calls == [1]  # свіжої перевірки не було — попросили
+    assert "robot_login_checking" in location(page)
+    assert app.probe_calls == [1] and len(app.spawner_calls) == 1  # перевірка, потім запуск
 
 
 def test_start_with_fresh_ok_check_does_not_probe_again(app):
@@ -327,9 +369,11 @@ def test_start_with_fresh_ok_check_does_not_probe_again(app):
 
 def test_start_with_lost_login_does_not_begin_session(app):
     app.probe.effect = lambda: login_check.store.write(False, now(), "x")
-    page = post(app, "/robot", action="start", back="/review")
-    assert "robot_cannot_start_login" in location(page)
+    post(app, "/robot", action="start", back="/review")  # перевірка у фоні: вхід злетів
     assert app.spawner_calls == []  # робота не запущено
+    page = post(app, "/robot", action="start", back="/review")  # перевірка вже свіжа
+    assert "robot_cannot_start_login" in location(page)
+    assert app.spawner_calls == [] and app.probe_calls == [1]
     shown = html(get(app, "/review?msg=robot_cannot_start_login"))
     assert "спершу увійдіть на Шафу" in shown
     panel = html(get(app, "/robot/panel"))
@@ -338,7 +382,7 @@ def test_start_with_lost_login_does_not_begin_session(app):
 
 def test_start_when_shafa_did_not_answer_still_goes(app):
     page = post(app, "/robot", action="start", back="/review")  # перевірка нічого не записала
-    assert "robot_started" in location(page) and len(app.spawner_calls) == 1
+    assert "robot_login_checking" in location(page) and len(app.spawner_calls) == 1
 
 
 def test_start_probe_crash_does_not_block(app):
@@ -346,8 +390,8 @@ def test_start_probe_crash_does_not_block(app):
         raise OSError("немає Chrome")
 
     app.login_probe = boom
-    page = post(app, "/robot", action="start", back="/review")
-    assert "robot_started" in location(page)
+    post(app, "/robot", action="start", back="/review")
+    assert len(app.spawner_calls) == 1 and app.login_checking is False
 
 
 def test_panel_green_after_login(app):
@@ -355,3 +399,26 @@ def test_panel_green_after_login(app):
     control.mark_login(at)
     login_check.store.write(True, at + timedelta(seconds=5))
     assert "Вхід є — можна «Старт»" in html(get(app, "/robot/panel"))
+
+
+def test_panel_says_checking_while_probe_runs(app):
+    """Поки йде перевірка входу, екран не висить мовчки: «Перевіряю вхід на Шафу…», без «Старт»."""
+    jobs = []
+    app.run = jobs.append
+    page = post(app, "/robot", action="start", back="/review")
+    assert "robot_login_checking" in location(page) and app.spawner_calls == []
+    panel = html(get(app, "/robot/panel"))
+    assert "Перевіряю вхід на Шафу" in panel and 'value="start"' not in panel
+    assert "Перевіряю вхід на Шафу" in html(get(app, "/review?msg=robot_login_checking"))
+    again = post(
+        app, "/robot", action="start", back="/review"
+    )  # подвійний клік — не запускає двічі
+    assert "robot_cannot_start" in location(again) and len(jobs) == 1
+    login_check.store.write(True, now())  # перевірка закінчилась: вхід є
+    jobs[0]()
+    assert app.login_checking is False and len(app.spawner_calls) == 1
+    assert "Перевіряю вхід на Шафу" not in html(get(app, "/robot/panel"))
+
+
+def test_probe_waits_at_most_45_seconds():
+    assert control.PROBE_TIMEOUT == 45

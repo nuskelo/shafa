@@ -194,6 +194,7 @@ MESSAGES = {
     "robot_cannot_start_none": "Робота не запущено: немає Схвалених Карток",
     "robot_cannot_start_limit": "Робота не запущено: на сьогодні все — ліміт доби вичерпано",
     "robot_cannot_start_groups": "Робота не запущено: на сьогодні місць для цих Карток немає",
+    "robot_login_checking": "Перевіряю вхід на Шафу — за кілька секунд робот запуститься сам",
     "robot_cannot_start_login": "Робота не запущено: спершу увійдіть на Шафу",
     "robot_cannot_start_setup": "Робота не запущено: у налаштуваннях неправильні межі на день",
     "robot_paused": "Пауза: робот допише поточний товар і зачекає",
@@ -513,6 +514,7 @@ class App:
         self.db_path = db_path
         # ROBOT-019: перед «Старт» — свіжа перевірка входу (`control.probe_login`); немає — як було
         self.login_probe = login_probe
+        self.login_checking = False  # іде перевірка входу після «Старт» (панель: «Перевіряю…»)
         self.root = root
         self.cache_dir = cache_dir
         self.port = port
@@ -1258,6 +1260,10 @@ class App:
             conn, self.lock_file, starting=starting, failed=failed, spawned=self.spawned_at,
             never_logged=not self.fake_shafa and not _logged_in(),
         )  # fmt: skip
+        if self.login_checking:  # ROBOT-019: «Старт» натиснуто, перевіряємо вхід — не мовчимо
+            state.code, state.text = "checking", control.TEXTS["checking"]
+            state.can_start, state.buttons = False, []
+            state.why_not, state.why_code = "Перевіряю вхід на Шафу — кілька секунд", "busy"
         if state.code in ("failed", "crashed") and failed:
             state.details.append(
                 last_log_line(control.log_path())
@@ -1287,10 +1293,17 @@ class App:
                 if not state.can_start:
                     why = control.WHY_CODES.get(state.why_code)
                     return redirect(f"{back}{sep}msg=robot_cannot_start{'_' + why if why else ''}")
-                if not self.fake_shafa and self._login_lost():
-                    return redirect(f"{back}{sep}msg=robot_cannot_start_login")
                 args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
-                self._spawn(args + (["--fake-shafa"] if self.fake_shafa else []))
+                args += ["--fake-shafa"] if self.fake_shafa else []
+                if not self.fake_shafa:
+                    verdict = self._login_verdict()
+                    if verdict is False:
+                        return redirect(f"{back}{sep}msg=robot_cannot_start_login")
+                    if verdict is None and self.login_probe is not None:
+                        self.login_checking = True  # перевірка — у фоні, екран одразу відповідає
+                        self.run(lambda: self._check_then_start(args))
+                        return redirect(f"{back}{sep}msg=robot_login_checking")
+                self._spawn(args)
                 return redirect(f"{back}{sep}msg=robot_started")
             if action == "rehearse":
                 return self._rehearse(conn, back, sep)
@@ -1339,22 +1352,23 @@ class App:
         self._spawn([*args, "--count", str(count)])
         return redirect(f"{back}{sep}msg=rehearse_started")
 
-    def _login_lost(self) -> bool:
-        """ROBOT-019: перед «Старт» вхід на Шафу не злетів? Свіжої (≤ 30 хв) перевірки немає —
-        просимо нову (headless, кілька секунд); Шафа не відповіла — не вирішуємо за неї."""
-        store = login_check.store
+    def _login_verdict(self) -> bool | None:
+        """ROBOT-019: True — вхід є, False — злетів, None — свіжої (≤ 30 хв) перевірки немає."""
+        return login_check.store.verdict(datetime.now().astimezone(), control._login_at())
 
-        def verdict() -> bool | None:
-            return store.verdict(datetime.now().astimezone(), control._login_at())
-
-        found = verdict()
-        if found is None and self.login_probe is not None:
+    def _check_then_start(self, args: list[str]) -> None:
+        """Фон після «Старт»: свіжої перевірки входу немає — просимо нову (headless, кілька секунд);
+        вхід є чи Шафа не відповіла — запускаємо робота; злетів — ні (панель просить увійти)."""
+        try:
             try:
-                self.login_probe()
+                if self.login_probe is not None:
+                    self.login_probe()
             except Exception as error:  # noqa: BLE001 — збій перевірки не блокує «Старт»
                 print(f"Перевірка входу не вдалась: {type(error).__name__}", file=sys.stderr)
-            found = verdict()
-        return found is False
+        finally:
+            self.login_checking = False
+        if self._login_verdict() is not False:
+            self._spawn(args)
 
     def _spawn(self, args: list[str]) -> None:
         self.process = self.spawner(args)
@@ -2520,7 +2534,7 @@ KLUBOK_ACTIONS = {
 
 
 KLUBOK_TONES = {  # кружечок панелі Клубку: ok — працює, idle — стоїть, warn — увага, bad — помилка
-    "running": "ok", "starting": "ok", "pausing": "ok", "stopping": "ok", "snapshot": "ok",
+    "running": "ok", "starting": "ok", "checking": "ok", "pausing": "ok", "stopping": "ok", "snapshot": "ok",
     "renewing": "ok",
     "stopped": "idle", "paused": "idle", "off": "idle", "busy_shafa": "idle",
     "login_open": "warn", "busy": "warn", "crashed": "bad", "failed": "bad",

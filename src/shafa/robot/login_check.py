@@ -7,7 +7,9 @@
 Сайт не відповів ні так ні ні (немає форми) — нічого не записуємо.
 
 `Watch` — потік `app`: перевірка при старті програми й раз на добу, лише коли робот вільний.
-Перед «Старт» її просить екран (`web`). Після закриття вікна входу (`robot --login`) перевірка
+Перед «Старт» її просить екран (`web`). Доки вхід на Шафу жодного разу не робили (профілю робота
+немає — чиста установка) і перші 2 хв після старту програми, Watch мовчить: екран і бот
+стартують першими, а Chrome без потреби не відкривається. Після закриття вікна входу (`robot --login`) перевірка
 йде одразу — панель стає зеленою без жодної кнопки.
 """
 
@@ -28,6 +30,7 @@ store = Store(STATE, ALERT)
 TICK = 60.0
 EVERY = timedelta(hours=24)  # без перевірки довше — час перевірити
 RETRY = timedelta(minutes=10)  # запуск перевірки не частіше
+START_DELAY = timedelta(minutes=2)  # перша перевірка — не раніше ніж через стільки після старту
 
 LOST = (
     "Шафа вийшла з акаунта робота. Відкрийте програму → «Увійти на Шафу», увійдіть у вікні, що "
@@ -77,9 +80,13 @@ class Watch:
         log: Callable[[str], None],
         clock: Callable[[], datetime] = lambda: datetime.now().astimezone(),
         folder: Path | None = None,
+        ready: Callable[[], bool] = lambda: True,
+        delay: timedelta = START_DELAY,
     ) -> None:
+        """`ready` — вхід на Шафу вже робили (профіль робота є); ні — перевірки немає."""
         self.command, self.spawn, self.busy, self.log = command, spawn, busy, log
-        self.clock, self.folder = clock, folder
+        self.clock, self.folder, self.ready, self.delay = clock, folder, ready, delay
+        self.born = clock()  # коли програма стартувала
         self.started = False  # перевірка «при старті програми» вже була
         self.last: datetime | None = None
         self.said: set[str] = set()
@@ -100,6 +107,8 @@ class Watch:
     def tick(self) -> str | None:
         """started / busy — що зроблено цього разу; None — нічого."""
         now = self.clock()
+        if now - self.born < self.delay or not self.ready():
+            return None
         why = self._due(now)
         if why is None or (self.last is not None and now - self.last < RETRY):
             return None

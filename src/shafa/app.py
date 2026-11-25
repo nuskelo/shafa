@@ -135,6 +135,7 @@ def shafa_login_watch() -> login_check.Watch:
         spawn=control.spawn,
         busy=lock.busy,
         log=control.log_line,
+        ready=web._logged_in,  # чиста установка: профілю немає — Chrome не відкриваємо
     )
 
 
