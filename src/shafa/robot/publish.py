@@ -611,9 +611,15 @@ class Run:
         )
         calm = report.code in ("done", "limit", "stop") or not (report.code or report.reason)
         events.emit(
-            "robot.end" if calm else "robot.stop", text,
-            data={"session": report.session_id, "code": report.code},
-        )  # fmt: skip
+            "robot.end" if calm else "robot.stop",
+            text,
+            data={
+                "session": report.session_id,
+                "code": report.code,
+                "deferred": report.deferred[:50],
+                "notes": report.notes[:30],
+            },
+        )  # fmt: skip  (BOT-018: підсумок сесії в боті бере звідси відкладені й примітки)
 
     def _finish(self, report: Report) -> None:
         self._announce_end(report)
@@ -649,7 +655,12 @@ class Run:
             "robot.start",
             f"Сесія {report.session_id} почалась: у черзі {len(taken)} (старих {old}, "
             f"нових {len(taken) - old}), ліміт сьогодні ще {day_limit - started_today(self.conn, today)}",
-            data={"session": report.session_id, "queue": len(taken)},
+            data={
+                "session": report.session_id,
+                "queue": len(taken),
+                "old": old,
+                "left": day_limit - started_today(self.conn, today),
+            },
         )
         if (stop := self._open_form(None)) is not None:
             return stop

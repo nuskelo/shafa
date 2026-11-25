@@ -237,7 +237,10 @@ class Run:
             ).lastrowid
         self.result = Result(sid, recovered=recovered)
         self._now("start")
-        events.emit("klubok.start", f"Клубок: сесія {sid}, до {self.opts.limit} оголошень")
+        events.emit(
+            "klubok.start", f"Клубок: сесія {sid}, до {self.opts.limit} оголошень",
+            data={"session": sid, "limit": self.opts.limit},
+        )  # fmt: skip
         try:
             self._loop()
         except Stop as stop:
@@ -463,7 +466,12 @@ class Run:
             f"проблем {len(result.problems)}. {result.reason}"
         )
         if result.code in LOUD:
-            events.emit("klubok.stop", f"⛔ {text}", loud=True, data={"code": result.code})
+            events.emit(
+                "klubok.stop",
+                f"⛔ {text}",
+                loud=True,
+                data={"session": result.session_id, "code": result.code},
+            )
         else:
             events.emit("klubok.end", text, data={"session": result.session_id})
         try:  # KLB-010: черга одразу актуальна (знімок, виставлене) — без «Перерахувати чергу»

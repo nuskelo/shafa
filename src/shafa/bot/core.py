@@ -53,7 +53,7 @@ import pillow_heif
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from shafa import batch, changes, config, events, rules, site
-from shafa.bot import actions, alerts, channel, outbox, presence, report
+from shafa.bot import actions, alerts, channel, outbox, presence, report, sessions
 from shafa.bot.hashtag import ASK_KIND, decide
 from shafa.bot.telegram import Telegram, TelegramError, Upload
 from shafa.db import now
@@ -440,14 +440,22 @@ class Bot:
     # --- Надсилання без падінь (відповідь не дійшла — не привід ламати обробку) ---
 
     def say(
-        self, chat_id: int | None, text: str, markup: dict | None = None, silent: bool = False
+        self,
+        chat_id: int | None,
+        text: str,
+        markup: dict | None = None,
+        silent: bool = False,
+        entities: list[dict] | None = None,
     ) -> dict | None:
         if chat_id is None:
             return None
+        extra: dict[str, Any] = {}
+        if silent:  # без звуку: збірка тихих подій (BOT-012)
+            extra["silent"] = True
+        if entities:  # посилання й розгортаємі блоки підсумку сесії (BOT-018)
+            extra["entities"] = entities
         try:
-            if silent:  # без звуку: збірка тихих подій (BOT-012)
-                return self.tg.send_message(chat_id, text, markup, silent=True)
-            return self.tg.send_message(chat_id, text, markup)
+            return self.tg.send_message(chat_id, text, markup, **extra)
         except TelegramError as error:
             self.log(f"Не вдалося відповісти в чат: {error}")
             return None
@@ -784,26 +792,41 @@ class Bot:
             self._report_retry = now_ + report.RETRY
             self.log(f"Звіт: {type(error).__name__}: {str(error)[:200]}")
 
+    def _alert_chats(self) -> list[tuple[str, int, bool]]:
+        """BOT-018: кому йдуть тривоги — (слот стану, чат, Власник?). Власнику — завжди, Вікторії —
+        якщо `SHAFA_ALERTS_TO` не `owner` і це не той самий чат."""
+        owner, seller = self.settings.owner_chat, self.settings.seller_chat
+        chats = [("", owner, True)] if owner is not None else []
+        if seller is not None and seller != owner and alerts.to_seller():
+            chats.append(("seller", seller, False))
+        return chats
+
     def _alerts(self, now_: datetime) -> None:
-        """BOT-010: раз на хвилину — що нового для Власника (зупинка робота, Проблеми, самоперевірка,
-        бюджет ШІ). Немає Власника чи `SHAFA_ALERTS=off` — нічого. Помилка бота не зупиняє."""
-        owner = self.settings.owner_chat
-        if owner is None or (self._alerts_next and now_ < self._alerts_next):
+        """BOT-010/018: що нового для Власника й Вікторії (сесії блоками, Проблеми, самоперевірка,
+        бюджет ШІ). Кожен чат — зі своїм станом: збій одного не дублює іншому. Немає жодного чату чи
+        `SHAFA_ALERTS=off` — нічого. Помилка бота не зупиняє."""
+        chats = self._alert_chats()
+        if not chats or (self._alerts_next and now_ < self._alerts_next):
             return
         self._alerts_next = now_ + alerts.EVERY
+        data_dir = config.data_dir()
         try:
-            data_dir = config.data_dir()
             if not alerts.enabled():
                 alerts.forget(data_dir)
                 return
-            alerts.run(
-                self.conn, data_dir, now_,
-                lambda text, markup=None, album_of=None, silent=False: actions.deliver(
-                    self, owner, text, markup, album_of, silent
-                ),
-            )  # fmt: skip
         except Exception as error:  # noqa: BLE001
             self.log(f"Тривоги: {type(error).__name__}: {str(error)[:200]}")
+            return
+        for slot, chat, owner in chats:
+            try:
+                alerts.run(
+                    self.conn, data_dir, now_,
+                    lambda text, markup=None, album_of=None, silent=False, entities=None, chat=chat:
+                    actions.deliver(self, chat, text, markup, album_of, silent, entities),
+                    live=sessions.Live(self, chat), owner=owner, slot=slot,
+                )  # fmt: skip
+            except Exception as error:  # noqa: BLE001
+                self.log(f"Тривоги: {type(error).__name__}: {str(error)[:200]}")
 
     def _report_log(self, text: str) -> None:
         if text != self._report_bad:

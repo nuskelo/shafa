@@ -172,6 +172,7 @@ def deliver(
     keyboard: dict | None,
     album_of: int | None,
     silent: bool = False,
+    entities: list[dict] | None = None,
 ) -> bool:
     """Повідомлення Власнику; `album_of` — Картка, чиї фото йдуть перед ним (збій фото не заважає)."""
     if album_of is not None:
@@ -183,9 +184,10 @@ def deliver(
                 bot.tg.send_photo(chat_id, files[0], "")
         except TelegramError as error:
             bot.log(f"Фото до тривоги не надіслано: {error}")
-    if silent:  # збірка тихих подій (BOT-012)
-        return bot.say(chat_id, text, keyboard, silent=True) is not None
-    return bot.say(chat_id, text, keyboard) is not None
+    extra: dict[str, Any] = {"entities": entities} if entities else {}
+    if silent:  # збірка тихих подій (BOT-012), початок сесії (BOT-018)
+        extra["silent"] = True
+    return bot.say(chat_id, text, keyboard, **extra) is not None
 
 
 # --- Натискання ---

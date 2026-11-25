@@ -42,10 +42,10 @@ KINDS = {
     "ai.stop": Kind("⛔", loud=True),  # бюджет, ключ, пакет не створено
     "ai.rules": Kind("🔁"),  # перерахунок правилами, «Перевірити» без ШІ: без запитів до ШІ
     # робот (`robot/publish.py`)
-    "robot.start": Kind("▶️"),
-    "robot.post": Kind("✅"),
+    "robot.start": Kind("▶️"),  # BOT-018: початок блоку сесії (`bot/sessions.py`), не рядок збірки
+    "robot.post": Kind("✅", skip=True),  # BOT-018: це бачить живе повідомлення й підсумок сесії
     "robot.problem": Kind("⚠️", skip=True),  # її вже шле `alerts._problem_events` з кнопками
-    "robot.end": Kind("⏹"),
+    "robot.end": Kind("⏹", skip=True),  # BOT-018: кінець — підсумок із бази, дані — для нього
     "robot.stop": Kind("⛔", loud=True, skip=True),  # її вже шле `alerts._session_events`
     "shafa.balance": Kind("💳", loud=True),  # ROBOT-014: вікно від'ємного балансу, раз на добу
     # пробний прогін (`robot/rehearse.py`)
@@ -57,11 +57,11 @@ KINDS = {
     "catalog.done": Kind("📚"),
     "catalog.error": Kind("⚠️", loud=True),
     # Клубок (`robot/klubok_publish.py`, KLB-003)
-    "klubok.start": Kind("🧶"),
-    "klubok.post": Kind("🧶"),
-    "klubok.problem": Kind("⚠️"),
-    "klubok.end": Kind("🧶"),
-    "klubok.stop": Kind("⛔", loud=True),
+    "klubok.start": Kind("🧶"),  # BOT-018: початок блоку сесії
+    "klubok.post": Kind("🧶", skip=True),  # BOT-018: живе повідомлення й підсумок
+    "klubok.problem": Kind("⚠️", skip=True),
+    "klubok.end": Kind("🧶", skip=True),
+    "klubok.stop": Kind("⛔", loud=True, skip=True),  # BOT-018: ⛔ і підсумок — з бази (`alerts`)
     "klubok.missing": Kind("⚠️", loud=True),
     "klubok.retry": Kind("🧶"),  # KLB-009: «не опубліковано» — назад у чергу (екран)
     "klubok.waves": Kind("🧶"),  # KLB-010: хвилі перераховано новими правилами (тихо)
