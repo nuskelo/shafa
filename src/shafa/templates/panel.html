@@ -39,7 +39,8 @@
       {% if robot.idle_note and robot.idle_note != note %}{% set _ = lines.append(("robot-last", robot.idle_note)) %}{% endif %}
       {% if robot.code == "running" %}{% set _ = lines.append(("", "Не закривайте вікно Chrome робота і кришку ноутбука, поки робот працює.")) %}{% endif %}
       {% if "pause" in robot.buttons or "resume" in robot.buttons %}{% set _ = lines.append(("", "Пауза — робот зачекає, «Продовжити» поверне до роботи. Стоп — допише поточний товар і завершить сесію.")) %}{% endif %}
-      {% if robot.code == "login_needed" %}{% set _ = lines.append(("robot-help", "Робот вийшов із Шафи. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».")) %}
+      {% if robot.code == "login_needed" %}{% set _ = lines.append(("robot-help", "Шафа вийшла з вашого акаунта. Натисніть «Увійти на Шафу» → увійдіть у вікні, що відкрилось → закрийте вікно → «Старт».")) %}
+      {% elif robot.login_ok %}{% set _ = lines.append(("robot-help", robot.login_ok)) %}
       {% elif robot.never_logged %}{% set _ = lines.append(("robot-help", "Робот ще не входив на Шафу. Натисніть «Увійти на Шафу»: відкриється вікно Chrome — увійдіть, як завжди, і закрийте це вікно. Потім натисніть «Старт».")) %}{% endif %}
       {% if lines or robot.last and "start" in robot.buttons or robot.rehearsal and "start" in robot.buttons %}
       <div class="sp-foot">

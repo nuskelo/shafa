@@ -64,7 +64,7 @@ from shafa.klubok import queue as klubok_queue
 from shafa.klubok import refresh as klubok_refresh
 from shafa.klubok import screen as klubok_screen
 from shafa.klubok import sold as klubok_sold
-from shafa.robot import browser, control, klubok_control, lock, publish, rehearse
+from shafa.robot import browser, control, klubok_control, lock, login_check, publish, rehearse
 from shafa.robot import listings as listings_mod
 from shafa.robot.plan import Precheck, precheck
 from shafa.scan import NO_SECTION_TEXT, OLD_NO_SECTION_TEXT, STICKY, scan
@@ -508,8 +508,11 @@ class App:
         on_quit: Callable[[], list[str]] | None = None,
         health_check: Callable[[], list[health.Check]] | None = None,
         klubok_spawner: Callable[[list[str]], object] | None = None,
+        login_probe: Callable[[], object] | None = None,
     ) -> None:
         self.db_path = db_path
+        # ROBOT-019: перед «Старт» — свіжа перевірка входу (`control.probe_login`); немає — як було
+        self.login_probe = login_probe
         self.root = root
         self.cache_dir = cache_dir
         self.port = port
@@ -1284,6 +1287,8 @@ class App:
                 if not state.can_start:
                     why = control.WHY_CODES.get(state.why_code)
                     return redirect(f"{back}{sep}msg=robot_cannot_start{'_' + why if why else ''}")
+                if not self.fake_shafa and self._login_lost():
+                    return redirect(f"{back}{sep}msg=robot_cannot_start_login")
                 args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
                 self._spawn(args + (["--fake-shafa"] if self.fake_shafa else []))
                 return redirect(f"{back}{sep}msg=robot_started")
@@ -1333,6 +1338,23 @@ class App:
         args = ["--rehearse", "--db", str(self.db_path), "--root", str(self.root)]
         self._spawn([*args, "--count", str(count)])
         return redirect(f"{back}{sep}msg=rehearse_started")
+
+    def _login_lost(self) -> bool:
+        """ROBOT-019: перед «Старт» вхід на Шафу не злетів? Свіжої (≤ 30 хв) перевірки немає —
+        просимо нову (headless, кілька секунд); Шафа не відповіла — не вирішуємо за неї."""
+        store = login_check.store
+
+        def verdict() -> bool | None:
+            return store.verdict(datetime.now().astimezone(), control._login_at())
+
+        found = verdict()
+        if found is None and self.login_probe is not None:
+            try:
+                self.login_probe()
+            except Exception as error:  # noqa: BLE001 — збій перевірки не блокує «Старт»
+                print(f"Перевірка входу не вдалась: {type(error).__name__}", file=sys.stderr)
+            found = verdict()
+        return found is False
 
     def _spawn(self, args: list[str]) -> None:
         self.process = self.spawner(args)

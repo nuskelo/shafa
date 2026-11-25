@@ -22,6 +22,7 @@ from shafa.robot import (
     klubok_login_check,
     klubok_renew,
     lock,
+    login_check,
     publish,
     rehearse,
 )
@@ -127,6 +128,16 @@ def klubok_daily(path: Path) -> klubok_renew.Daily:
     )
 
 
+def shafa_login_watch() -> login_check.Watch:
+    """ROBOT-019: чи не злетів вхід на Шафу — при старті й раз на добу, коли робот вільний."""
+    return login_check.Watch(
+        command=lambda: ["--login-check"],
+        spawn=control.spawn,
+        busy=lock.busy,
+        log=control.log_line,
+    )
+
+
 def klubok_login_watch() -> klubok_login_check.Watch:
     """KLB-018: чи не злетів вхід у Клубок — при старті й раз на добу перед «Обновить все»."""
     return klubok_login_check.Watch(
@@ -186,7 +197,7 @@ def start(
 
         app = web.App(
             path, root_dir(), cache, channel_id=config.setting("TELEGRAM_CHANNEL_ID"),
-            on_quit=on_quit,
+            on_quit=on_quit, login_probe=control.probe_login,
         )  # fmt: skip
         server = holder["server"] = web.make_server(app, port)
         app.klubok_sync.start()  # KLB-010: хвилі й черга Клубку — у фоні, екран не чекає
@@ -204,6 +215,9 @@ def start(
         ).start()
         threading.Thread(
             target=klubok_daily(path).run, args=(night_stop,), daemon=True, name="klubok-renew"
+        ).start()
+        threading.Thread(
+            target=shafa_login_watch().run, args=(night_stop,), daemon=True, name="shafa-login"
         ).start()
         threading.Thread(
             target=klubok_login_watch().run, args=(night_stop,), daemon=True, name="klubok-login"
