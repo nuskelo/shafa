@@ -119,4 +119,4 @@ def test_shafa_login_unchanged(tmp_path, monkeypatch):
     context.goto = urls.append
     monkeypatch.setattr(browser, "launch", lambda p: context)
     WAIT_FOR_LOGIN(None, limit=30.0, flag=tmp_path / "flag", clock=lambda: context.t)
-    assert urls == [browser.NEW_URL]
+    assert urls == [browser.LOGIN_URL]  # ROBOT-019: одразу сторінка входу, без редиректу з форми

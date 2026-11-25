@@ -23,6 +23,7 @@ from shafa.db import Status
 from shafa.robot import guard
 
 NEW_URL = "https://shafa.ua/uk/new"
+LOGIN_URL = "https://shafa.ua/uk/login"  # ROBOT-019: вікно входу відкривається одразу тут
 LEAVE_WAIT = 15  # с: піти зі сторінки реклами; не вийшло — не чекаємо
 LOGIN_PATH = "/login"
 FORM_FIELD = "input[name=titleUk]"
@@ -130,18 +131,19 @@ BACKGROUND_ARGS = (
 )
 
 
-def launch(playwright: Any) -> Any:
+def launch(playwright: Any, headless: bool = False) -> Any:
     profile = profile_dir()
     profile.mkdir(parents=True, exist_ok=True)
-    return open_profile(playwright.chromium, profile)
+    return open_profile(playwright.chromium, profile, headless)
 
 
-def open_profile(chromium: Any, profile: Path) -> Any:
-    """Видимий встановлений Chrome з профілем робота; фонове гальмування вимкнене."""
+def open_profile(chromium: Any, profile: Path, headless: bool = False) -> Any:
+    """Встановлений Chrome з профілем робота (видимий; `headless` — лише рання перевірка входу,
+    ROBOT-019); фонове гальмування вимкнене."""
     return chromium.launch_persistent_context(
         profile,
         channel="chrome",
-        headless=False,
+        headless=headless,
         viewport={"width": 1400, "height": 1000},
         args=list(BACKGROUND_ARGS),
     )
@@ -153,9 +155,15 @@ class Session:
     `allow_upload` — завантаження фото (`--dry-fill`, `--publish`); `publish` — режим публікації.
     """
 
-    def __init__(self, playwright: Any, allow_upload: bool = False, publish: bool = False) -> None:
+    def __init__(
+        self,
+        playwright: Any,
+        allow_upload: bool = False,
+        publish: bool = False,
+        headless: bool = False,
+    ) -> None:
         self._setup(allow_upload or publish, publish)
-        self.context = launch(playwright)
+        self.context = launch(playwright, headless)
         self.context.route("**/*", self._route)
         self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
         self.page.on("dialog", self._dialog)
@@ -332,15 +340,15 @@ def wait_for_manual_login(
     clock: Callable[[], float] = time.monotonic,
     *,
     profile: Path | None = None,
-    url: str = NEW_URL,
+    url: str = LOGIN_URL,
 ) -> str:
     """Відкрити профіль для ручного входу Власника; чекати, поки вікно закриють.
 
     Без захисту мережі: вхід — це надсилання логіна, але його робить людина, не робот.
     Повертає, чим закінчилось: `closed` (вікно закрили), `done` (кнопка «Я увійшов» на екрані),
     `timeout` (минуло `limit`). В останніх двох браузер закривається штатно — cookies входу
-    записуються на диск. `profile`/`url` — інший сайт (KLB-003: профіль і форма Клубку);
-    без них — профіль робота Шафи й її форма.
+    записуються на диск. `profile`/`url` — інший сайт (KLB-003: профіль і вхід Клубку);
+    без них — профіль робота Шафи й її сторінка входу (ROBOT-019: не форма — без редиректу).
     """
     flag = flag or login_done_flag()
     flag.unlink(missing_ok=True)  # стара кнопка з попереднього разу не рахується
