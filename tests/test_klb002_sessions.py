@@ -75,10 +75,13 @@ def test_health_login_check_reads_only_shafa(conn, tmp_path):
     assert health._login(ctx).status == health.OK
 
 
-def test_bot_alerts_and_report_skip_klubok(conn, tmp_path):
-    _session(conn, "klubok", ended=True, code="error")
-    assert alerts._last_session(conn) == 0
-    assert alerts._session_events(conn, {"session_id": 0}) == []
+def test_bot_alerts_see_klubok_sessions_but_daily_report_does_not(conn, tmp_path):
+    """BOT-018: бот розповідає про сесії Клубку окремим блоком (раніше — лише Шафи); денний
+    звіт (`report.build`) Клубок і далі не рахує."""
+    klubok = _session(conn, "klubok", ended=True, code="klubok_login")
+    assert alerts._last_session(conn) == klubok
+    [event] = alerts._session_events(conn, {"session_id": 0, "info": {}}, NOW, True)
+    assert event.messages[-1].text.startswith("⛔ 🧶 Клубок · сесія")
     shafa = _session(conn, "shafa", ended=True, code="done")
     assert alerts._last_session(conn) == shafa
 

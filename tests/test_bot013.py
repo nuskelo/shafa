@@ -38,6 +38,7 @@ def data(tmp_path, monkeypatch):
     monkeypatch.setenv("SHAFA_DATA_DIR", str(folder))
     monkeypatch.setenv("SHAFA_DELETE_PUBLISHED", "1")
     monkeypatch.delenv("SHAFA_ALERTS", raising=False)
+    monkeypatch.setenv("SHAFA_ALERTS_TO", "owner")  # BOT-018: ці тести — про чат Власника
     return folder
 
 
@@ -579,7 +580,7 @@ def test_health_ok_line_reaches_owner_in_quiet_batch(conn, data, tg, make_bot):
     step(clock, bot)
     step(clock, bot, 5)
     [(text, silent)] = owner_texts(tg)
-    assert text == "10:00 🩺 Самоперевірка: усе гаразд (9/9)" and silent is True
+    assert text == "🕓 Фонові події\n\n10:00 🩺 Самоперевірка: усе гаразд (9/9)" and silent is True
 
 
 def test_detail_off_hides_the_new_kinds(conn, data, tg, make_bot):
