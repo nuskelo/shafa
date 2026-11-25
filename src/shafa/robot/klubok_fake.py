@@ -414,7 +414,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Location", "/signup")
             self.send_header("Content-Length", "0")
             self.end_headers()
-        elif parts.path == "/signup":
+        elif parts.path in ("/signup", "/signin"):
             self._send(200, SIGNUP_PAGE.encode("utf-8"), "text/html; charset=utf-8")
         elif parts.path == "/item/add":
             self.server.opens += 1

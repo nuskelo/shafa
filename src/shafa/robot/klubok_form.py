@@ -36,7 +36,8 @@ BRAND_WAIT = 6.0  # с чекаємо підказки бренду
 BRAND_TYPE_DELAY = 40  # мс між літерами, як у людини (сторінка чекає 500 мс після останньої)
 SUFFIX = "(Кирилиця)"
 SUBMIT_FETCH = 60.0  # с на відповідь сервера на запит публікації
-LOGIN_PATHS = ("/signup", "/login")  # куди Клубок веде без входу (HYP-4: `/item/add` → `/signup`)
+# куди Клубок веде без входу (HYP-4: `/item/add` → `/signup`; KLB-018: `/signin` — сама форма входу)
+LOGIN_PATHS = ("/signup", "/signin", "/login")
 
 # Чим закінчилась відправка (KLB-003 D4.4)
 SUCCESS, CAPTCHA, UNCERTAIN, NOT_SENT = "success", "captcha", "uncertain", "not_sent"
@@ -427,6 +428,9 @@ class Session:
 KLUBOK_USER = snapshot.USER  # її акаунт: `#user_id` форми (D2) і `user_id` у `get-items` (D3)
 MANAGE_PATH = f"/users/{KLUBOK_USER}/manage"  # KLB-004: сторінка керування з «Обновить все (N)»
 FORM_URL = "https://klubok.com/item/add"
+# KLB-018: вікно входу відкриває форму входу, а не `/item/add` (без входу той веде на `/signup` —
+# реєстрацію); `/login` Клубок перенаправляє на головну
+LOGIN_URL = "https://klubok.com/signin"
 
 
 def profile_dir() -> Path:
@@ -439,14 +443,14 @@ class LiveSession(Session):
 
     def __init__(
         self, playwright: Any, publishing: bool = False, human: bool = False,
-        renewing: bool = False, marking: bool = False,
+        renewing: bool = False, marking: bool = False, headless: bool = False,
     ) -> None:  # fmt: skip
         self._setup(allow_upload=True, publishing=publishing, human=human, renewing=renewing,
                     marking=marking)  # fmt: skip
         profile = profile_dir()
         profile.mkdir(parents=True, exist_ok=True)
         self.context = playwright.chromium.launch_persistent_context(
-            profile, channel="chrome", headless=False, no_viewport=True,  # KLB-007: вікно = екран
+            profile, channel="chrome", headless=headless, no_viewport=True,  # KLB-007: вікно = екран
             args=list(browser.BACKGROUND_ARGS), handle_sigint=False,
         )  # fmt: skip
         self._attach()
