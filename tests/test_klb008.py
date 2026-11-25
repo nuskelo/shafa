@@ -11,7 +11,7 @@ from shafa.__main__ import main
 from shafa.bot import actions, alerts, report
 from shafa.db import Status
 from shafa.export import Post
-from shafa.klubok import fields, importer, queue, waves
+from shafa.klubok import fields, importer, link, queue, waves
 from shafa.robot import form, publish, rehearse
 from test_klb002_queue import TODAY, add, row, snapshot
 from test_review import make_photo
@@ -284,7 +284,20 @@ def posts_of(texts, photo=True):
     }
 
 
+def linked(conn, post_id=9999, name="Інше оголошення", groups=None):
+    """KLB-017: `klubok-link` уже робили — оголошення, прив'язане за фото до `post_id`, і файл груп."""
+    with conn:
+        conn.execute(
+            "INSERT INTO klubok_listings (id, name, price, sizes, url, added_at, post_id) "
+            "VALUES (?, ?, 1000, '[]', 'https://klubok.com/item/x', 'x', ?)",
+            (800 + post_id % 100, name, post_id),
+        )
+    link.save_groups(groups or {})
+
+
 def run(conn, posts, export_dir, root, *, apply=True, wave=1):
+    if not link.groups_path().is_file():
+        linked(conn)
     return importer.run(conn, posts, export_dir, root, wave, apply=apply, today=TODAY)
 
 
@@ -325,6 +338,7 @@ def test_import_etalon_keeps_shafa_card_and_adds_spare_photo(conn, root, export_
 def test_import_skips_archived_on_klubok_no_photo_text_and_other_kinds(conn, root, export_dir):
     snapshot(conn, listings=[("Термо черевики Sorel 38 розміру", 1200)])
     add(conn, root, 301, status=Status.ARCHIVED)
+    linked(conn, 302, "Термо черевики Sorel 38 розміру")  # KLB-017: за фото
     texts = {
         301: WINTER,
         302: WINTER,  # уже на Клубку
@@ -347,7 +361,7 @@ def test_import_skips_archived_on_klubok_no_photo_text_and_other_kinds(conn, roo
     assert conn.execute("SELECT count(*) FROM klubok_waves").fetchone()[0] == 0
     assert conn.execute("SELECT count(*) FROM items WHERE only_klubok = 1").fetchone()[0] == 0
     text = "\n".join(rep.lines())
-    assert "302: 900 «Термо черевики Sorel 38 розміру»" in text and len(rep.lines()) <= 60
+    assert "302: 802 «Термо черевики Sorel 38 розміру»" in text and len(rep.lines()) <= 60
 
 
 def test_repeat_import_does_not_duplicate(conn, root, export_dir):
@@ -387,6 +401,7 @@ def test_cli_dry_run_leaves_file(tmp_path, root, export_dir, capsys):
     path = tmp_path / "копія.sqlite"
     conn = db.connect(path)
     snapshot(conn)
+    linked(conn)
     conn.close()
     (export_dir / "result.json").write_text(
         '{"messages": [{"id": 301, "type": "message", "date": "2024-01-01T10:00:00", '
