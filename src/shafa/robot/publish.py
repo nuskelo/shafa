@@ -557,6 +557,7 @@ class Run:
         self._card: review.Card | None = None  # UX-002: Картка, з якою працює `_one`
         self._last: dict | None = None  # UX-002: чим закінчилась остання Картка сесії
         self._plan, self._handled = 0, 0  # UX-002: скільки Карток взято на сьогодні / оброблено
+        self._first_at: str | None = None  # UX-009: коли почалась перша Картка сесії (темп «ще ≈»)
 
     def start(self, limit: int, day_limit: int) -> Report:
         # recover() закриває відкриту сесію й Картки `publishing` — лише з узятим замком:
@@ -653,7 +654,7 @@ class Run:
         if (stop := self._open_form(None)) is not None:
             return stop
         try:
-            listings = self._listings()
+            listings = self._listings(report.session_id)
         except listings_mod.ListingsError as error:
             return Stop("error", f"не прочитано її товари на Шафі ({error}) — дублі не перевірити")
         except listings_mod.SetupError as error:
@@ -702,15 +703,22 @@ class Run:
             return Stop("limit", f"на сьогодні все: {started.text(limits)}")
         return Stop("done", "черга закінчилась")
 
-    def _listings(self) -> list[listings_mod.Listing]:
-        """Знімок «Мої речі» з бази, якщо свіжий; старий чи порожній — читати кабінет (5–10 хв)."""
+    def _listings(self, session_id: int) -> list[listings_mod.Listing]:
+        """Знімок «Мої речі» з бази, якщо свіжий; старий чи порожній — читати кабінет (5–10 хв).
+        UX-009: поки читаємо, панель бачить етап `listings` з лічильником «N з ~M»."""
         days = listings_mod.refresh_days()
         listings = listings_mod.stored(self.conn, days)
         if listings is not None:
             self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)} (знімок)")
             self._declined(None)  # знімок може бути старий — «Відхилені» читаємо щоразу
             return listings
-        listings = self.load_listings(self.session)
+        reading = listings_mod.Reading(
+            listings_mod.snapshot_info(self.conn)[0],
+            lambda **fields: self._write(session_id, "listings", **fields),
+        )
+        reading(0)
+        with listings_mod.progress_to(reading):
+            listings = self.load_listings(self.session)
         listings_mod.store(self.conn, listings)
         self.log(f"Її товарів на Шафі для перевірки дублів: {len(listings)}")
         self._declined(listings)  # повне читання вже містить вкладку «Відхилені»
@@ -850,8 +858,9 @@ class Run:
 
     def _write(self, session_id: int, stage: str, **fields: Any) -> None:
         write_now(
-            session_id, stage, plan=self._plan, handled=self._handled, last=self._last, **fields
-        )
+            session_id, stage, plan=self._plan, handled=self._handled, last=self._last,
+            first_at=self._first_at, **fields,
+        )  # fmt: skip
 
     def _between(self, session_id: int, result: object) -> None:
         """Картка закінчена (успіх, Проблема чи пропуск): робот між товарами — не «дописує товар»
@@ -869,6 +878,8 @@ class Run:
 
     def _working(self, session_id: int, stage: str, card: review.Card) -> None:
         title = card.fields["title"].value if "title" in card.fields else ""
+        if self._first_at is None:  # UX-009: темп рахуємо від першої Картки, не від старту сесії
+            self._first_at = now()
         self._write(session_id, stage, post=card.post_id, title=(title or "")[:80])
 
     def _wait_command(self, session_id: int) -> Stop | None:

@@ -72,13 +72,14 @@ def test_pause_time_is_not_counted_in_the_estimate(conn, lock_file, tmp_path, mo
     """Після «Продовжити» оцінка «ще ≈» не росте від часу, який робот простояв на паузі."""
     monkeypatch.setenv("SHAFA_DATA_DIR", str(tmp_path / "дані"))
     session(conn, started_at=(NOW - timedelta(minutes=40)).isoformat())
-    publish.write_now(1, "between", plan=3, handled=1, last=None)
+    first = (NOW - timedelta(minutes=40)).isoformat()  # UX-009: темп — від першої Картки
+    publish.write_now(1, "between", plan=6, handled=4, last=None, first_at=first)
     control.mark_pause(1, True, NOW - timedelta(minutes=30))
     control.mark_pause(1, False, NOW - timedelta(minutes=10))  # на паузі було 20 хв з 40
     with lock.hold("publish", lock_file):
         s = state(conn, lock_file)
     assert "працює 20 хв" in s.progress
-    assert "ще ≈ 40 хв" in s.progress  # 2 пости × 20 хв, а не 2 × 40
+    assert "ще ≈ 10 хв" in s.progress  # 2 пости × 5 хв (20 хв / 4 пости), а не 2 × 10
 
 
 # --- R-A3: сторінка сесії показує й Картки, що пішли в Проблеми ---

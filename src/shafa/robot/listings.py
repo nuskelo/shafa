@@ -13,13 +13,15 @@
 друге оголошення.
 """
 
+import contextlib
 import json
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
 
 from shafa import catalog, config, db
@@ -44,6 +46,10 @@ DECLINED_CODE = (
     "shafa_declined"  # `items.problem_code`: Шафа відхилила вже опубліковане (ROBOT-011)
 )
 NO_REASON = "причину не вказано"
+LOCK_MODE = "listings-refresh"  # UX-009: режим замка робота (`robot --listings-refresh`)
+BG_NOW = "listings-now.json"  # UX-009: фонове читання — що робить зараз (для панелі)
+BG_LAST = "listings-bg.json"  # UX-009: {"at", "ok", "why"} — остання спроба фонового читання
+BG_MIN_DAYS = 0.5  # раніше ніж через пів доби знімок наперед не перечитуємо (SHAFA_LISTINGS_DAYS=1)
 PHOTOS_DIR = "duplicates"  # фото схожих оголошень для екрана — у теці даних поруч із базою
 
 
@@ -386,6 +392,63 @@ def reset(conn: sqlite3.Connection) -> None:
         conn.execute("DELETE FROM my_listings_read")
 
 
+def due_soon(conn: sqlite3.Connection, now: datetime | None = None) -> bool:
+    """UX-009: знімок порожній, скинутий («Перечитати зараз») чи застаріє протягом доби — час
+    перечитати його у фоні, поки робот вільний (щоб «Старт» одразу публікував)."""
+    count, read_at = snapshot_info(conn)
+    if read_at is None or not count:
+        return True
+    limit = timedelta(days=max(refresh_days() - 1, BG_MIN_DAYS))
+    return (now or _now()) - datetime.fromisoformat(read_at) > limit
+
+
+def _state_file(name: str) -> Path:
+    return config.data_dir() / name
+
+
+def write_state(name: str, data: dict) -> None:
+    """Файл стану в теці даних (тимчасовий файл → заміна). Збій запису читання не ламає."""
+    path = _state_file(name)
+    with contextlib.suppress(OSError):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(name + ".tmp")
+        temp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        temp.replace(path)
+
+
+def read_state(name: str) -> dict:
+    try:
+        data = json.loads(_state_file(name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def clear_state(name: str) -> None:
+    with contextlib.suppress(OSError):
+        _state_file(name).unlink()
+
+
+def last_attempt() -> datetime | None:
+    """Коли востаннє пробували читати у фоні (успішно чи ні)."""
+    try:
+        return datetime.fromisoformat(str(read_state(BG_LAST).get("at")))
+    except ValueError:
+        return None
+
+
+class Reading:
+    """Лічильник читання для панелі: `read` товарів із `expected` (за минулим знімком, 0 — не
+    знаємо), `since` — коли почали. `write(**поля)` кладе це в файл стану."""
+
+    def __init__(self, expected: int, write: Callable[..., None]) -> None:
+        self.expected, self.write = expected, write
+        self.since = _now().isoformat(timespec="seconds")
+
+    def __call__(self, read: int) -> None:
+        self.write(read=read, expected=self.expected, since=self.since)
+
+
 def fetch_photo(session: browser.Session, url: str) -> bytes | None:
     """Фото схожого оголошення для екрана: окрема вкладка крізь той самий захист (лише читання)."""
     page = session.context.new_page()
@@ -441,8 +504,23 @@ def _feeds(response: Any) -> list[dict]:
     ]
 
 
+_progress: Callable[[int], None] | None = None  # UX-009: скільки товарів прочитано (усі вкладки)
+
+
+@contextlib.contextmanager
+def progress_to(callback: Callable[[int], None] | None) -> Iterator[None]:
+    """На час читання кабінету повідомляти `callback(прочитано)` після кожної сторінки відповіді.
+    Збій `callback` читання не ламає."""
+    global _progress
+    previous, _progress = _progress, callback
+    try:
+        yield
+    finally:
+        _progress = previous
+
+
 def _read_tab(
-    session: browser.Session, tab: str, url: str, keys: set[str] | None = None
+    session: browser.Session, tab: str, url: str, keys: set[str] | None = None, base: int = 0
 ) -> dict[int, Listing]:
     """Одна вкладка кабінету: прокрутка до кінця, всі товари (з `state` = вкладка). Лише читання.
     `keys` (необов'язково) — куди скласти назви полів вузла відповіді (без значень)."""
@@ -453,6 +531,9 @@ def _read_tab(
         try:
             for body in _feeds(response):
                 pages.append(parse_feed(body))
+                if _progress is not None:
+                    with contextlib.suppress(Exception):
+                        _progress(base + sum(len(p[0]) for p in pages))
                 if keys is not None:
                     for edge in body["data"]["viewer"]["products"]["edges"][:1]:
                         keys.update(edge["node"])
@@ -490,7 +571,7 @@ def load(session: browser.Session, log: Callable[[str], None] = print) -> list[L
     """Прокрутити вкладки кабінету, як людина, і зібрати всі товари. Лише читання."""
     found: dict[int, Listing] = {}
     for tab, url in TABS.items():
-        tab_items = _read_tab(session, tab, url)
+        tab_items = _read_tab(session, tab, url, base=len(found))
         log(f"Мої речі · {tab}: {len(tab_items)}")
         found |= tab_items
     return list(found.values())

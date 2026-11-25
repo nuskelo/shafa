@@ -17,10 +17,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from shafa import config
-from shafa.robot import lock, login_check, publish, rehearse
+from shafa.robot import listings, lock, login_check, publish, rehearse
 
 ITEM_MINUTES = 4  # орієнтовно: стільки триває один товар (форма + фото + клік)
 POST_MINUTES = 3  # орієнтовно: стільки хвилин на пост разом із паузою, поки нема власних вимірів
+PACE_POSTS = 3  # UX-009: темп сесії рахуємо від першої Картки й лише після стількох Карток
 LOG_NAME = "robot-run.log"
 PAUSE_NAME = "robot-pause.json"  # UX-007: скільки сесія простояла на паузі (не рахується в «ще ≈»)
 LOGIN_NAME = "login-last"  # UX-002: коли Власник/Продавчиня востаннє закривала вікно входу
@@ -34,6 +35,8 @@ TEXTS = {
     "stopping": "Стоп: чекаю, поки допишеться поточний товар",
     "login_needed": "Робот не увійшов на Шафу — потрібно увійти",
     "checking": "Перевіряю вхід на Шафу… за кілька секунд робот запуститься сам",
+    "reading": "Перечитую ваші оголошення на Шафі, щоб не виставити дубль",  # UX-009 (+ лічильник)
+    "waiting_reading": "Читання оголошень ще йде — робот почне публікувати сам, щойно воно закінчиться",
     "login_open": "Відкрито вікно входу на Шафу — увійдіть і закрийте вікно (або кнопка нижче)",
     "rehearsing": "Йде пробна перевірка: форма заповнюється, але нічого не публікується",
     "busy": "Робот зайнятий іншою справою (Власник щось перевіряє)",
@@ -370,6 +373,26 @@ def rehearsal_text(summary: dict | None, now: datetime) -> tuple[str, int]:
     return f"Пробна перевірка {at:%d.%m} (без публікації): {count} — {verdict}", problems
 
 
+def reading_text(data: dict, now: datetime) -> str:
+    """UX-009: «Перечитую ваші оголошення на Шафі…: 820 з ~1650 · ще ≈ 4 хв. Це раз на 7 днів.»
+    `data` — `read`, `expected` (за минулим знімком; 0 — не знаємо), `since` (коли почали)."""
+    read, expected = int(data.get("read") or 0), int(data.get("expected") or 0)
+    text = TEXTS["reading"]
+    if read > 0:
+        text += f": {read} з ~{expected}" if expected > read else f": прочитано {read}"
+    since = _stamp(data.get("since"), now)
+    spent = max((now - since).total_seconds(), 0) if since else 0
+    if read >= 30 and expected > read and spent >= 20:
+        left = (expected - read) * spent / read / 60
+        if left >= 1:
+            text += f" · ще ≈ {span(left, rough=True)}"
+    try:
+        days = listings.refresh_days()
+    except listings.SetupError:
+        days = listings.DAYS_DEFAULT
+    return text + f". Це раз на {days} {'день' if days == 1 else 'днів'}."
+
+
 def _stage_lines(data: dict, now: datetime) -> tuple[str, str]:
     """Рядки «Зараз: …» і «Останній: …» за записом `robot-now.json`."""
     stage = data.get("stage")
@@ -385,6 +408,8 @@ def _stage_lines(data: dict, now: datetime) -> tuple[str, str]:
         "retry": "Шафа відповідає повільно — коротка пауза й ще одна спроба",
         "between": "Зараз: переходить до наступного поста",
     }.get(stage or "", "")
+    if stage == "listings":
+        doing = "Зараз: " + reading_text(data, now)
     if stage == "wait_channel":
         until = _stamp(data.get("until"), now)
         left = max(math.ceil((until - now).total_seconds() / 60), 1) if until else 1
@@ -472,6 +497,8 @@ def state(
             wait = _minutes_left(in_work, now)
     elif busy and busy.get("mode") == "login":
         code = "login_open"
+    elif busy and busy.get("mode") == listings.LOCK_MODE:
+        code = "reading"  # UX-009: фонове перечитування «Мої речі» — «Старт» дочекається його
     elif busy and busy.get("mode") == "rehearse":
         code = "rehearsing"
     elif busy and str(busy.get("mode") or "").startswith("klubok"):
@@ -489,7 +516,7 @@ def state(
     else:
         code = "stopped"
 
-    idle = code in ("stopped", "login_needed", "crashed", "failed")
+    idle = code in ("stopped", "login_needed", "crashed", "failed", "reading")
     why_not, why_code = "", ""
     after = "Завтра після 00:00 натисніть «Старт» ще раз."
     if idle and code == "login_needed":
@@ -520,7 +547,7 @@ def state(
     buttons = []
     if idle:
         buttons.append("start")
-        if approved:
+        if approved and code != "reading":  # пробний прогін потребує замка — він у фонового читання
             buttons.append("rehearse")
     if code == "running":
         buttons += ["pause", "stop"]
@@ -554,13 +581,20 @@ def state(
         began = _stamp(open_session["started_at"], now)
         elapsed = max((now - began).total_seconds() / 60, 0) if began else 0
         elapsed = max(elapsed - paused_minutes(open_session["id"], now), 0)  # R-A2
-        per = elapsed / handled if handled else POST_MINUTES
+        per = POST_MINUTES  # UX-009: до PACE_POSTS Карток — типова оцінка
+        first = _stamp(data.get("first_at"), now)
+        if handled >= PACE_POSTS and first is not None:
+            # темп — від початку першої Картки (етап «Мої речі» не рахується); пауза віднімається
+            pace = (now - first).total_seconds() / 60 - paused_minutes(open_session["id"], now)
+            if pace > 0:
+                per = pace / handled
         left = max(plan - handled, 0) * per
         if code == "paused":  # R-A2: на паузі — без «працює» і «ще ≈»
             progress = f"Опубліковано {handled} з {plan} на сьогодні · на паузі"
             mini = f"Робот: {handled} з {plan} · на паузі"
         else:
-            progress = f"Публікує: {handled} з {plan} на сьогодні · працює {span(elapsed)}"
+            verb = "Готується" if data.get("stage") == "listings" else "Публікує"
+            progress = f"{verb}: {handled} з {plan} на сьогодні · працює {span(elapsed)}"
             mini = f"Робот: {handled} з {plan}"
             if left >= 1:
                 left_text = span(left, rough=True)
@@ -568,6 +602,8 @@ def state(
                 mini += f" · ≈ {left_text}"
 
     text = TEXTS[code]
+    if code == "reading":
+        text = reading_text(listings.read_state(listings.BG_NOW), now)
     if code in ("pausing", "stopping"):
         post = data.get("post") if data.get("stage") in ("fill", "submit") else None
         what = f"пост {post}" if post else "поточний товар"

@@ -203,7 +203,7 @@ def test_export_reread_and_release_redirect(app, root):
     assert "Це не експорт каналу Telegram" in html(get(app, "/settings?msg=export_bad"))
     reread = post(app, "/listings/reread")
     assert location(reread) == "/settings?msg=reread_started"
-    assert "При наступному «Старт» робот спершу перечитає «Мої речі» — це додасть 5–10 хв." in html(
+    assert "«Мої речі» буде перечитано найближчим часом, поки робот вільний" in html(
         get(app, location(reread))
     )
     release = post(app, "/site/release-sold")
