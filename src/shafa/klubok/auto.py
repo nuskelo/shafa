@@ -8,7 +8,7 @@ import json
 import os
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 from shafa import config
@@ -20,7 +20,10 @@ AT_SETTING = (
 )
 AT_DEFAULT = "21:00"
 OFF = renew.OFF
-MARK = "klubok-auto.json"  # {"day", "at", "session"} — сьогодні вже запускали
+MARK = "klubok-auto.json"  # {"day", "at", "session", "dead", "tries"} — сьогодні вже запускали
+DEAD_AFTER = timedelta(minutes=3)  # KLB-018: процес без сесії і без замка стільки хвилин — помер
+RETRY_AFTER = timedelta(minutes=10)  # і повторний автостарт не раніше ніж за стільки
+MAX_TRIES = 5  # запусків на добу, після яких автостарт здається (щось ламається щоразу)
 CALM = ("done", "limit", "stop")  # як `publish._announce_end` і `bot.alerts.CALM`
 
 
@@ -65,15 +68,67 @@ def read_mark(folder: Path | None = None) -> dict | None:
 
 
 def marked_today(now: datetime, folder: Path | None = None) -> dict | None:
+    """Сьогоднішній запуск, що живий (сесія є чи ще може початись); мертвий — `dead_today`."""
     data = read_mark(folder)
-    return data if data and data.get("day") == f"{now:%Y-%m-%d}" else None
+    if data and data.get("day") == f"{now:%Y-%m-%d}" and not data.get("dead"):
+        return data
+    return None
+
+
+def dead_today(now: datetime, folder: Path | None = None) -> dict | None:
+    """KLB-018: сьогоднішній запуск, процес якого завершився, не відкривши сесії."""
+    data = read_mark(folder)
+    return data if data and data.get("day") == f"{now:%Y-%m-%d}" and data.get("dead") else None
+
+
+def tries_today(now: datetime, folder: Path | None = None) -> int:
+    data = read_mark(folder)
+    if not data or data.get("day") != f"{now:%Y-%m-%d}":
+        return 0
+    return int(data.get("tries") or 1)
 
 
 def write_mark(now: datetime, folder: Path | None = None, session: int | None = None) -> None:
     path = _path(folder)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"day": f"{now:%Y-%m-%d}", "at": now.isoformat(timespec="seconds"), "session": session}
+    tries = tries_today(now, folder) + 1 if session is None else tries_today(now, folder)
+    data = {"day": f"{now:%Y-%m-%d}", "at": now.isoformat(timespec="seconds"),
+            "session": session, "tries": tries}  # fmt: skip
     path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def release_dead(now: datetime, busy: bool, folder: Path | None = None) -> dict | None:
+    """KLB-018: день вважається закритим, лише коли сесія справді почалась. Процес запустили, а
+    сесії немає й робот уже вільний (він завершився: «Робот уже працює», немає входу…) — позначка
+    стає мертвою, автостарт може повторитись (`retry_wait`). Повертає мертву позначку чи None."""
+    data = marked_today(now, folder)
+    if not data or data.get("session") is not None or busy:
+        return None
+    try:
+        began = datetime.fromisoformat(data["at"])
+    except (KeyError, ValueError):
+        return None
+    if now - began < DEAD_AFTER:
+        return None
+    dead = {**data, "dead": True}
+    _path(folder).write_text(json.dumps(dead, ensure_ascii=False), encoding="utf-8")
+    return dead
+
+
+def retry_wait(now: datetime, folder: Path | None = None) -> str | None:
+    """Чому повторний автостарт ще не можна (мертвий запуск сьогодні), інакше None."""
+    dead = dead_today(now, folder)
+    if dead is None:
+        return None
+    if int(dead.get("tries") or 1) >= MAX_TRIES:
+        return f"процес {MAX_TRIES} разів завершився без сесії — далі лише кнопкою «Старт»"
+    try:
+        began = datetime.fromisoformat(dead["at"])
+    except (KeyError, ValueError):
+        return None
+    if now - began < RETRY_AFTER:
+        return "повтор не раніше ніж за 10 хв після попереднього запуску"
+    return None
 
 
 def attach_session(conn: sqlite3.Connection, now: datetime, folder: Path | None = None) -> None:
@@ -138,7 +193,14 @@ def loud_today(conn: sqlite3.Connection, now: datetime) -> str | None:
     ended = _local(row["ended_at"], now)
     if ended is None or ended.date() != now.date():
         return None
-    return row["stop_code"] if row["stop_code"] in klubok_publish.LOUD else None
+    code = row["stop_code"]
+    if code == klubok_publish.LOGIN:  # KLB-018: після нового входу цей стоп уже не заважає
+        from shafa.robot import klubok_control
+
+        logged = klubok_control._login_at()
+        if logged is not None and logged >= ended:
+            return None
+    return code if code in klubok_publish.LOUD else None
 
 
 # --- рядок панелі ---
