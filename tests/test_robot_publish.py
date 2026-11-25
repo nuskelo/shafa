@@ -105,6 +105,7 @@ class Env:
         self.today = datetime(2026, 10, 13, 12, 0).astimezone()
         self.presence = None  # SITE-002: {номер поста: present/gone/unknown}
         self.checked: list[int] = []
+        self.retry_after: int | None = None  # ROBOT-020: 429 — скільки просив зачекати Telegram
 
     def make_driver(self, session):
         self.driver = PubDriver(session, self.conn, self.results, self.raises, self.on_submit)
@@ -128,11 +129,16 @@ class Env:
                 self.tmp / "екрани", held, log=self.lines.append, sleep=sleep, clock=lambda: t[0],
                 rand=lambda a, b: (a + b) / 2, today=lambda: self.today,
                 presence=None if self.presence is None else self.check,
+                retry_after=lambda: self.retry_after,
             ).start(limit, day_limit)  # fmt: skip
 
     def check(self, post_id):
+        """Значення — рядок чи список відповідей по черзі (остання повторюється)."""
         self.checked.append(post_id)
-        return self.presence.get(post_id, "present")
+        answer = self.presence.get(post_id, "present")
+        if isinstance(answer, list):
+            answer = answer.pop(0) if len(answer) > 1 else answer[0]
+        return answer
 
 
 @pytest.fixture
@@ -974,14 +980,18 @@ def test_deleted_bot_post_archived_not_published(env):
     assert env.driver.submits == [Status.PUBLISHING]
 
 
-def test_unknown_presence_is_not_sold_published_as_usual(env):
+def test_unknown_presence_is_not_sold_not_published_blind(env):
+    """ROBOT-020: Telegram не відповів після повторів — не продаж, але й не публікуємо наосліп."""
     item = add(env)
     bot_post(env, 1342)
     env.presence = {1342: "unknown"}
 
-    env.run()
+    report = env.run()
 
-    assert state(env.conn, item)[0] == Status.PUBLISHED
+    assert state(env.conn, item) == (Status.APPROVED, None)  # не Проблема, не Архів
+    assert report.published == [] and env.driver.submits == []
+    assert report.deferred == [1342]
+    assert "Відкладено (Telegram не відповів): пости 1342" in report.text()
 
 
 def test_old_export_post_gone_archived_not_published(env):
@@ -996,14 +1006,112 @@ def test_old_export_post_gone_archived_not_published(env):
     assert report.published == [] and env.driver.submits == []
 
 
-def test_old_export_post_unknown_presence_published_as_usual(env):
+def test_old_export_post_unknown_presence_deferred(env):
     item = add(env)
     env.presence = {1342: "unknown"}
 
+    report = env.run()
+
+    assert env.checked == [1342] * publish.CHANNEL_ATTEMPTS
+    assert state(env.conn, item) == (Status.APPROVED, None)
+    assert report.deferred == [1342]
+
+
+def test_429_waits_retry_after_then_publishes(env):
+    """ROBOT-020: 429 «retry after 294» → чекаємо 294+5 с, питаємо знову, PRESENT → публікуємо."""
+    item = add(env)
+    env.presence = {1342: ["unknown", "present"]}
+    env.retry_after = 294
+
+    report = env.run()
+
+    assert env.checked == [1342, 1342]
+    assert state(env.conn, item)[0] == Status.PUBLISHED and report.deferred == []
+    assert sum(env.sleeps) >= 299 and sum(env.sleeps) < 299 + 2 * publish.TICK
+    assert any("просить зачекати 294" in line for line in env.lines)
+
+
+def test_429_wait_then_gone_archives(env):
+    item = add(env)
+    env.presence = {1342: ["unknown", "gone"]}
+    env.retry_after = 60
+
+    report = env.run()
+
+    assert state(env.conn, item) == (Status.ARCHIVED, "post_deleted")
+    assert report.published == [] and report.deferred == []
+
+
+def test_timeout_without_retry_after_retries_after_30_and_60_s(env):
+    item = add(env)
+    env.presence = {1342: ["unknown", "unknown", "present"]}
+
     env.run()
 
-    assert env.checked == [1342]
+    assert env.checked == [1342] * 3
     assert state(env.conn, item)[0] == Status.PUBLISHED
+    channel = [x for x in env.sleeps if x == publish.TICK]
+    assert len(channel) == (30 + 60) // publish.TICK  # паузи 30 і 60 с, потім публікація
+
+
+def test_429_three_times_defers_and_run_goes_on(env):
+    """ROBOT-020: 7370 і далі — Telegram мовчить на першому, наступний пост відповів."""
+    first = add(env, "1342", 1342, "2025-03-01T10:00:00")
+    second = add(env, "1400", 1400, "2025-05-01T10:00:00")
+    other_item(env, second)
+    env.presence = {1342: "unknown", 1400: "present"}
+    env.retry_after = 100
+
+    report = env.run()
+
+    assert state(env.conn, first) == (Status.APPROVED, None)
+    assert state(env.conn, second)[0] == Status.PUBLISHED
+    assert report.deferred == [1342] and report.code != "telegram_busy"
+    assert env.driver.submits == [Status.PUBLISHING]
+
+
+def test_total_channel_wait_over_20_min_stops_telegram_busy(env):
+    first = add(env, "1342", 1342, "2025-03-01T10:00:00")
+    second = add(env, "1400", 1400, "2025-05-01T10:00:00")
+    env.presence = {1342: "unknown", 1400: "unknown"}
+    env.retry_after = 674  # як у сесії 70: один рядок очікування вміщується, другий — ні
+
+    report = env.run()
+
+    assert report.code == "telegram_busy"
+    assert report.reason == "Telegram не відповідає — спробуйте «Старт» за годину"
+    assert state(env.conn, first) == (Status.APPROVED, None)
+    assert state(env.conn, second) == (Status.APPROVED, None)
+    assert report.published == [] and env.driver.submits == []
+    assert sum(env.sleeps) <= publish.CHANNEL_BUDGET + 2 * publish.TICK
+    last = env.conn.execute("SELECT stop_code FROM sessions").fetchone()[0]
+    assert last == "telegram_busy"
+
+
+def test_pause_during_channel_wait_holds_and_stop_ends(env):
+    item = add(env)
+    env.presence = {1342: ["unknown", "present"]}
+    env.retry_after = 100
+    seen = []
+
+    def sleep(seconds):
+        seen.append(publish.read_now().get("stage"))
+        if len(seen) == 1:
+            publish.request(env.conn, "pause")
+        elif len(seen) == 4:
+            publish.request(env.conn, "stop")
+
+    with lock.hold("publish", env.tmp / "robot.lock") as held:
+        run = publish.Run(
+            env.conn, env.root, env.session, env.make_driver, env.load, env.tmp, held,
+            log=env.lines.append, sleep=sleep, clock=lambda: 0.0, rand=lambda a, b: 0.0,
+            today=lambda: env.today, presence=env.check, retry_after=lambda: env.retry_after,
+        )  # fmt: skip
+        report = run.start(30, 30)
+
+    assert seen[0] == "wait_channel"
+    assert report.reason == "Стоп"  # Пауза під час очікування тримала, Стоп перервав
+    assert state(env.conn, item) == (Status.APPROVED, None)
 
 
 def test_known_gone_archived_without_presence_call(env):

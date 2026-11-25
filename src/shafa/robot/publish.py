@@ -28,7 +28,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from shafa import borh, catalog, config, dup, events, review, rules, variants
-from shafa.bot.presence import GONE
+from shafa.bot.presence import GONE, UNKNOWN
 from shafa.db import Status, now
 from shafa.fill import STALE_RULES
 from shafa.folders import PUBLISHED_DIR, base_name, is_old, item_folder, variant_size
@@ -75,6 +75,11 @@ STREAK_ROW = 3  # Карток з помилкою поспіль — схоже
 STREAK_SESSION = 5  # Карток з помилкою за сесію
 STREAK_TEXT = "{n} {what} не вдались ({codes}) — схоже, загальна причина. Скажіть Власнику"
 TICK = 5.0  # с: як часто під час паузи перевіряється Стоп
+CHANNEL_ATTEMPTS = 3  # перевірок каналу на Картку: перша й 2 повтори (ROBOT-020)
+CHANNEL_PAUSES = (30.0, 60.0)  # с перед повтором, коли Telegram мовчить без `retry_after`
+CHANNEL_MARGIN = 5.0  # с зверху до `retry_after` від Telegram
+CHANNEL_BUDGET = 20 * 60.0  # с: скільки за сесію разом чекаємо відповіді Telegram
+CHANNEL_BUSY = "Telegram не відповідає — спробуйте «Старт» за годину"
 SLEEP_JUMP = 60.0  # с: «тік» став довшим — ноутбук засинав
 NOW_NAME = "robot-now.json"  # UX-002: що робить сесія зараз — для панелі (лише читання екраном)
 ITEM_URL = "https://shafa.ua/uk/item/{id}-shafa"  # Шафа переводить на справжню адресу (301)
@@ -86,6 +91,9 @@ STALE_TEXT = (
 UNCERTAIN = (
     "Перевірте на Шафі, чи опубліковано: робот натиснув «Додати річ», але певної відповіді немає"
 )
+
+
+DEFERRED_TEXT = "  · Відкладено (Telegram не відповів): пости {posts}"
 
 
 def is_transient(error: BaseException) -> bool:
@@ -131,6 +139,9 @@ class Report:
     published: list[tuple[int | None, str]] = field(default_factory=list)  # (пост, посилання)
     problems: list[tuple[int | None, str, str]] = field(default_factory=list)  # (пост, код, текст)
     notes: list[str] = field(default_factory=list)
+    deferred: list[int] = field(
+        default_factory=list
+    )  # ROBOT-020: пости, яких Telegram не підтвердив
     reason: str = ""
     code: str = ""
 
@@ -144,6 +155,8 @@ class Report:
         lines += [f"  ✓ пост {post}: {url}" for post, url in self.published]
         lines += [f"  ! Пост {post}: {code} — {text}" for post, code, text in self.problems]
         lines += [f"  · {note}" for note in self.notes]
+        if self.deferred:
+            lines.append(DEFERRED_TEXT.format(posts=", ".join(str(n) for n in self.deferred)))
         return "\n".join(lines)
 
 
@@ -528,10 +541,13 @@ class Run:
         presence: Callable[[int], str] | None = None,
         judge: Callable[..., dup.Verdict] | None = None,
         load_declined: Callable[[Any], list[listings_mod.Listing]] | None = None,
+        retry_after: Callable[[], int | None] = lambda: None,
     ) -> None:
         self.conn, self.root, self.session = conn, root, session
         self.load_declined = load_declined  # ROBOT-011: лише вкладка «Відхилені» (None — не читати)
         self.presence = presence  # SITE-002: чи пост ще є в каналі (`bot.presence`)
+        self.retry_after = retry_after  # ROBOT-020: скільки секунд просив зачекати Telegram (429)
+        self._channel_spent = 0.0  # с очікування каналу за сесію
         self.judge = judge  # DUP-001: ШІ порівнює схоже оголошення з Карткою (`dup.Judge`)
         self.make_driver, self.load_listings = make_driver, load_listings
         self.screens, self.held, self.log = screens, held, log
@@ -585,6 +601,11 @@ class Run:
         text = (
             f"Сесія {report.session_id}: опубліковано {len(report.published)}, "
             f"у Проблемах {len(report.problems)}{span}"
+            + (
+                f" · відкладено (Telegram не відповів): {len(report.deferred)}"
+                if report.deferred
+                else ""
+            )
             + (f" · {reason[:1].lower() + reason[1:]}" if reason else "")
         )
         calm = report.code in ("done", "limit", "stop") or not (report.code or report.reason)
@@ -860,9 +881,13 @@ class Run:
         self, session_id: int, span: tuple[float, float] = PAUSE, stage: str = "pause"
     ) -> Stop | None:
         """Пауза людини між товарами (чи перед повтором); Стоп і сон ноутбука перериває її."""
-        left = self.rand(*span)
+        return self._countdown(session_id, self.rand(*span), stage)
+
+    def _countdown(self, session_id: int, left: float, stage: str, **fields: Any) -> Stop | None:
+        """Чекати `left` с: панель бачить `stage` і `until`; Пауза тримає, Стоп і сон ноутбука
+        перериває (ROBOT-020: так само чекаємо відповіді Telegram)."""
         until = (datetime.now(UTC) + timedelta(seconds=left)).isoformat(timespec="seconds")
-        self._write(session_id, stage, until=until)
+        self._write(session_id, stage, until=until, **fields)
         while left > 0:
             step = min(TICK, left)
             started = self.clock()
@@ -874,16 +899,52 @@ class Run:
                 return stop
         return None
 
-    def _post_deleted(self, report: Report, card: review.Card) -> bool:
+    def _channel(self, report: Report, card: review.Card) -> str | Stop:
+        """ROBOT-020: чи пост ще в каналі — `PRESENT`/`GONE`/`UNKNOWN`. Telegram не відповів (429,
+        таймаут, 5xx) — чекаємо й питаємо знову (до `CHANNEL_ATTEMPTS` разів): 429 — стільки, скільки
+        просить; інше — 30 і 60 с. Разом за сесію ≤ `CHANNEL_BUDGET`, далі — `Stop`."""
+        answer = UNKNOWN
+        for attempt in range(1, CHANNEL_ATTEMPTS + 1):
+            answer = self.presence(card.post_id)
+            if answer != UNKNOWN or attempt == CHANNEL_ATTEMPTS:
+                break
+            asked = self.retry_after()
+            wait = asked + CHANNEL_MARGIN if asked else CHANNEL_PAUSES[attempt - 1]
+            if self._channel_spent + wait > CHANNEL_BUDGET:
+                self.log(f"Пост {card.post_id}: Telegram не відповідає, очікування вичерпано "
+                         f"({round(self._channel_spent)} с з {round(CHANNEL_BUDGET)})")  # fmt: skip
+                return Stop("telegram_busy", CHANNEL_BUSY)
+            self.log(f"Пост {card.post_id}: Telegram не відповів"
+                     + (f" (просить зачекати {asked} с)" if asked else "")
+                     + f" — чекаю {round(wait)} с і перевіряю ще раз")  # fmt: skip
+            self._channel_spent += wait
+            stop = self._countdown(
+                report.session_id, wait, "wait_channel", post=card.post_id, asked=bool(asked)
+            )
+            if stop is not None:
+                return stop
+        return answer
+
+    def _post_deleted(self, report: Report, card: review.Card) -> bool | Stop:
         """SITE-002: пост видалено з каналу (вона видаляє лише продане) → Архів, не публікуємо.
         CORE-019: і старий пост з Експорту; `gone_at` від нічної перевірки — без запиту в Telegram.
-        «Невідомо» (мережа, 429) — публікуємо як завжди: це не продаж."""
+        ROBOT-020: «невідомо» після повторів (мережа, 429) — не публікуємо наосліп: Картка лишається
+        Схваленою до наступної сесії (`report.deferred`); `Stop` — Стоп чи вичерпане очікування."""
         if card.post_id is None:
             return False
-        if not known_gone(self.conn, card.post_id) and (
-            self.presence is None or self.presence(card.post_id) != GONE
-        ):
-            return False
+        if not known_gone(self.conn, card.post_id):
+            if self.presence is None:
+                return False
+            answer = self._channel(report, card)
+            if isinstance(answer, Stop):
+                return answer
+            if answer == UNKNOWN:
+                report.deferred.append(card.post_id)
+                self.log(f"Пост {card.post_id}: Telegram не підтвердив, що пост є в каналі — "
+                         "Картка лишається Схваленою, до наступної сесії")  # fmt: skip
+                return True
+            if answer != GONE:
+                return False
         if review.archive_gone(self.conn, card.post_id):
             report.notes.append(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві")
             self.log(f"Пост {card.post_id}: {POST_DELETED_TEXT} — у Архіві, не публікую")
@@ -1017,8 +1078,8 @@ class Run:
             self._problem(report, card, ok, "already_published",
                           f"Цей пост уже опубліковано з іншої папки ({other})")  # fmt: skip
             return None
-        if self._post_deleted(report, card):
-            return None
+        if (gone := self._post_deleted(report, card)) is not False:
+            return gone if isinstance(gone, Stop) else None
         version = self.conn.execute(
             "SELECT rules_version FROM items WHERE id = ?", (card.id,)
         ).fetchone()[0]
