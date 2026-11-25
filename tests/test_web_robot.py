@@ -148,7 +148,7 @@ def test_login_button_after_logout(conn, root, app, spawner):
             "INSERT INTO sessions (started_at, ended_at, stop_code) VALUES ('x', 'y', 'login')"
         )
     page = html(get(app, "/review"))
-    assert "Увійти на Шафу" in page and "увійдіть, як завжди" in page
+    assert "Увійти на Шафу" in page and "Шафа вийшла з вашого акаунта" in page
     assert location(post(app, "/robot", action="login", back="/review")).endswith("msg=robot_login")
     assert spawner.calls == [["--login"]]
 

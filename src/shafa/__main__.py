@@ -291,6 +291,11 @@ def build_parser() -> argparse.ArgumentParser:
     cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
     mode.add_argument("--login", action="store_true", help="відкрити профіль робота для входу")
+    mode.add_argument(
+        "--login-check",
+        action="store_true",
+        help="ROBOT-019: чи не злетів вхід на Шафу (лише читання /uk/new, без вікна)",
+    )
     mode.add_argument("--sync-catalog", action="store_true", help="оновити знімок довідників")
     mode.add_argument("--dry-fill", action="store_true", help="заповнити форму, не публікувати")
     mode.add_argument("--publish", action="store_true", help="ОПУБЛІКУВАТИ схвалені на Шафі")
@@ -419,7 +424,9 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         parser.error(f"--post від 1 до {form.MAX_CARDS} разів")
 
     mode = next(
-        m for m in ("login", "sync_catalog", "dry_fill", "publish", "rehearse") if getattr(args, m)
+        m
+        for m in ("login", "login_check", "sync_catalog", "dry_fill", "publish", "rehearse")
+        if getattr(args, m)
     )
     try:  # замок — до профілю Chrome і до будь-яких змін у базі (D1)
         held = lock.acquire(mode.replace("_", "-"))
@@ -443,12 +450,15 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
     with sync_playwright() as p:
         if args.fake_shafa:
             return _fake_publish(p, args, held, root, limit, day_limit, log)
+        if args.login_check:
+            return _login_check(p, log)
         if args.login:
             print("Увійдіть на Шафу у відкритому вікні й закрийте його.", flush=True)
             why = browser.wait_for_manual_login(p)
             control.mark_login()  # UX-002: вікно закрито — «Старт» знову доступний
             print({"closed": "Вікно закрито.", "done": "Вікно закрито кнопкою «Я увійшов».",
                    "timeout": "15 хв минуло — вікно закрито."}[why], flush=True)  # fmt: skip
+            _login_check(p, log)  # ROBOT-019: одразу перевіряємо — панель зеленіє сама
             return 0
         cards = None
         if args.rehearse:  # Картки — до Chrome: порожній прогін вікна не відкриває
@@ -604,6 +614,8 @@ def thumbs_dir(db_path: Path) -> Path:
 
 
 def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from shafa.robot import control
+
     root = _root(parser, args)
     if not args.db.is_file():
         parser.error(f"Базу не знайдено: {args.db}")
@@ -618,7 +630,7 @@ def run_ui(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         conn.close()
     app = web.App(
         args.db, root, cache_dir, channel_id=config.setting("TELEGRAM_CHANNEL_ID"),
-        fake_shafa=args.fake_shafa,
+        fake_shafa=args.fake_shafa, login_probe=None if args.fake_shafa else control.probe_login,
     )  # fmt: skip
     server = web.make_server(app, args.port)
     app.klubok_sync.start()  # KLB-010: хвилі й черга Клубку — у фоні
@@ -816,6 +828,29 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
             server.close()
         if temp is not None:
             temp.cleanup()
+
+
+def _login_check(playwright, log, make_session=None) -> int:
+    """ROBOT-019: чи не злетів вхід на Шафу. 0 — вхід є; 1 — злетів; 2 — Шафа не відповіла
+    (нічого не записано). Без бази, headless: лише відкриває `/uk/new` і дивиться, куди веде."""
+    from datetime import datetime
+
+    from shafa.robot import browser, login_check
+
+    try:
+        session = (make_session or (lambda: browser.Session(playwright, headless=True)))()
+    except Exception as error:  # noqa: BLE001 — Chrome не відкрився: це не «вхід злетів»
+        log(f"Шафа: вхід не перевірено — {type(error).__name__}: {error}")
+        return 2
+    try:
+        outcome = login_check.check_once(session, datetime.now().astimezone())
+    finally:
+        session.close()
+    if outcome.ok is None:
+        log(f"Шафа: вхід не перевірено — {outcome.why}")
+        return 2
+    log("Шафа: вхід є" if outcome.ok else f"Шафа: вхід злетів — {outcome.why}")
+    return 0 if outcome.ok else 1
 
 
 def _klubok_login_check(args: argparse.Namespace, log) -> int:

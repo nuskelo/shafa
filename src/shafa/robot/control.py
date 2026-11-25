@@ -17,7 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from shafa import config
-from shafa.robot import lock, publish, rehearse
+from shafa.robot import lock, login_check, publish, rehearse
 
 ITEM_MINUTES = 4  # орієнтовно: стільки триває один товар (форма + фото + клік)
 POST_MINUTES = 3  # орієнтовно: стільки хвилин на пост разом із паузою, поки нема власних вимірів
@@ -33,6 +33,7 @@ TEXTS = {
     "paused": "Робот на паузі — нічого не робить. «Продовжити» або «Стоп».",
     "stopping": "Стоп: чекаю, поки допишеться поточний товар",
     "login_needed": "Робот не увійшов на Шафу — потрібно увійти",
+    "checking": "Перевіряю вхід на Шафу… за кілька секунд робот запуститься сам",
     "login_open": "Відкрито вікно входу на Шафу — увійдіть і закрийте вікно (або кнопка нижче)",
     "rehearsing": "Йде пробна перевірка: форма заповнюється, але нічого не публікується",
     "busy": "Робот зайнятий іншою справою (Власник щось перевіряє)",
@@ -119,6 +120,7 @@ class State:
     plan: int | None = None  # скільки Карток у плані поточної сесії
     handled: int = 0  # скільки з них оброблено
     left_text: str = ""  # «1 год 20 хв» — скільки ще; порожньо на паузі й коли менше хвилини
+    login_ok: str = ""  # ROBOT-019: «Вхід є — можна «Старт»» після вікна входу й перевірки
 
     @property
     def groups_text(self) -> str:
@@ -182,6 +184,33 @@ def _login_at() -> datetime | None:
         return datetime.fromisoformat(login_path().read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
+
+
+def _login_lost(last: sqlite3.Row | None, now: datetime) -> bool:
+    """Вхід на Шафу злетів: остання сесія зупинилась кодом `login` (і вікно входу після неї не
+    закривали, а свіжіша перевірка не показала «вхід є») або рання перевірка (ROBOT-019) каже, що
+    вхід злетів, і вікно входу після неї не закривали."""
+    login_at = _login_at()
+    if login_check.store.failed(login_at):
+        return True
+    if last is None or last["stop_code"] != "login":
+        return False
+    ended = _stamp(last["ended_at"], now)
+    if login_at is not None and login_at >= (ended or login_at):
+        return False
+    found = login_check.store.read()
+    return not (found is not None and found[1] and ended is not None and found[0] >= ended)
+
+
+def login_ok_note(now: datetime) -> str:
+    """«Вхід є — можна «Старт»» — коли перевірка після вікна входу щойно підтвердила вхід."""
+    found = login_check.store.read()
+    login_at = _login_at()
+    if found is None or not found[1] or login_at is None or found[0] < login_at:
+        return ""
+    if now - found[0] > timedelta(hours=2):
+        return ""
+    return "Вхід є — можна «Старт»."
 
 
 def pause_path() -> Path:
@@ -455,11 +484,7 @@ def state(
         code = "crashed"  # сесія відкрита, а замок вільний — процес помер
     elif failed:
         code = "failed"
-    elif (
-        last is not None
-        and last["stop_code"] == "login"
-        and not ((at := _login_at()) is not None and at >= (_stamp(last["ended_at"], now) or at))
-    ):
+    elif _login_lost(last, now):
         code = "login_needed"
     else:
         code = "stopped"
@@ -597,7 +622,21 @@ def state(
         int(last["problems"] or 0) if last is not None else 0,
         idle_note, queue_today, eta, progress, doing, previous, mini, never_logged and idle, details,
         eta_cards, eta_span, plan_n, handled_n, left_text,
+        login_ok_note(now) if can_start else "",
     )  # fmt: skip
+
+
+PROBE_TIMEOUT = 45  # с: «Старт» чекає перевірку входу найдовше стільки
+
+
+def probe_login(timeout: float = PROBE_TIMEOUT) -> None:
+    """ROBOT-019: запустити `robot --login-check` і дочекатись (результат — у `login-check.json`).
+    Замок зайнятий чи Chrome не відкрився — процес сам скаже в журналі; «Старт» вирішує файл."""
+    process = spawn(["--login-check"])
+    try:
+        process.wait(timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
 
 
 def log_line(text: str, log: Path | None = None) -> None:

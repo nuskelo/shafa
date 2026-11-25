@@ -75,6 +75,7 @@ KINDS = {
     "klubok.sold_failed": Kind("⚠️", loud=True),  # KLB-005: «продано» не підтвердилось
     "klubok.dup_stop": Kind("⚠️"),  # KLB-011: Клубок відповів 429/403 — перевірку дублів зупинено
     "klubok.login": Kind("🔑", loud=True),  # KLB-018: вхід у Клубок злетів — потрібно увійти
+    "shafa.login": Kind("🔑", loud=True),  # ROBOT-019: вхід на Шафу злетів — потрібно увійти
     "klubok.photos": Kind("🖼"),  # KLB-012: фото постів бота з Експорту обговорення (тихо)
     "klubok.linked": Kind("🔗"),  # KLB-016: її оголошення ↔ пости за фото (`klubok-link`), тихо
     # пости каналу (`scan.py`, `changes.py`, `robot/publish.py`, `site.py`)
