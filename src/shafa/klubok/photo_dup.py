@@ -87,13 +87,11 @@ def distance(a: int, b: int) -> int:
 
 
 def our_photos(card: Card, root: Path) -> list[Path]:
-    """Усі фото Картки (порядок Картки, ≤ 15, лише наявні) + запасне фото поста з Експорту."""
+    """Усі фото Картки (порядок Картки, ≤ 15, лише наявні) + запасні фото поста з Експорту."""
     folder = photo_folder(root, card.folder_name)
     found = [folder / p.file_name for p in card.photos][: fields.PHOTOS_MAX]
     found = [p for p in found if p.is_file()]
-    spare = fields.spare_photo(card.post_id)
-    if spare is not None and spare not in found:
-        found.append(spare)
+    found += [p for p in fields.spare_photos(card.post_id) if p not in found]
     return found
 
 

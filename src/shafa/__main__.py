@@ -32,6 +32,10 @@ KLB-008: старі пости хвилі в чергу Клубку (етало
 `python -m shafa klubok-link --export <тека Експорту> [--dry-run] [--db …] [--root …]` — KLB-016: її
 активні оголошення на Клубку ↔ пости каналу за фото (`post_id` лише в порожнє, група перепосту —
 `<дані>/klubok-link.json`); `--dry-run` — копія бази в пам'яті, нічого не пише (≤ 60 рядків).
+`python -m shafa klubok-photos --chat <Експорт обговорення> --channel <Експорт каналу> [--dry-run] [--db …]
+[--root …]` — KLB-012: фото пар бота (пост + її відповіді з фото в групі обговорення) →
+`<дані>/klubok-old/<N>/1.jpg…` для Карток, чиї фото стерто (`klubok_no_photos`); потім черга
+перераховується; `--dry-run` — копія бази в пам'яті, нічого не пише (≤ 40 рядків).
 `python -m shafa robot --klubok-login` — KLB-003: вхід у Клубок руками (профіль `<дані>/klubok-profile`);
 `--klubok-snapshot --db …` — знімок її оголошень (лише читання сайту); `--klubok-publish --db … --root …
 --limit N [--post P] [--human-click]` — ПУБЛІКАЦІЯ на Клубку з черги (живий сайт, лише з дозволу
@@ -273,6 +277,16 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--dry-run", action="store_true", help="лише звіт, нічого не пише")
     cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
     cmd.add_argument("--photos", type=Path, help=argparse.SUPPRESS)  # тека кешу мініатюр
+    _add_root(cmd)
+    cmd = commands.add_parser(
+        "klubok-photos", help="фото пар бота з Експорту групи обговорення → Клубок (KLB-012)"
+    )
+    cmd.add_argument(
+        "--chat", type=Path, required=True, help="Експорт обговорення (або result.json)"
+    )
+    cmd.add_argument("--channel", type=Path, required=True, help="Експорт каналу (або result.json)")
+    cmd.add_argument("--dry-run", action="store_true", help="лише звіт, нічого не пише")
+    cmd.add_argument("--db", type=Path, help="файл бази (за замовчуванням — база програми)")
     _add_root(cmd)
     cmd = commands.add_parser("robot", help="робот Шафи")
     mode = cmd.add_mutually_exclusive_group(required=True)
@@ -1284,6 +1298,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_klubok_dups(parser, args)
     if args.command == "klubok-link":
         return run_klubok_link(parser, args)
+    if args.command == "klubok-photos":
+        return run_klubok_photos(parser, args)
     if args.command == "robot":
         return run_robot(parser, args)
     if args.command == "bot":
@@ -1486,6 +1502,46 @@ def run_klubok_link(parser: argparse.ArgumentParser, args: argparse.Namespace) -
         conn.close()
     print("\n".join(report.lines()))
     return 1 if report.stopped else 0
+
+
+def run_klubok_photos(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    from datetime import datetime
+
+    from shafa import app
+    from shafa.export import read_channel
+    from shafa.klubok import chatphotos, preview, queue, refresh
+
+    chat_file = args.chat / "result.json" if args.chat.is_dir() else args.chat
+    channel_file = args.channel / "result.json" if args.channel.is_dir() else args.channel
+    for label, file in (("обговорення", chat_file), ("каналу", channel_file)):
+        if not file.is_file():
+            parser.error(f"Експорт {label} не знайдено: {file}")
+    root = _root(parser, args)
+    path = args.db or app.db_path()
+    if not path.is_file():
+        parser.error(f"Базу не знайдено: {path}")
+    try:
+        channel_id, posts = read_channel(channel_file)  # KLB-010 (N1): лише Експорт Каналу
+        chat = chatphotos.read_discussion(chat_file.read_bytes(), channel_id)
+    except ExportError as error:
+        print(error)
+        return 2
+    try:
+        conn = preview.open_copy(path) if args.dry_run else db.connect(path)
+    except (preview.CopyError, RuntimeError) as error:
+        print(error)
+        return 2
+    try:
+        report = chatphotos.run(conn, posts, chat, chat_file.parent, root, write=not args.dry_run)
+        if not args.dry_run and report.done():  # черга одразу актуальна
+            report.refreshed = refresh.refresh(conn, root, datetime.now().astimezone())
+    except queue.SetupError as error:
+        print(error)
+        return 2
+    finally:
+        conn.close()
+    print("\n".join(report.lines()))
+    return 0
 
 
 def run_import_old(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:

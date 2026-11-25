@@ -95,6 +95,13 @@ def read_channel_export(path: Path) -> dict[int, Post]:
     return parse_export(raw)
 
 
+def read_channel(path: Path) -> tuple[int | None, dict[int, Post]]:
+    """KLB-012: як `read_channel_export`, але ще й id Каналу з файла (для звірки з обговоренням)."""
+    raw = path.read_bytes()
+    check_chat(raw)
+    return _norm(json.loads(raw.decode("utf-8-sig")).get("id")), parse_export(raw)
+
+
 def parse_export(raw: bytes) -> dict[int, Post]:
     """Вміст `result.json` → пости. Не експорт каналу — ExportError."""
     try:

@@ -2418,7 +2418,7 @@ class App:
             first = card.photos[0].file_name
             if self._photo_file(card.folder_name, first, card.status):
                 return "disk"
-        return "spare" if klubok_fields.spare_photo(card.post_id) else None
+        return "spare" if klubok_fields.spare_photos(card.post_id) else None
 
     def photo(self, kind: str, item_id: int, position: int, spare: bool = False) -> Response:
         """Фото лише з папок Карток у базі: шлях будується з бази, не із запиту.
@@ -2440,7 +2440,7 @@ class App:
         if row is not None:
             path = self._photo_file(row["folder_name"], row["file_name"], row["status"])
         if path is None and spare and post is not None:
-            path = klubok_fields.spare_photo(post["post_id"])
+            path = next(iter(klubok_fields.spare_photos(post["post_id"])), None)  # перше
         if path is None:
             return text(404, "Фото не знайдено")
         try:
