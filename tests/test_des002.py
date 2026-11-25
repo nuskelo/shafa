@@ -107,6 +107,10 @@ ROBOTS = {
         "login_needed", buttons=["start", "login"], why_not="Спершу увійдіть на Шафу"
     ),
     "login-open": robot("login_open", buttons=["login_done"]),
+    "reading": robot(  # UX-009: фонове читання «Мої речі» — «Старт» дочекається його
+        "reading", buttons=["start"], text="Перечитую ваші оголошення на Шафі: 820 з ~1650"
+    ),
+    "waiting-reading": robot("waiting_reading", text="Читання оголошень ще йде", buttons=[]),
     "running": working(
         progress="Публікує: 4 з 19 на сьогодні · працює 18 хв · ще ≈ 1 год 20 хв",
         doing="Зараз: пост 6979 — заповнює форму",

@@ -234,7 +234,10 @@ MESSAGES = {
     "settings_saved": "Збережено. Робот візьме нові ліміти при наступному «Старт»; решта діє одразу.",
     "settings_root": "Збережено. Нова папка діятиме для бота після перезапуску програми: "
     "«Вийти» і відкрити ярликом знову.",
-    "reread_started": "При наступному «Старт» робот спершу перечитає «Мої речі» — це додасть 5–10 хв.",
+    "reread_started": "«Мої речі» буде перечитано найближчим часом, поки робот вільний (5–10 хв): "
+    "«Старт» тоді почекає. Не вийде у фоні — перечитає при «Старт».",
+    "robot_waiting_reading": "Робот ще читає ваші оголошення — він почне публікувати сам, щойно "
+    "закінчить (кілька хвилин)",
     "sold_released": "Добре: «Продано» для {n} пар надішле бот, поки програма відкрита.",
     "sold_none": "Відкладених «Продано» немає.",
     "export_bad": "Це не експорт каналу Telegram (потрібен файл result.json)",
@@ -515,6 +518,9 @@ class App:
         # ROBOT-019: перед «Старт» — свіжа перевірка входу (`control.probe_login`); немає — як було
         self.login_probe = login_probe
         self.login_checking = False  # іде перевірка входу після «Старт» (панель: «Перевіряю…»)
+        # UX-009: «Старт» натиснуто під час фонового читання «Мої речі» — чекаємо його кінця
+        self.start_waiting = False
+        self.reading_poll = 5.0  # с між перевірками замка, поки чекаємо читання
         self.root = root
         self.cache_dir = cache_dir
         self.port = port
@@ -1260,6 +1266,10 @@ class App:
             conn, self.lock_file, starting=starting, failed=failed, spawned=self.spawned_at,
             never_logged=not self.fake_shafa and not _logged_in(),
         )  # fmt: skip
+        if self.start_waiting and state.code == "reading":  # UX-009
+            state.code, state.text = "waiting_reading", control.TEXTS["waiting_reading"]
+            state.can_start, state.buttons = False, []
+            state.why_not, state.why_code = control.TEXTS["waiting_reading"], "busy"
         if self.login_checking:  # ROBOT-019: «Старт» натиснуто, перевіряємо вхід — не мовчимо
             state.code, state.text = "checking", control.TEXTS["checking"]
             state.can_start, state.buttons = False, []
@@ -1295,6 +1305,10 @@ class App:
                     return redirect(f"{back}{sep}msg=robot_cannot_start{'_' + why if why else ''}")
                 args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
                 args += ["--fake-shafa"] if self.fake_shafa else []
+                if state.code == "reading" and not self.fake_shafa:  # UX-009: чекаємо кінця читання
+                    self.start_waiting = True
+                    self.run(lambda: self._start_after_reading(args))
+                    return redirect(f"{back}{sep}msg=robot_waiting_reading")
                 if not self.fake_shafa:
                     verdict = self._login_verdict()
                     if verdict is False:
@@ -1355,6 +1369,27 @@ class App:
     def _login_verdict(self) -> bool | None:
         """ROBOT-019: True — вхід є, False — злетів, None — свіжої (≤ 30 хв) перевірки немає."""
         return login_check.store.verdict(datetime.now().astimezone(), control._login_at())
+
+    def _start_after_reading(self, args: list[str]) -> None:
+        """UX-009: фонове читання «Мої речі» тримає замок — чекаємо його кінця (≤ `READING_WAIT`) і
+        запускаємо публікацію. Замок узяв хтось інший — не запускаємо (панель покаже, хто)."""
+        try:
+            deadline = time.monotonic() + READING_WAIT
+            while (
+                (busy := lock.busy(self.lock_file)) is not None
+                and busy.get("mode") == listings_mod.LOCK_MODE
+                and time.monotonic() < deadline
+            ):
+                time.sleep(self.reading_poll)
+        finally:
+            self.start_waiting = False
+        if lock.busy(self.lock_file) is not None:
+            return
+        if self._login_verdict() is None and self.login_probe is not None:
+            self.login_checking = True
+            self._check_then_start(args)
+        elif self._login_verdict() is not False:
+            self._spawn(args)
 
     def _check_then_start(self, args: list[str]) -> None:
         """Фон після «Старт»: свіжої перевірки входу немає — просимо нову (headless, кілька секунд);
@@ -3014,6 +3049,7 @@ def attention(card: review.Card) -> Attention | None:
 
 ROBOT_TONES = {  # кружечок плитки «Робот»: ok — працює, idle — стоїть, warn — увага, bad — помилка
     "running": "ok", "starting": "ok", "pausing": "ok", "stopping": "ok", "rehearsing": "ok",
+    "reading": "ok", "waiting_reading": "ok",  # UX-009
     "stopped": "idle", "paused": "idle",
     "login_needed": "warn", "login_open": "warn", "busy": "warn", "busy_klubok": "idle",
     "crashed": "bad", "failed": "bad",
@@ -3261,6 +3297,9 @@ def local_time(stamp: str | None) -> str:
         return datetime.fromisoformat(stamp).astimezone().strftime("%d.%m.%Y %H:%M")
     except ValueError:
         return stamp
+
+
+READING_WAIT = 30 * 60  # с: «Старт» чекає фонове читання «Мої речі» найдовше стільки
 
 
 def _logged_in() -> bool:

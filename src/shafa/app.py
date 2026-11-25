@@ -21,10 +21,14 @@ from shafa.robot import (
     klubok_control,
     klubok_login_check,
     klubok_renew,
+    listings,
     lock,
     login_check,
     publish,
     rehearse,
+)
+from shafa.robot import (
+    listings_watch as listings_watch_mod,
 )
 
 LOCK_NAME = "ui.lock"
@@ -139,6 +143,26 @@ def shafa_login_watch() -> login_check.Watch:
     )
 
 
+def listings_watch(path: Path) -> listings_watch_mod.Watch:
+    """UX-009: «Мої речі» перечитуються заздалегідь у фоні, коли знімок ось-ось застаріє."""
+
+    def due() -> bool:
+        conn = db.connect(path)
+        try:
+            return listings.due_soon(conn)
+        finally:
+            conn.close()
+
+    return listings_watch_mod.Watch(
+        command=lambda: ["--listings-refresh", "--db", str(path)],
+        spawn=control.spawn,
+        busy=lock.busy,
+        log=control.log_line,
+        due=due,
+        ready=web._logged_in,  # чиста установка: профілю немає — Chrome не відкриваємо
+    )
+
+
 def klubok_login_watch() -> klubok_login_check.Watch:
     """KLB-018: чи не злетів вхід у Клубок — при старті й раз на добу перед «Обновить все»."""
     return klubok_login_check.Watch(
@@ -219,6 +243,9 @@ def start(
         ).start()
         threading.Thread(
             target=shafa_login_watch().run, args=(night_stop,), daemon=True, name="shafa-login"
+        ).start()
+        threading.Thread(
+            target=listings_watch(path).run, args=(night_stop,), daemon=True, name="shafa-listings"
         ).start()
         threading.Thread(
             target=klubok_login_watch().run, args=(night_stop,), daemon=True, name="klubok-login"

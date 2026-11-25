@@ -329,7 +329,7 @@ def test_reread_listings_button(conn, app):
     assert "На Шафі у вас 1 товар (перечитано" in page
     assert "Як часто перечитувати «Мої речі» на Шафі, днів" in page
     response = post(app, "/listings/reread")
-    assert "робот спершу перечитає «Мої речі»" in html(get(app, location(response)))
+    assert "«Мої речі» буде перечитано найближчим часом" in html(get(app, location(response)))
     assert listings.stored(conn, 7) is None
     assert "ще не прочитано" in html(get(app, "/settings"))
 

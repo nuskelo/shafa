@@ -296,6 +296,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="ROBOT-019: чи не злетів вхід на Шафу (лише читання /uk/new, без вікна)",
     )
+    mode.add_argument(
+        "--listings-refresh",
+        action="store_true",
+        help="UX-009: перечитати «Мої речі» у фоні (headless, лише читання), поки робот вільний",
+    )
     mode.add_argument("--sync-catalog", action="store_true", help="оновити знімок довідників")
     mode.add_argument("--dry-fill", action="store_true", help="заповнити форму, не публікувати")
     mode.add_argument("--publish", action="store_true", help="ОПУБЛІКУВАТИ схвалені на Шафі")
@@ -406,6 +411,8 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         root = _root(parser, args)
         if args.db is None or not args.db.is_file():
             parser.error(f"Базу не знайдено: {args.db}")
+    if args.listings_refresh and (args.db is None or not args.db.is_file()):
+        parser.error(f"Базу не знайдено: {args.db}")
     if args.publish:
         try:
             day_limit = publish.daily_limit()
@@ -425,7 +432,15 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     mode = next(
         m
-        for m in ("login", "login_check", "sync_catalog", "dry_fill", "publish", "rehearse")
+        for m in (
+            "login",
+            "login_check",
+            "listings_refresh",
+            "sync_catalog",
+            "dry_fill",
+            "publish",
+            "rehearse",
+        )
         if getattr(args, m)
     )
     try:  # замок — до профілю Chrome і до будь-яких змін у базі (D1)
@@ -452,6 +467,8 @@ def _with_browser(args, held, root, limit: int, day_limit: int) -> int:
             return _fake_publish(p, args, held, root, limit, day_limit, log)
         if args.login_check:
             return _login_check(p, log)
+        if args.listings_refresh:
+            return _listings_refresh(p, args, log)
         if args.login:
             print("Увійдіть на Шафу у відкритому вікні й закрийте його.", flush=True)
             why = browser.wait_for_manual_login(p)
@@ -851,6 +868,60 @@ def _login_check(playwright, log, make_session=None) -> int:
         return 2
     log("Шафа: вхід є" if outcome.ok else f"Шафа: вхід злетів — {outcome.why}")
     return 0 if outcome.ok else 1
+
+
+def _listings_refresh(playwright, args: argparse.Namespace, log, make_session=None) -> int:
+    """UX-009: перечитати «Мої речі» окремо від сесії публікації (замок `listings`, headless, лише
+    читання крізь `guard`). 0 — знімок оновлено; 1 — вхід злетів; 2 — не вдалось (знімок старий,
+    сесія публікації прочитає сама). Результат спроби — `listings-bg.json`."""
+    from datetime import datetime
+
+    from shafa.robot import browser, listings, login_check
+
+    def done(ok: bool, why: str = "") -> None:
+        stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        listings.write_state(listings.BG_LAST, {"at": stamp, "ok": ok, "why": why})
+        listings.clear_state(listings.BG_NOW)
+
+    conn = db.connect(args.db)
+    try:
+        listings.write_state(listings.BG_NOW, {"read": 0, "expected": 0})  # до Chrome: панель знає
+        try:
+            session = (make_session or (lambda: browser.Session(playwright, headless=True)))()
+        except Exception as error:  # noqa: BLE001 — Chrome не відкрився
+            log(f"Мої речі: не прочитано — {type(error).__name__}: {error}")
+            done(False, "Chrome не відкрився")
+            return 2
+        try:
+            outcome = login_check.check_once(session, datetime.now().astimezone())
+            if outcome.ok is not True:
+                why = outcome.why or "Шафа не відповіла"
+                log(f"Мої речі: не прочитано — {why}")
+                done(False, why)
+                return 1 if outcome.ok is False else 2
+            reading = listings.Reading(
+                listings.snapshot_info(conn)[0],
+                lambda **fields: listings.write_state(listings.BG_NOW, fields),
+            )
+            reading(0)
+            try:
+                with listings.progress_to(reading):
+                    found = listings.load(session, log=log)
+            except listings.ListingsError as error:
+                log(f"Мої речі: не прочитано — {error}")
+                done(False, str(error))
+                return 2
+            listings.store(conn, found)
+            log(f"Мої речі: прочитано {len(found)} — знімок оновлено")
+            done(True)
+            return 0
+        finally:
+            session.close()
+    except Exception as error:
+        done(False, f"{type(error).__name__}: {error}")
+        raise
+    finally:
+        conn.close()
 
 
 def _klubok_login_check(args: argparse.Namespace, log) -> int:

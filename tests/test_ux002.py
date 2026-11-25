@@ -121,14 +121,14 @@ def test_running_shows_now_progress_and_last(env, tmp_path):
     def sleep(seconds):
         if not seen:
             began = (datetime.now(UTC) - timedelta(minutes=6)).isoformat()
-            with env.conn:  # сесія йде вже 6 хв: один пост — 6 хв, лишився ще один
+            with env.conn:  # сесія йде вже 6 хв (UX-009: після одного поста темп — типові 3 хв)
                 env.conn.execute("UPDATE sessions SET started_at = ?", (began,))
             seen.append(control.state(env.conn, tmp_path / "robot.lock", day_limit=30))
 
     run_probed(env, sleep)
     s = seen[0]
     assert s.code == "running"
-    assert s.progress == "Публікує: 1 з 2 на сьогодні · працює 6 хв · ще ≈ 6 хв"
+    assert s.progress == "Публікує: 1 з 2 на сьогодні · працює 6 хв · ще ≈ 3 хв"
     assert s.doing.startswith("Пауза між товарами (як людина) — наступний за ~")
     assert s.previous == "Останній: пост 1342 — опубліковано ✓"
     assert s.mini.startswith("Робот: 1 з 2")
