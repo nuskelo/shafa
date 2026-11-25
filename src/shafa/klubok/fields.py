@@ -11,7 +11,7 @@ from pathlib import Path
 
 from shafa import catalog as shafa_catalog
 from shafa import rules
-from shafa.folders import SPARE_PHOTO, klubok_spare, photo_folder
+from shafa.folders import klubok_spare, list_photos, photo_folder
 from shafa.klubok import catalog, category
 from shafa.review import Card
 
@@ -137,12 +137,16 @@ def sex_for(post_text: str | None, path: str | None = None) -> int:
     return {"girls": SEX_GIRL, "boys": SEX_BOY}.get(rules.said_gender(post_text or ""), SEX_ANY)
 
 
-def spare_photo(post_id: int | None) -> Path | None:
-    """KLB-008 (R5): запасне фото поста з Експорту (`<дані>/klubok-old/<N>/1.jpg`) або None."""
+def spare_photos(post_id: int | None) -> list[Path]:
+    """KLB-008 (R5) / KLB-012: запасні фото поста з Експорту — усі `.jpg` теки
+    `<дані>/klubok-old/<N>/` за номером (1, 2, … — «як у провіднику»), не більше `PHOTOS_MAX`;
+    порожній список, коли теки чи фото немає."""
     if post_id is None:
-        return None
-    path = klubok_spare(post_id) / SPARE_PHOTO
-    return path if path.is_file() else None
+        return []
+    folder = klubok_spare(post_id)
+    if not folder.is_dir():
+        return []
+    return [folder / name for name in list_photos(folder)][:PHOTOS_MAX]
 
 
 def klubok_price(card: Card) -> int | None:
@@ -196,12 +200,12 @@ def ad(card: Card, root: Path) -> KlubokAd | Skip:
     photos = tuple(folder / p.file_name for p in card.photos)[:PHOTOS_MAX]
     missing = [p.name for p in photos if not p.is_file()]
     if not photos or missing:
-        spare = spare_photo(card.post_id)  # KLB-008 (R5): одне фото поста з Експорту
-        if spare is None:
+        spare = spare_photos(card.post_id)  # KLB-008 (R5), KLB-012: фото поста з Експорту
+        if not spare:
             return Skip(
                 "klubok_no_photos", "Немає фото: " + (", ".join(missing) or "папка порожня")
             )
-        photos = (spare,)
+        photos = tuple(spare)
 
     return KlubokAd(
         item_id=card.id,

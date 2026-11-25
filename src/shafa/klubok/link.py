@@ -207,9 +207,7 @@ def post_photos(
                 "SELECT file_name FROM photos WHERE item_id = ? ORDER BY position", (item_id,)
             )
         ]
-        spare = fields.spare_photo(post_id)
-        if spare is not None:
-            files.append(spare)
+        files += fields.spare_photos(post_id)
         known = out.setdefault(post_id, [])
         known += [f for f in files if f not in known]
     return out

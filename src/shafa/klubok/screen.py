@@ -375,8 +375,8 @@ def ad_view(card: Card, root: Path) -> AdView:
         lines += [_color(card), Line("Бренд", result.brand or "—")]
         spare = (  # N4: запасне фото — лише в еталона Шафи; у «лише Клубок» це її власне фото
             not card.only_klubok
-            and len(result.photos) == 1
-            and result.photos[0] == fields.spare_photo(card.post_id)
+            and bool(result.photos)
+            and list(result.photos) == fields.spare_photos(card.post_id)
         )
         return AdView(lines, text=result.text, photos=[p.name for p in result.photos], spare=spare)
     # не піде: показуємо, що відомо, і причину жовтим
