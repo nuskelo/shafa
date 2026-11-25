@@ -485,3 +485,16 @@ def test_failed_start_hides_raw_log_line_under_details(app, conn, root, tmp_path
     assert "Робот не запустився." in page
     summary_at = page.index("Детальніше")
     assert page.index("Traceback: щось сире") > summary_at  # сирий рядок — лише під «Детальніше»
+
+
+def test_panel_says_telegram_asks_to_wait_while_checking_channel(conn, lock_file):
+    """ROBOT-020: `wait_channel` — «Telegram просить зачекати N хв», а не мовчазна пауза."""
+    session(conn)
+    until = (NOW + timedelta(seconds=299)).isoformat(timespec="seconds")
+    publish.write_now(1, "wait_channel", post=7370, until=until, asked=True, plan=3, handled=0)
+    with lock.hold("publish", lock_file):
+        s = state(conn, lock_file)
+    assert s.doing == "Telegram просить зачекати ~5 хв — перевіряю, чи пост ще в каналі"
+    publish.write_now(1, "wait_channel", post=7370, until=until, asked=False, plan=3, handled=0)
+    with lock.hold("publish", lock_file):
+        assert "Telegram не відповів" in state(conn, lock_file).doing
