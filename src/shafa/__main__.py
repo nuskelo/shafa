@@ -290,6 +290,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="KLB-003: увійти в Клубок руками (окремий профіль)",
     )
     mode.add_argument(
+        "--klubok-login-check",
+        action="store_true",
+        help="KLB-018: чи не злетів вхід у Клубок (лише читання /item/add, без вікна)",
+    )
+    mode.add_argument(
         "--klubok-snapshot", action="store_true",
         help="KLB-003: перечитати її оголошення на Клубку (лише читання)",
     )  # fmt: skip
@@ -369,7 +374,7 @@ def run_robot(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
         parser.error("--klubok-id лише з --klubok-confirm")
     if (
         args.klubok_login or args.klubok_snapshot or args.klubok_publish or args.klubok_renew
-        or args.klubok_marksold
+        or args.klubok_marksold or args.klubok_login_check
     ):  # fmt: skip
         return run_klubok(parser, args)
     if args.klubok_dry_fill or args.fake_klubok:
@@ -690,6 +695,8 @@ def run_klubok(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int
         parser.error("--fake-klubok не для входу")
     if args.klubok_login:
         mode = "klubok-login"
+    elif args.klubok_login_check:
+        mode = "klubok-login-check"
     elif args.klubok_snapshot:
         mode = "klubok-snapshot"
     elif args.klubok_renew:
@@ -724,7 +731,7 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
         with sync_playwright() as p:
             print("Увійдіть у Клубок у відкритому вікні й закрийте його.", flush=True)
             why = browser.wait_for_manual_login(
-                p, profile=klubok_form.profile_dir(), url=klubok_form.FORM_URL
+                p, profile=klubok_form.profile_dir(), url=klubok_form.LOGIN_URL
             )
         print({"closed": "Вікно закрито.", "done": "Вікно закрито кнопкою «Я увійшов».",
                "timeout": "15 хв минуло — вікно закрито."}[why], flush=True)  # fmt: skip
@@ -732,6 +739,9 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
 
         klubok_control.mark_login()  # KLB-010: «треба увійти» на панелі знімається
         return 0
+
+    if args.klubok_login_check:
+        return _klubok_login_check(args, log)
 
     stop: list[bool] = []
 
@@ -790,6 +800,36 @@ def _klubok_with_browser(args: argparse.Namespace, root: Path | None) -> int:
             server.close()
         if temp is not None:
             temp.cleanup()
+
+
+def _klubok_login_check(args: argparse.Namespace, log) -> int:
+    """KLB-018: чи не злетів вхід. 0 — вхід є; 1 — злетів; 2 — сайт не відповів (нічого не записано).
+    Без бази, без вікна (headless): лише відкриває `/item/add` і дивиться, куди Клубок веде."""
+    from datetime import datetime
+
+    from playwright.sync_api import sync_playwright
+
+    from shafa.robot import klubok_fake, klubok_form, klubok_login_check
+
+    server = klubok_fake.Server() if args.fake_klubok else None
+    try:
+        with sync_playwright() as p:
+            if server is not None:
+                session: klubok_form.Session = klubok_fake.FakeSession(p, server.base)
+            else:
+                session = klubok_form.LiveSession(p, headless=True)
+            try:
+                outcome = klubok_login_check.check_once(session, datetime.now().astimezone())
+            finally:
+                session.close()
+    finally:
+        if server is not None:
+            server.close()
+    if outcome.ok is None:
+        log(f"Клубок: вхід не перевірено — {outcome.why}")
+        return 2
+    log("Клубок: вхід є" if outcome.ok else f"Клубок: вхід злетів — {outcome.why}")
+    return 0 if outcome.ok else 1
 
 
 def _klubok_renew(conn, session, human: bool, log) -> int:

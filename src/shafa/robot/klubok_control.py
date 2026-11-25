@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from shafa import config
-from shafa.klubok import auto, queue, renew, snapshot
+from shafa.klubok import auto, login, queue, renew, snapshot
 from shafa.robot import control, klubok_publish, lock
 
 LOG_NAME = "klubok-run.log"
@@ -295,8 +295,10 @@ def state(
         and not (
             (at := _login_at()) is not None and at >= (control._stamp(last["ended_at"], now) or at)
         )
-    ):
-        code = "login_needed"  # KLB-010 (F4): жовте «треба увійти», як у Шафи
+    ) or login.failed(_login_at()):
+        code = (
+            "login_needed"  # KLB-010 (F4): жовте «треба увійти»; KLB-018: і за ранньою перевіркою
+        )
     else:
         code = "stopped"
 

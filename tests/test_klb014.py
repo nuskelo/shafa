@@ -112,6 +112,7 @@ def test_once_a_day(conn, robot):
     a, spawned, _lines, _busy, clock = robot
     session(conn, "shafa", NOW - timedelta(minutes=5))
     assert a.tick() == "started"
+    session(conn, "klubok", NOW, started=NOW)  # KLB-018: день закрито, коли сесія справді почалась
     clock["now"] += timedelta(hours=3)  # і 21:00 настало, і ще одна сесія Шафи
     session(conn, "shafa", clock["now"] - timedelta(minutes=1))
     assert a.tick() is None and len(spawned) == 1

@@ -15,7 +15,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 from shafa import config, db, events, fill, photos, places, review, web
-from shafa.robot import control, klubok_auto, klubok_control, klubok_renew, lock, publish, rehearse
+from shafa.robot import (
+    control,
+    klubok_auto,
+    klubok_control,
+    klubok_login_check,
+    klubok_renew,
+    lock,
+    publish,
+    rehearse,
+)
 
 LOCK_NAME = "ui.lock"
 URL_NAME = "ui.url"
@@ -118,6 +127,16 @@ def klubok_daily(path: Path) -> klubok_renew.Daily:
     )
 
 
+def klubok_login_watch() -> klubok_login_check.Watch:
+    """KLB-018: чи не злетів вхід у Клубок — при старті й раз на добу перед «Обновить все»."""
+    return klubok_login_check.Watch(
+        command=lambda: ["--klubok-login-check"],
+        spawn=lambda args: control.spawn(args, log=klubok_control.log_path()),
+        busy=lock.busy,
+        log=control.log_line,
+    )
+
+
 def klubok_auto_start(path: Path) -> klubok_auto.Auto:
     """KLB-014: Клубок виставляє сам — після сесії Шафи чи о `SHAFA_KLUBOK_AUTO_AT` (21:00)."""
     root = root_dir()
@@ -127,6 +146,7 @@ def klubok_auto_start(path: Path) -> klubok_auto.Auto:
         busy=lock.busy,
         log=control.log_line,
         connect=lambda: db.connect(path),
+        check=lambda: control.spawn(["--klubok-login-check"], log=klubok_control.log_path()),
     )
 
 
@@ -184,6 +204,9 @@ def start(
         ).start()
         threading.Thread(
             target=klubok_daily(path).run, args=(night_stop,), daemon=True, name="klubok-renew"
+        ).start()
+        threading.Thread(
+            target=klubok_login_watch().run, args=(night_stop,), daemon=True, name="klubok-login"
         ).start()
         threading.Thread(
             target=klubok_auto_start(path).run, args=(night_stop,), daemon=True, name="klubok-auto"
