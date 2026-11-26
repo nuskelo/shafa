@@ -12,9 +12,9 @@ from typing import Any
 
 from PIL import UnidentifiedImageError
 
-from shafa import ai, catalog, events, review, rules, scan, variants
+from shafa import ai, catalog, events, hints, review, rules, scan, variants
 from shafa.db import Status, now
-from shafa.folders import item_folder
+from shafa.folders import is_old, item_folder
 from shafa.photos import PreparedPhoto, prepare
 from shafa.robot.plan import precheck
 from shafa.scan import NO_SECTION_TEXT
@@ -88,14 +88,15 @@ def _money(micro: int) -> str:
 
 
 def _spent_note(conn: sqlite3.Connection) -> str:
-    """« (сьогодні 1,20 $ з 3 $)»; налаштування зіпсовані — без дужок."""
+    """« · сьогодні 1,20 $ з 3 $»; налаштування зіпсовані — порожньо."""
     from shafa import batch
 
     try:
         today = datetime.now().astimezone()
-        return f" (сьогодні {_money(batch.spent_today(conn, today))} з {_money(batch.limits().daily_micro_usd)})"
+        spent, limit = batch.spent_today(conn, today), batch.limits().daily_micro_usd
     except Exception:  # noqa: BLE001 — підсумок для журналу не ламає ШІ
         return ""
+    return f" · сьогодні {_money(spent)} з {_money(limit)}"
 
 
 def tally_text(conn: sqlite3.Connection, tally: Tally) -> str:
@@ -111,20 +112,32 @@ def tally_text(conn: sqlite3.Connection, tally: Tally) -> str:
     parts = [
         f"{n} {word}"
         for n, word in (
-            (tally.ready, "готові до перевірки"),
-            (tally.yellow, "з жовтим"),
-            (tally.problems, "у Проблемах"),
+            (tally.ready, "готові"),
+            (tally.yellow, "з жовтим (перевірте жовті поля)"),
+            (tally.problems, "у Проблемах (відкрийте «Проблеми»)"),
         )
         if n
     ]
-    return f"ШІ закінчив: {events.cards(tally.total)} — {', '.join(parts)} · {cost}" + _spent_note(
-        conn
-    )
+    spent = f" · витрачено {_money(tally.cost_micro)}" + _spent_note(conn)
+    text = f"ШІ закінчив: {events.cards(tally.total)} — {', '.join(parts)}{spent}"
+    if tally.ready or tally.yellow:  # BOT-019: наступний крок — її робота, тож гучно й з порадою
+        text += f"\n{hints.REVIEW[:1].upper()}{hints.REVIEW[1:]}."
+    return text
 
 
 def _in_problems(conn: sqlite3.Connection, item_id: int) -> bool:
     row = conn.execute("SELECT status FROM items WHERE id = ?", (item_id,)).fetchone()
     return bool(row) and row[0] == Status.PROBLEM
+
+
+def start_text(planned: list[Planned], tail: str = "") -> str:
+    """BOT-019: «ШІ почав аналіз: 30 Карток (нових 20, старих 10) · оцінка ≈ 1,55 $»."""
+    old = sum(1 for p in planned if is_old(p.folder_name))
+    cost = sum(p.estimate.cost_micro_usd for p in planned)
+    return (
+        f"ШІ почав аналіз: {events.cards(len(planned))} (нових {len(planned) - old}, старих {old})"
+        f" · оцінка ≈ {_money(cost)}{tail}"
+    )
 
 
 def announce(conn: sqlite3.Connection, results: list[Filled]) -> None:
@@ -133,7 +146,12 @@ def announce(conn: sqlite3.Connection, results: list[Filled]) -> None:
         return
     errors = [r for r in results if r.error]
     if len(errors) == len(results):  # ключ, ліміт, зв'язок: жодна Картка не заповнилась
-        events.emit("ai.stop", f"ШІ не відповів ({events.cards(len(results))}): {errors[0].error}")
+        key = str(errors[0].error).startswith(ai.KEY_TEXT)
+        events.emit(
+            "ai.stop",
+            f"ШІ не відповів ({events.cards(len(results))}): {errors[0].error}",
+            data={"hint": "ai_key" if key else "ai_failed"},
+        )
         return
     tally = Tally()
     for r in results:
@@ -142,14 +160,14 @@ def announce(conn: sqlite3.Connection, results: list[Filled]) -> None:
             r.folder_name, yellow=bool(r.yellow), problem=problem,
             cost=r.usage.cost_micro_usd if r.usage else 0,
         )  # fmt: skip
-    events.emit("ai.done", tally_text(conn, tally))
+    events.emit("ai.done", tally_text(conn, tally), loud=tally.total > 1)  # BOT-019
 
 
 def fill_all(conn: sqlite3.Connection, client: Any, planned: list[Planned]) -> list[Filled]:
     """Звичайні запити по одному (CLI `fill`) з подіями для журналу: «почав» (якщо Карток кілька),
     «закінчив». Картка з бота сама — лише одним рядком наприкінці."""
     if len(planned) > 1:
-        events.emit("ai.start", f"ШІ почав аналіз: {events.cards(len(planned))}")
+        events.emit("ai.start", start_text(planned))
     results = [fill(conn, client, p) for p in planned]
     announce(conn, results)
     return results

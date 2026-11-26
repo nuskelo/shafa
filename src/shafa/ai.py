@@ -262,10 +262,13 @@ def call(client: Any, request: dict[str, Any]) -> tuple[dict[str, Any], Usage]:
     return parse(message)
 
 
+KEY_TEXT = "Ключ ШІ не приймається"
+
+
 def error_text(error: anthropic.AnthropicError) -> str:
     """Помилка API простими словами, без тексту відповіді (там може бути що завгодно)."""
     if isinstance(error, anthropic.AuthenticationError):
-        return "Ключ ШІ не приймається — скажіть Власнику"
+        return f"{KEY_TEXT} — скажіть Власнику"
     if isinstance(error, anthropic.RateLimitError):
         return "Забагато запитів до ШІ — спробуйте пізніше"
     if isinstance(error, anthropic.APIStatusError):
