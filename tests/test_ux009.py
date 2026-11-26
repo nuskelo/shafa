@@ -268,6 +268,22 @@ def test_watch_lock_not_taken_is_not_an_attempt_and_retries_on_next_tick(tmp_pat
     assert w.tick() == "started" and len(spawned) == 2
 
 
+def test_watch_stops_forgiving_after_five_silent_exits(tmp_path):
+    """Процес щоразу виходить з кодом 2, нічого не записавши, — це не «зайнято», а поломка:
+    після `FORGIVE_MAX` спроб чекаємо годину, а не запускаємо процес щохвилини."""
+    spawned, clock = [], [NOW]
+    w = listings_watch.Watch(
+        command=lambda: ["--listings-refresh"], spawn=lambda a: spawned.append(a) or Exited(2),
+        busy=lambda: None, log=lambda _: None, due=lambda: True, clock=lambda: clock[0],
+        folder=tmp_path, delay=timedelta(0),
+    )  # fmt: skip
+    for minute in range(listings_watch.FORGIVE_MAX + 1):
+        clock[0] = NOW + timedelta(minutes=minute)
+        assert w.tick() == "started"
+    clock[0] += timedelta(minutes=1)
+    assert w.tick() is None and len(spawned) == listings_watch.FORGIVE_MAX + 1
+
+
 def test_watch_real_failed_attempt_still_waits_an_hour(tmp_path):
     """Код 2, але процес записав спробу в `listings-bg.json` (Chrome не відкрився) — це спроба."""
     spawned, clock = [], [datetime.now().astimezone()]

@@ -23,6 +23,7 @@ from shafa.robot import listings, login_check
 
 TICK = 60.0
 RETRY = timedelta(hours=1)  # спроба фонового читання — не частіше
+FORGIVE_MAX = 5  # скільки разів поспіль «не взяв замок» прощаємо; далі це вже справжня спроба
 START_DELAY = timedelta(
     minutes=4
 )  # UX-010: після `login_check.START_DELAY` (2 хв), не разом із нею
@@ -49,6 +50,7 @@ class Watch:
         self.born = clock()
         self.last: datetime | None = None
         self.process: object | None = None  # UX-010: останній запущений `--listings-refresh`
+        self.forgiven = 0  # скільки спроб поспіль не взяли замок
         self.said: set[str] = set()
 
     def _say(self, key: str, text: str) -> None:
@@ -63,8 +65,10 @@ class Watch:
         if self.last is None or poll is None or poll() != 2:
             return
         tried = listings.last_attempt()
-        if tried is None or tried < self.last:
-            self.last = None
+        if (tried is None or tried < self.last) and self.forgiven < FORGIVE_MAX:
+            self.last, self.forgiven = None, self.forgiven + 1
+        else:
+            self.forgiven = 0
         self.process = None
 
     def tick(self) -> str | None:
