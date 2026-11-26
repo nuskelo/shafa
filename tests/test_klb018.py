@@ -296,6 +296,20 @@ def test_watch_daily_before_renew(tmp_path, monkeypatch):
     assert w.tick() is None and len(spawned) == 1
 
 
+def test_watch_check_is_19_00_whatever_the_renew_setting(tmp_path, monkeypatch):
+    """KLB-019: `SHAFA_KLUBOK_RENEW_AT` — не час; перевірка входу щодня о 19:00, `off` — немає."""
+    monkeypatch.setenv("SHAFA_KLUBOK_RENEW_AT", "23:30")
+    w, spawned, _lines, state = make_watch(tmp_path, NOW.replace(hour=9))
+    w.tick()
+    spawned.clear()
+    login.write(True, state["now"], folder=tmp_path)
+    state["now"] = NOW.replace(hour=19, minute=0)
+    assert w.tick() == "started"
+    monkeypatch.setenv("SHAFA_KLUBOK_RENEW_AT", "off")
+    state["now"] = NOW.replace(day=NOW.day + 1, hour=19, minute=5)
+    assert w.tick() is None and len(spawned) == 1
+
+
 def test_watch_silent_when_klubok_off(tmp_path, monkeypatch):
     monkeypatch.delenv(queue.FLAG)
     w, spawned, *_ = make_watch(tmp_path, NOW)
