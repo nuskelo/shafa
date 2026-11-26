@@ -531,6 +531,51 @@ def test_client_thread_exchanges_and_runs_owner_commands(conn, root, sconn, sroo
     assert conn.execute("SELECT done_at FROM owner_cmds").fetchone()[0]
 
 
+class DownSsh(FakeSsh):
+    """Сервер недоступний (ssh код 255); після `after` спроб зупиняє потік."""
+
+    def __init__(self, sconn, sroot, stop, after):
+        super().__init__(sconn, sroot)
+        self.stop, self.after, self.fail = stop, after, "give"
+
+    def give(self, after):
+        try:
+            return super().give(after)
+        finally:
+            if len(self.calls) >= self.after:
+                self.stop.set()
+
+
+def test_server_down_keeps_program_alive_and_never_writes_to_telegram(
+    conn, root, sconn, sroot, server, upd, tmp_path, monkeypatch, chats, on_server
+):  # fmt: skip
+    """QA-005 (17): ssh код 255 кілька обмінів поспіль — потік жив, помилка в базі (панель каже
+    «на сервері, зв'язку немає»), у Telegram нічого не пішло: ні Вікторії, ні Власнику."""
+    monkeypatch.setenv(bot_run.TOKEN, "123:abc")
+    monkeypatch.setenv(report.SETTING, "off")
+    home = FakeTelegram()
+    home.close = lambda: None
+    stop, now, logs = threading.Event(), [datetime.now().astimezone()], []
+
+    def tick():
+        now[0] += client.EVERY + timedelta(minutes=1)  # кожен тік — час нового обміну
+        return now[0]
+
+    ssh = DownSsh(sconn, sroot, stop, after=4)
+    worker = client.Client(
+        tmp_path / "база.sqlite", root, ssh=ssh, telegram=lambda token: home, clock=tick,
+        log=logs.append, start_site=False,
+    )  # fmt: skip
+    monkeypatch.setattr(client, "TICK", 0.0)
+
+    worker.run(stop)  # повертається сам, коли `stop` — потік не впав від помилок
+
+    assert len(ssh.calls) >= 4 and all(c.startswith("give") for c in ssh.calls)
+    assert sum("Обмін із сервером: ssh: код 255" in t for t in logs) >= 4
+    assert client.link(conn).error.startswith("ssh: код 255") and client.link(conn).ok_at is None
+    assert [c for c in home.calls if c[0] in ("sendMessage", "sendPhoto")] == []  # без спаму
+
+
 def test_start_does_nothing_without_server_setting(tmp_path, root):
     assert client.start(tmp_path / "база.sqlite", root) is None
 
