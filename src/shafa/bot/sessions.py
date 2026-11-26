@@ -29,6 +29,7 @@ LIVE_CODES = {
     "klubok": {"running", "pausing", "paused", "stopping", "snapshot"},
 }
 MAX_UTF16 = 3800  # у повідомленні — запас до ліміту Telegram (4096)
+MAX_ENTITIES = 95  # Telegram приймає ≤ 100 сутностей на повідомлення, зайві мовчки губить (QA-005)
 LINE_MAX = 300  # символів на один рядок підсумку
 SECTION_MAX = 120  # рядків в одному блоці; решта — «ще N у програмі»
 NOTE_SKIP = ("Видалено з", "Прибрано фото")  # службові примітки робота — не для людини
@@ -111,12 +112,15 @@ def pack(head: str, sections: list[Section], silent: bool = False) -> list[Messa
         while lines:
             sep = "\n\n" if draft.text else ""
             cost = u16(draft.text) + len(sep) + u16(title) + 1
+            entities = len(draft.entities) + 1  # блок — одна сутність, кожне посилання — ще одна
             count = 0
             for line in lines:
                 size = u16(_plain(line)) + 1
-                if cost + size > MAX_UTF16:
+                links = sum(1 for piece in line if not isinstance(piece, str))
+                if cost + size > MAX_UTF16 or entities + links > MAX_ENTITIES:
                     break
                 cost += size
+                entities += links
                 count += 1
             if count == 0 and draft.text:
                 flush()
@@ -247,10 +251,6 @@ def span_text(row: sqlite3.Row, moment: datetime) -> str:
     return control.span(max((end - start).total_seconds() / 60, 0))
 
 
-def _lower(text: str) -> str:
-    return text[:1].lower() + text[1:]
-
-
 def is_calm(row: sqlite3.Row) -> bool:
     code = row["stop_code"] or ""
     if row["site"] == "klubok":
@@ -353,7 +353,9 @@ def summary(
     lines = [head, facts]
     if why := reason(row):
         tail = f" (код: {row['stop_code']})" if owner and not calm and row["stop_code"] else ""
-        lines.append(f"причина: {_lower(why)}{tail}")
+        lines.append(f"причина: {why}{tail}")
+    if not calm and (advice := advice_of(row)):  # QA-005: кожна зупинка — з «Що робити»
+        lines.append(advice)
     return pack(report.scrub("\n".join(lines)), sections, silent=not calm)
 
 
