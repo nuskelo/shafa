@@ -113,7 +113,7 @@ def buttons(row: sqlite3.Row) -> list[list[dict]]:
             return [[_button("🔁 Перевірити ще раз", RECHECK, row)]]
         case "duplicate":
             return [
-                [_button("✅ Різні пари", DIFFERENT, row), _button("🗄 Дубль", ARCHIVE, row)],
+                [_button("Це інший товар", DIFFERENT, row), _button("В архів", ARCHIVE, row)],
             ]
         case "declined":
             link = shafa_link(row["shafa_url"])

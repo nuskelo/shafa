@@ -311,3 +311,12 @@ def test_ai_stop_for_key_and_budget_get_advice(conn, data, tg, make_bot):
 def test_budget_warning_has_advice(conn):
     assert "Що робити:" in hints.advice(hints.EVENTS["ai_budget"])
     assert batch.dollars(1_000_000) == "1,00 $"
+
+
+def test_duplicate_buttons_are_named_as_in_the_hint(conn, root):
+    """Кнопки Власника в боті = назви з кроків підказки `possible_duplicate` (і з екрана)."""
+    steps_names = re.findall(r"«([^»]+)»", " ".join(hints.PROBLEMS["possible_duplicate"].do))
+    row = {"id": 1, "problem_code": "possible_duplicate", "shafa_id": None, "shafa_url": None}
+    names = [b["text"] for line in actions.buttons(row) for b in line]
+    assert names == ["Це інший товар", "В архів"]
+    assert set(names) <= set(steps_names)

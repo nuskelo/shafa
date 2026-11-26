@@ -126,7 +126,7 @@ def test_duplicate_alert_sends_album_and_two_buttons(conn, data, tg, make_bot, r
     assert methods == ["sendMediaGroup", "sendMessage"]  # альбом, потім текст із кнопками
     [(_, files, reply_to)] = tg.albums
     assert len(files) == 2 and reply_to is None
-    assert [b["text"] for b in buttons(last_markup(tg))] == ["✅ Різні пари", "🗄 Дубль"]
+    assert [b["text"] for b in buttons(last_markup(tg))] == ["Це інший товар", "В архів"]
 
 
 def test_duplicate_without_photos_still_has_buttons(conn, data, tg, make_bot):
@@ -283,7 +283,7 @@ def test_archive_needs_confirmation(conn, data, tg, make_bot):
     [edit] = edits(tg)
     assert [b["text"] for b in buttons(edit["markup"])] == ["Так, в архів", "Ні, назад"]
     tap(bot, tg, f"an:{item_id}:possible_duplicate")
-    assert [b["text"] for b in buttons(edits(tg)[0]["markup"])] == ["✅ Різні пари", "🗄 Дубль"]
+    assert [b["text"] for b in buttons(edits(tg)[0]["markup"])] == ["Це інший товар", "В архів"]
     assert one(conn, "201")["status"] == Status.PROBLEM
     tap(bot, tg, f"ay:{item_id}:possible_duplicate")
     assert one(conn, "201")["status"] == Status.ARCHIVED
