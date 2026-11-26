@@ -1,7 +1,7 @@
 """QA-005 (частина B): `alerts-preview` шле зразок кожного виду повідомлень, нічого не чіпаючи."""
 
 import os
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -142,3 +142,151 @@ def test_cli_takes_token_only_from_environment_not_from_dotenv(real_data, monkey
 
     assert cli.main(["alerts-preview", "--chat", "5"]) == 2
     assert "TELEGRAM_BOT_TOKEN" in capsys.readouterr().err and called == []
+
+
+# --- Правки за живим переглядом (тестовий бот) ---
+
+import re
+
+from shafa import fill, hints
+from shafa.bot.telegram import NO_PREVIEW
+
+
+def lines_of(tg):
+    return [line for text in texts(tg) for line in text.split("\n")]
+
+
+def test_no_problem_line_repeats_itself(real_data, fake):
+    """Було: «…не знайдено на формі Шафи, скріншот збережено» тричі в одному рядку."""
+    run(fake)
+    for line in lines_of(fake):
+        words = line.split()
+        grams = [tuple(words[i : i + 4]) for i in range(len(words) - 3)]
+        assert len(grams) == len(set(grams)), line
+
+
+def blocks(message):
+    """(текст блоку, чи він цілий усередині `expandable_blockquote`) для кожного блоку після шапки."""
+    text, entities = message["text"], message.get("entities") or []
+    quotes = [(e["offset"], e["offset"] + e["length"]) for e in entities
+              if e["type"] == "expandable_blockquote"]  # fmt: skip
+    found, offset = [], 0
+    for number, chunk in enumerate(text.split("\n\n")):
+        if number:  # перший шматок — шапка
+            start = offset
+            found.append((chunk, any(a <= start and start + sessions.u16(chunk) <= b
+                                     for a, b in quotes)))  # fmt: skip
+        offset += sessions.u16(chunk) + 2
+    return found
+
+
+def test_every_block_of_every_message_is_expandable_and_entities_fit(real_data, fake):
+    """Було: «Проблеми (24)» — суцільний текст у першому повідомленні, бо після 120 посилань
+    «Виставлених» Telegram губив сутності понад 100."""
+    run(fake)
+    long = [p for m, p in fake.calls if m == "sendMessage" and "сесія 2 завершена" in p["text"]]
+    assert long
+    parts = [p for m, p in fake.calls if m == "sendMessage" and p["text"].startswith("Проблеми")]
+    for message in [*long, *parts]:
+        assert len(message["entities"]) <= 100 and sessions.u16(message["text"]) <= 4096
+        for chunk, inside in blocks(message):
+            assert inside, chunk[:60]
+    assert len([*long, *parts]) >= 2  # довгий підсумок справді розбито
+
+
+def test_pack_keeps_entities_under_telegram_limit_with_many_links():
+    links = [
+        [
+            f"• Пост {n}",
+        ]
+        for n in range(0)
+    ]
+    section = sessions.Section(
+        "Виставлені (120)",
+        [["• ", (f"Пост {n}", f"https://shafa.ua/uk/item/{n}")] for n in range(120)],
+    )
+    problems = sessions.Section("Проблеми (3)", [[f"• рядок {n}"] for n in range(3)])
+    messages = sessions.pack("шапка", [section, problems])
+    assert links == [] and len(messages) >= 2
+    for message in messages:
+        assert len(message.entities) <= sessions.MAX_ENTITIES + 1
+        assert {e["type"] for e in message.entities} >= {"expandable_blockquote"}
+    assert sum(1 for m in messages for e in m.entities if e["type"] == "text_link") == 120
+
+
+def test_links_in_bot_messages_never_open_a_preview():
+    import httpx2
+
+    from shafa.bot.telegram import Telegram
+
+    seen = []
+
+    def handler(request):
+        import json
+
+        seen.append((request.url.path.rsplit("/", 1)[-1], json.loads(request.content)))
+        return httpx2.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    tg = Telegram("1:x", httpx2.Client(transport=httpx2.MockTransport(handler)))
+    tg.send_message(1, "https://shafa.ua/uk/item/1")
+    tg.edit_text(1, 2, "https://klubok.com/item-1")
+    assert [(m, body["link_preview_options"]) for m, body in seen] == [
+        ("sendMessage", NO_PREVIEW), ("editMessageText", NO_PREVIEW),
+    ]  # fmt: skip
+    assert NO_PREVIEW == {"is_disabled": True}
+
+
+def stopped(conn, site, code, reason="x"):
+    with conn:
+        cursor = conn.execute(
+            "INSERT INTO sessions (started_at, ended_at, stop_code, stop_reason, site) "
+            "VALUES ('2026-11-26T10:00:00+00:00', '2026-11-26T10:30:00+00:00', ?, ?, ?)",
+            (code, reason, site),
+        )
+    return conn.execute("SELECT * FROM sessions WHERE id = ?", (cursor.lastrowid,)).fetchone()
+
+
+def test_every_stop_of_shafa_and_klubok_says_what_to_do(conn):
+    """Було: Клубок/капча — без «Що робити». Тепер кожна зупинка (не спокійна), що має кроки в
+    `hints.py`, каже їх і в ⛔, і в підсумку."""
+    from datetime import datetime
+
+    checked = 0
+    for site, table in (("shafa", hints.STOPS), ("klubok", hints.KLUBOK_STOPS)):
+        for code, hint in table.items():
+            row = stopped(conn, site, code)
+            if sessions.is_calm(row) or not hint.do:
+                continue
+            for owner in (True, False):
+                assert "Що робити" in sessions.stop_text(row, owner), (site, code)
+            summary = sessions.summary(conn, row, datetime.now().astimezone(), None, True)[0].text
+            assert "Що робити" in summary, (site, code)
+            checked += 1
+    assert checked >= 8  # пройшли справжні таблиці, а не порожні цикли
+
+
+def test_stop_reason_is_taken_as_is_with_its_capital_letter(conn):
+    from datetime import datetime
+
+    for site, code, expected in (
+        ("shafa", "telegram_busy", "причина: Telegram не відповідає"),
+        ("klubok", "klubok_captcha", "причина: Клубок не прийняв"),
+    ):
+        row = stopped(conn, site, code)
+        text = sessions.summary(conn, row, datetime.now().astimezone(), None, False)[0].text
+        assert expected in text, text
+
+
+def test_ai_today_includes_what_was_just_spent(conn):
+    tally = fill.Tally(ready=5, cost_micro=410_000)
+    # запити ще не лягли в базу — «сьогодні» все одно не менше за щойно витрачене
+    assert "витрачено 0,41 $ · сьогодні 0,41 $ з 3 $" in fill.tally_text(conn, tally)
+    # лягли — рахуємо один раз, не двічі
+    with conn:
+        conn.execute(
+            "INSERT INTO ai_requests (model, input_tokens, output_tokens, cost_micro_usd, "
+            "created_at) VALUES ('m', 1, 1, 410000, ?)",
+            (datetime.now(UTC).isoformat(timespec="seconds"),),
+        )
+    text = fill.tally_text(conn, tally)
+    assert "витрачено 0,41 $ · сьогодні 0,41 $ з 3 $" in text and re.search(r"0,41", text)
