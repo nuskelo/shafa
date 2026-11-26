@@ -174,8 +174,11 @@ def listings(conn, *dates, read=NOW):
 
 
 def test_status_lines(conn, tmp_path):
-    listings(conn, at(1.5), at(3))
-    assert renew.status(conn, NOW, tmp_path).line.startswith("Обновить все: наступне 26.11 о ")
+    listings(conn, at(1.5), at(1.5) + timedelta(minutes=3), at(3))
+    soon = renew.status(conn, NOW, tmp_path).line
+    assert soon.startswith("Обновить все: наступне ≈ 26.11 о ") and soon.endswith(
+        "(2)"
+    )  # два в терміні
     late = renew.status(conn, at(1.5) + timedelta(hours=1), tmp_path)
     assert late.line.startswith("Обновить все: прострочено з 26.11") and not late.warn
     assert renew.status(conn, at(1.5) + timedelta(hours=13), tmp_path).warn
@@ -185,14 +188,56 @@ def test_status_lines(conn, tmp_path):
     assert failed.warn and "оновлено лише 0 з 1" in failed.line
 
 
-def test_at_setting(monkeypatch):
+def test_status_today_and_next(conn, tmp_path):
+    """KLB-019 п. 3: «оновлено сьогодні о 20:00 (1772), о 23:00 (5)» і «наступне ≈ 23:25 (5)»."""
+    first = datetime(2026, 11, 25, 23, 25, tzinfo=UTC)
+    listings(conn, *[first] * 5, read=first)
+    now = first - timedelta(hours=1)
+    for hour, count in ((20, 1772), (21, 3)):
+        renew.record_get(tmp_path, now.replace(hour=hour, minute=0))
+        renew.record_done(tmp_path, now.replace(hour=hour, minute=0), count)
+    line = renew.status(conn, now, tmp_path).line
+    assert (
+        line == "Обновить все: оновлено сьогодні о 20:00 (1772), о 21:00 (3); наступне ≈ 23:25 (5)"
+    )
+
+
+def test_status_blocked_and_off(conn, tmp_path, monkeypatch):
+    first = datetime(2026, 11, 25, 21, 0, tzinfo=UTC)
+    listings(conn, first, read=first)
+    now = first + timedelta(minutes=30)
+    renew.record_get(tmp_path, now - timedelta(hours=1))
+    assert "не раніше 23:30" in renew.status(conn, now, tmp_path).line
+    monkeypatch.setenv(renew.AT_SETTING, "off")
+    assert "вимкнено" in renew.status(conn, now, tmp_path).line
+
+
+def test_automatic_only_off_disables(monkeypatch):
+    """KLB-019: `SHAFA_KLUBOK_RENEW_AT` — не час запуску, лише `off` вимикає."""
     monkeypatch.delenv(renew.AT_SETTING, raising=False)
-    assert f"{renew.at_setting():%H:%M}" == "20:00"
-    monkeypatch.setenv(renew.AT_SETTING, "")
-    assert renew.at_setting() is None
+    assert renew.automatic() and renew.ignored_value() is None
+    for value in ("", "off", "OFF", "ні"):
+        monkeypatch.setenv(renew.AT_SETTING, value)
+        assert not renew.automatic()
+    monkeypatch.setenv(renew.AT_SETTING, "20:00")
+    assert renew.automatic() and renew.ignored_value() == "20:00"
     monkeypatch.setenv(renew.AT_SETTING, "вечір")
-    with pytest.raises(renew.SetupError):
-        renew.at_setting()
+    assert renew.automatic()
+
+
+def test_blocked_gap_and_daily_cap(tmp_path):
+    """KLB-019: ≥ 3 год від минулого GET і < 4 за місцеву добу."""
+    now = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+    assert renew.blocked(now, tmp_path) is None
+    renew.record_get(tmp_path, now - timedelta(hours=2, minutes=59))
+    assert "не раніше" in renew.blocked(now, tmp_path)
+    assert renew.blocked(now + timedelta(minutes=1), tmp_path) is None
+    day = now.replace(hour=0, minute=10)
+    for n in range(4):
+        renew.record_get(tmp_path, day + timedelta(hours=3 * n))  # 00:10 03:10 06:10 09:10
+    late = now.replace(hour=23)
+    assert "4 оновлення" in renew.blocked(late, tmp_path)
+    assert renew.blocked(late + timedelta(hours=2), tmp_path) is None  # 01:00 — нова доба
 
 
 # --- підставний Клубок ---
@@ -242,10 +287,22 @@ def test_no_link_on_manage_page_means_no_get(conn, server, session, said, tmp_pa
     assert "day" not in renew.load(tmp_path)
 
 
-def test_already_renewed_today_no_get(conn, server, session, said, tmp_path):
-    renew.save(tmp_path, day=NOW.date().isoformat(), ok=True)
-    assert do_renew(conn, session, tmp_path).code == kr.DONE_TODAY
+def test_too_soon_after_previous_get_no_get(conn, server, session, said, tmp_path):
+    """KLB-019: другий GET менш ніж через 3 год — ні; рівно через 3 год — так."""
+    renew.record_get(tmp_path, NOW - timedelta(hours=2, minutes=59))
+    assert do_renew(conn, session, tmp_path).code == kr.TOO_SOON
     assert renew_hits(server) == [] and server.manage_reads == 0
+    assert do_renew(conn, session, tmp_path, now=NOW + timedelta(minutes=1)).code == kr.RENEWED
+    assert renew_hits(server) == ["/renew/all"]
+
+
+def test_fifth_get_in_a_day_refused(conn, server, session, said, tmp_path):
+    for hour in (0, 3, 6, 9):
+        renew.record_get(tmp_path, NOW.replace(hour=hour, minute=0))
+    assert (
+        do_renew(conn, session, tmp_path, now=NOW.replace(hour=12, minute=30)).code == kr.TOO_SOON
+    )
+    assert renew_hits(server) == []
 
 
 def test_stale_renew_is_loud_failure(conn, server, session, said, tmp_path):
@@ -300,6 +357,7 @@ def test_human_click_goes_through_guard(conn, chromium, server, said, tmp_path):
         s.close()
     assert out.code == kr.RENEWED and server.renews == 1
     assert seen == [NOW.date().isoformat()]  # позначка — щойно guard пропустив (RENEWED)
+    assert len(renew.gets(tmp_path)) == 1
 
 
 def test_human_wrong_link_no_mark_retry_same_day(conn, chromium, server, said, tmp_path):  # noqa: F811
@@ -376,56 +434,119 @@ def daily(conn, tmp_path, monkeypatch):
         command=lambda: ["--klubok-renew"], spawn=spawned.append, busy=busy, log=lines.append,
         connect=NoClose, clock=lambda: clock["now"], folder=tmp_path,
     )  # fmt: skip
+    d.lines = lines
     return d, spawned, busy, clock
 
 
-def test_daily_starts_when_due_and_free_once_a_day(conn, daily):
+def test_daily_term_2335_starts_at_2140_not_next_day_2000(conn, daily, tmp_path):
+    """KLB-019, головне: термін 23:25 — запуск о 21:40, а не завтра о 20:00."""
+    d, spawned, _busy, clock = daily
+    term = clock["now"].replace(hour=23, minute=25)
+    listings(conn, term, read=clock["now"])
+    clock["now"] = term - timedelta(hours=1, minutes=46)  # 21:39 — ще рано
+    assert d.tick() is None and spawned == []
+    clock["now"] += timedelta(minutes=1)  # 21:40
+    assert d.tick() == "started" and spawned == [["--klubok-renew"]]
+
+
+def test_daily_two_launches_in_one_evening(conn, daily, tmp_path):
+    """Великий термін 20:31 і малий 23:25 — два запуски за вечір, між GET ≥ 3 год."""
+    d, spawned, _busy, clock = daily
+    day = clock["now"].replace(hour=0, minute=0)
+    listings(conn, day.replace(hour=20, minute=31), day.replace(hour=23, minute=25), read=day)
+    clock["now"] = day.replace(hour=18, minute=46)  # 20:31 − 1:45
+    assert d.tick() == "started"
+    renew.record_get(tmp_path, clock["now"])  # команда зробила GET і знімок: 20:31 оновлено
+    with conn:
+        conn.execute("UPDATE klubok_listings SET renew_date = ? WHERE id = 1",
+                     ((day + timedelta(days=7)).isoformat(),))  # fmt: skip
+    clock["now"] = day.replace(hour=21, minute=40)  # термін 23:25 уже близько, але минуло 2:54
+    assert d.tick() is None and len(spawned) == 1
+    clock["now"] = day.replace(hour=21, minute=47)
+    assert d.tick() == "started" and len(spawned) == 2
+
+
+def test_daily_two_gets_less_than_3h_apart_never(conn, daily, tmp_path):
+    d, spawned, _busy, clock = daily
+    listings(conn, clock["now"] - timedelta(hours=1), read=clock["now"])
+    renew.record_get(tmp_path, clock["now"] - timedelta(hours=2, minutes=59))
+    assert d.tick() is None and spawned == []
+    clock["now"] += timedelta(minutes=2)
+    assert d.tick() == "started"
+
+
+def test_daily_fifth_get_of_the_day_never(conn, daily, tmp_path):
+    d, spawned, _busy, clock = daily
+    listings(conn, clock["now"] - timedelta(hours=1), read=clock["now"])
+    clock["now"] = clock["now"].replace(hour=23, minute=50)
+    for hour in (0, 3, 6, 9):
+        renew.record_get(tmp_path, clock["now"].replace(hour=hour, minute=5))
+    assert d.tick() is None and spawned == []
+
+
+def test_daily_no_link_means_zero_get_and_retry_not_every_minute(conn, daily, tmp_path):
+    """Посилання немає — команда GET не робить; наступний запуск не раніше ніж за 15 хв."""
+    d, spawned, _busy, clock = daily
+    listings(conn, clock["now"] + timedelta(minutes=30), read=clock["now"])
+    assert d.tick() == "started"
+    clock["now"] += timedelta(minutes=14)
+    assert d.tick() is None and len(spawned) == 1
+    clock["now"] += timedelta(minutes=2)
+    assert d.tick() == "started" and len(spawned) == 2
+    assert renew.gets(tmp_path) == []  # сам по собі `Daily` GET не робить
+
+
+def test_daily_waits_for_free_robot(conn, daily):
     d, spawned, busy, clock = daily
     listings(conn, clock["now"] - timedelta(hours=1), read=clock["now"])
     busy.value = {"mode": "klubok-publish"}
     assert d.tick() == "busy" and spawned == []
     busy.value = None
-    clock["now"] += timedelta(minutes=40)  # Mac спав / робот звільнився — той самий день
-    assert d.tick() == "started" and spawned == [["--klubok-renew"]]
-    assert d.tick() is None and len(spawned) == 1
+    clock["now"] += timedelta(minutes=1)
+    assert d.tick() == "started"
 
 
-def test_daily_off_early_or_far(conn, daily, monkeypatch):
+def test_daily_off_far_or_klubok_off(conn, daily, monkeypatch):
     d, spawned, _busy, clock = daily
     listings(conn, clock["now"] + timedelta(days=3), read=clock["now"])
     assert d.tick() is None  # термін далеко, знімок свіжий
     with conn:
-        conn.execute(
-            "UPDATE klubok_listings SET renew_date = ?",
-            ((clock["now"] + timedelta(minutes=30)).isoformat(),),
-        )
-    clock["now"] = clock["now"].replace(hour=19)
-    assert d.tick() is None  # ще не 20:00
-    clock["now"] = clock["now"].replace(hour=21)
-    monkeypatch.setenv(renew.AT_SETTING, "")
+        conn.execute("UPDATE klubok_listings SET renew_date = ?",
+                     ((clock["now"] - timedelta(hours=1)).isoformat(),))  # fmt: skip
+    monkeypatch.setenv(renew.AT_SETTING, "off")
     assert d.tick() is None  # вимкнено
+    monkeypatch.setenv(renew.AT_SETTING, "")
+    assert d.tick() is None
     monkeypatch.setenv(renew.AT_SETTING, "20:00")
     monkeypatch.setenv(queue.FLAG, "")
     assert d.tick() is None  # Клубок вимкнено
     assert spawned == []
 
 
-def test_daily_due_within_hour_does_not_close_the_day(conn, daily):
+def test_daily_time_value_is_ignored_with_log_line(conn, daily, monkeypatch):
+    """Час у `SHAFA_KLUBOK_RENEW_AT` не гальмує запуск; журнал про це каже один раз."""
     d, spawned, _busy, clock = daily
-    listings(conn, clock["now"] + timedelta(minutes=30), read=clock["now"])
-    assert d.tick() == "started"  # команда скаже «ще не настав»
-    clock["now"] += timedelta(minutes=10)
-    assert d.tick() is None  # не частіше ніж раз на годину
-    clock["now"] += timedelta(minutes=55)
-    assert d.tick() == "started"  # термін минув — тепер доба закривається
-    clock["now"] += timedelta(hours=1, minutes=5)
-    assert d.tick() is None and len(spawned) == 2
+    monkeypatch.setenv(renew.AT_SETTING, "23:59")
+    clock["now"] = clock["now"].replace(hour=9)
+    listings(conn, clock["now"] - timedelta(hours=1), read=clock["now"])
+    assert d.tick() == "started"
+    assert d.tick() is None and spawned == [["--klubok-renew"]]
+    assert sum("більше не час запуску" in line for line in d.lines) == 1
 
 
 def test_daily_runs_when_snapshot_is_old(conn, daily):
     d, _spawned, _busy, clock = daily
     listings(conn, clock["now"] + timedelta(days=3), read=clock["now"] - timedelta(hours=25))
     assert d.tick() == "started"
+
+
+def test_daily_stops_when_login_lost(conn, daily, tmp_path):
+    from shafa.klubok import login
+
+    d, spawned, _busy, clock = daily
+    listings(conn, clock["now"] - timedelta(hours=1), read=clock["now"])
+    login.write(False, clock["now"], "злетів", tmp_path)
+    assert d.tick() is None and spawned == []
 
 
 def test_daily_thread_stops(conn, daily):

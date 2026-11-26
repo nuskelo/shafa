@@ -5,13 +5,14 @@
 є; Клубок веде на `/signup`/`/signin` — злетів. Результат — `klubok/login.py`; злетів — одна гучна
 подія Власнику на добу. Сайт не відповів ні так ні ні (немає форми) — нічого не записуємо.
 
-`Watch` — потік `app`: перевірка при старті програми, раз на добу за годину до «Обновить все»
-(`SHAFA_KLUBOK_RENEW_AT`), лише коли робот вільний. Перед автостартом її просить `klubok_auto.Auto`.
+`Watch` — потік `app`: перевірка при старті програми й раз на добу о `CHECK_AT` (19:00; KLB-019:
+«Обновить все» більше не за часом, перед кожним його запуском вхід перевіряє сама команда), лише
+коли робот вільний; автоматику вимикає `SHAFA_KLUBOK_RENEW_AT=off`. Перед автостартом її просить `klubok_auto.Auto`.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +22,7 @@ from shafa.robot import browser
 from shafa.robot import klubok_form as form
 
 TICK = 60.0
-AHEAD = timedelta(hours=1)  # перевірка раз на добу — за стільки до «Обновить все»
+CHECK_AT = time(19, 0)  # KLB-019: щоденна перевірка входу
 RETRY = timedelta(minutes=10)  # запуск перевірки не частіше
 
 LOST = (
@@ -89,16 +90,12 @@ class Watch:
     def _due(self, now: datetime) -> str | None:
         if not self.started:
             return "при старті програми"
-        try:
-            at = renew.at_setting()
-        except renew.SetupError:
+        if not renew.automatic():
             return None
-        if at is None:
-            return None
-        moment = datetime.combine(now.date(), at, tzinfo=now.tzinfo) - AHEAD
+        moment = datetime.combine(now.date(), CHECK_AT, tzinfo=now.tzinfo)
         found = login.read(self.folder)
         if now >= moment and (found is None or found[0] < moment):
-            return "перед «Обновить все»"
+            return "щоденна, 19:00"
         return None
 
     def tick(self) -> str | None:
