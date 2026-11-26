@@ -21,6 +21,7 @@ def data(tmp_path, monkeypatch):
     monkeypatch.setenv("SHAFA_DATA_DIR", str(folder))
     monkeypatch.setenv("SHAFA_AI_DAILY_USD", "3")
     monkeypatch.delenv("SHAFA_ALERTS", raising=False)
+    monkeypatch.setenv("SHAFA_ALERTS_TO", "owner")  # BOT-018: ці тести — про чат Власника
     return folder
 
 
@@ -122,11 +123,12 @@ def test_stop_of_session_sends_one_message_once(conn, data, tg, make_bot):
     step(clock, bot)
     step(clock, bot)
     step(clock, bot)
-    [text] = sent(tg)
+    text, summary = sent(tg)  # BOT-018: гучне «⛔» і повний підсумок сесії
     assert text.startswith("⛔ Робот зупинився: Робот вийшов із Шафи.")
     assert "Опубліковано 3, у Проблемах 1." in text
+    assert summary.startswith("⛔ 🛍 Шафа · сесія 1 зупинена")
     make_bot(clock).tick()  # перезапуск
-    assert len(sent(tg)) == 1
+    assert len(sent(tg)) == 2
 
 
 def test_unknown_stop_code_uses_reason_text(conn, data, tg, make_bot):
@@ -142,8 +144,8 @@ def test_normal_end_is_one_calm_line(conn, data, tg, make_bot, code):
     number = session(conn, code, published=5, problems=2)
     step(clock, bot)
     [text] = sent(tg)
-    assert text.startswith(f"✅ Сесія {number}: опубліковано 5, у Проблемах 2")
-    assert "\n" not in text and "⛔" not in text
+    assert text.startswith(f"✅ 🛍 Шафа · сесія {number} завершена")  # BOT-018: повний підсумок
+    assert "виставлено 5 · Проблем 2" in text and "⛔" not in text
 
 
 def test_running_session_is_not_announced_until_it_ends(conn, data, tg, make_bot):
@@ -155,7 +157,7 @@ def test_running_session_is_not_announced_until_it_ends(conn, data, tg, make_bot
     with conn:
         conn.execute("UPDATE sessions SET ended_at = ?, stop_code = 'slow'", (stamp(DAY, 11),))
     step(clock, bot)
-    assert len(sent(tg)) == 1 and "Шафа довго не відповідала" in sent(tg)[0]
+    assert len(sent(tg)) == 2 and "Шафа довго не відповідала" in sent(tg)[0]  # ⛔ і підсумок
 
 
 # --- Проблеми ---
@@ -311,24 +313,24 @@ def test_telegram_down_retries_next_cycle_without_duplicates(conn, data, tg, mak
     del tg.errors["sendMessage"]
     step(clock, bot)
     delivered = sent(tg)[1:]
-    assert len(delivered) == 2  # і сесія, і Проблема — нічого не загублено
-    assert delivered[0].startswith("⛔") and delivered[1].startswith("⚠️")
+    assert len(delivered) == 3  # ⛔ і підсумок сесії, і Проблема — нічого не загублено
+    assert delivered[0].startswith("⛔ Робот") and delivered[2].startswith("⚠️")
     step(clock, bot)
     step(clock, bot)
-    assert len(sent(tg)) == 3
+    assert len(sent(tg)) == 4
 
 
-def test_checked_once_a_minute_not_on_every_poll(conn, data, tg, make_bot, monkeypatch):
+def test_checked_once_in_twenty_seconds_not_on_every_poll(conn, data, tg, make_bot, monkeypatch):
     clock, bot = started(conn, data, tg, make_bot)
     calls = []
     monkeypatch.setattr(alerts, "run", lambda *a, **k: calls.append(1))
-    for _ in range(5):
+    for _ in range(3):
         clock.go(seconds=5)
         bot.tick()
     assert calls == []
-    clock.go(seconds=40)
+    clock.go(seconds=10)
     bot.tick()
-    assert len(calls) == 1
+    assert len(calls) == 1  # BOT-018: раз на 20 с — стільки ж живе повідомлення сесії
 
 
 @pytest.mark.parametrize("value", ["off", "OFF", "ні"])
@@ -369,7 +371,7 @@ def test_no_owner_chat_sends_nothing(conn, data, tg, make_bot):
 def test_twenty_per_hour_then_one_summary(conn, data, tg, make_bot):
     clock, bot = started(conn, data, tg, make_bot)
     for _ in range(25):
-        session(conn, "login")
+        session(conn, "done")  # спокійний кінець — одне повідомлення на подію
     step(clock, bot)
     texts = sent(tg)
     assert len(texts) == 20
@@ -377,7 +379,7 @@ def test_twenty_per_hour_then_one_summary(conn, data, tg, make_bot):
     step(clock, bot)
     assert len(sent(tg)) == 20  # те, що не влізло, не повертається
     clock.go(hours=1, minutes=1)
-    session(conn, "login")
+    session(conn, "done")
     bot.tick()
     assert len(sent(tg)) == 21  # нова година — знову можна
 

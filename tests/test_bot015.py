@@ -40,8 +40,8 @@ class Telegram(FakeTelegram):
         self.forward_errors = {}  # номер → список помилок (по одній на спробу)
         self.forwards = []
 
-    def send_message(self, chat_id, text, markup=None, silent=False):
-        return super().send_message(chat_id, text, markup)
+    def send_message(self, chat_id, text, markup=None, silent=False, entities=None):
+        return super().send_message(chat_id, text, markup, silent, entities)
 
     def forward_message(self, chat_id, from_chat_id, message_id):
         self.forwards.append(message_id)

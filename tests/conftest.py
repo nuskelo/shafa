@@ -37,6 +37,8 @@ def no_real_settings(tmp_path_factory, monkeypatch):
         "SHAFA_SOLD_CHECK",
     ):
         monkeypatch.delenv(name, raising=False)
+    # BOT-018: тривоги йдуть і Вікторії; старі тести — про чат Власника, нові (`test_bot018`) вмикають `both`
+    monkeypatch.setenv("SHAFA_ALERTS_TO", "owner")
     # Тека даних (замок робота, журнал) — тимчасова: тести не бачать справжньої.
     monkeypatch.setenv("SHAFA_DATA_DIR", str(tmp_path_factory.mktemp("дані")))
     # UI-003: самоперевірка при запуску ходила б у мережу — у тестах її роблять лише підставні Deps.

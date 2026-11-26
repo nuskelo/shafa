@@ -64,8 +64,9 @@ class FakeTelegram:
             raise self.errors[method]
         self.next_id += 1
 
-    def send_message(self, chat_id, text, markup=None):
-        self._record("sendMessage", chat_id=chat_id, text=text, markup=markup)
+    def send_message(self, chat_id, text, markup=None, silent=False, entities=None):
+        self._record("sendMessage", chat_id=chat_id, text=text, markup=markup, silent=silent,
+                     entities=entities)  # fmt: skip
         return {"message_id": self.next_id}
 
     def send_photo(self, chat_id, photo, caption, markup=None, entities=None):
@@ -96,9 +97,9 @@ class FakeTelegram:
     def answer_callback(self, callback_id, text):
         self._record("answerCallbackQuery", text=text)
 
-    def edit_text(self, chat_id, message_id, text, markup=None):
+    def edit_text(self, chat_id, message_id, text, markup=None, entities=None):
         self._record("editMessageText", chat_id=chat_id, message_id=message_id, text=text,
-                     markup=markup)  # fmt: skip
+                     markup=markup, entities=entities)  # fmt: skip
         return {"message_id": message_id}
 
     def delete_message(self, chat_id, message_id):

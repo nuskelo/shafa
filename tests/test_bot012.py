@@ -29,9 +29,9 @@ class QuietTelegram(FakeTelegram):
         super().__init__()
         self.flags = []  # (текст, без звуку)
 
-    def send_message(self, chat_id, text, markup=None, silent=False):
+    def send_message(self, chat_id, text, markup=None, silent=False, entities=None):
         self.flags.append((text, silent))
-        return super().send_message(chat_id, text, markup)
+        return super().send_message(chat_id, text, markup, silent, entities)
 
 
 @pytest.fixture
@@ -41,6 +41,7 @@ def data(tmp_path, monkeypatch):
     monkeypatch.setenv("SHAFA_DATA_DIR", str(folder))
     monkeypatch.setenv("SHAFA_AI_DAILY_USD", "3")
     monkeypatch.delenv("SHAFA_ALERTS", raising=False)
+    monkeypatch.setenv("SHAFA_ALERTS_TO", "owner")  # BOT-018: ці тести — про чат Власника
     return folder
 
 
@@ -202,17 +203,20 @@ def test_state_file_from_bot010_still_loads(conn, data, tg, make_bot):
 
 def test_quiet_events_go_in_one_silent_message_every_five_minutes(conn, data, tg, make_bot):
     clock, bot = started(tg, make_bot)
-    put(data, at(DAY, 10), "robot.post", "6645 опубліковано · 690 грн · https://shafa.ua/uk/item/1")
-    put(data, at(DAY, 10, 2), "robot.post", "6646 опубліковано · 450 грн")
+    put(data, at(DAY, 10), "site.sent", "6645 відправлено на сайт · https://shafa.ua/uk/item/1")
+    put(data, at(DAY, 10, 2), "site.sent", "6646 відправлено на сайт")
     step(clock, bot)  # 10:01 — події прочитано, збірка чекає
     step(clock, bot, 4)  # 10:05
     assert tg.flags == []
     step(clock, bot)  # 10:06 — п'ять хвилин від першої
     [(text, silent)] = owner_texts(tg)
     assert silent is True
-    assert text.splitlines() == [
-        "10:00 ✅ 6645 опубліковано · 690 грн · https://shafa.ua/uk/item/1",
-        "10:02 ✅ 6646 опубліковано · 450 грн",
+    assert text.splitlines() == [  # BOT-018: шапка і порожній рядок між подіями
+        "🕓 Фонові події",
+        "",
+        "10:00 🌐 6645 відправлено на сайт · https://shafa.ua/uk/item/1",
+        "",
+        "10:02 🌐 6646 відправлено на сайт",
     ]
     step(clock, bot, 10)
     assert len(owner_texts(tg)) == 1  # вдруге не шле
@@ -221,15 +225,15 @@ def test_quiet_events_go_in_one_silent_message_every_five_minutes(conn, data, tg
 def test_fifteen_lines_flush_at_once(conn, data, tg, make_bot):
     clock, bot = started(tg, make_bot)
     for n in range(15):
-        put(data, at(DAY, 10), "robot.post", f"{n} опубліковано")
+        put(data, at(DAY, 10), "site.sent", f"{n} відправлено")
     step(clock, bot)
     [(text, silent)] = owner_texts(tg)
-    assert silent and len(text.splitlines()) == 15
+    assert silent and text.count("відправлено") == 15 and text.startswith("🕓 Фонові події")
 
 
 def test_loud_event_goes_at_once_without_silence_and_before_quiet(conn, data, tg, make_bot):
     clock, bot = started(tg, make_bot)
-    put(data, at(DAY, 10), "robot.post", "тихий")
+    put(data, at(DAY, 10), "site.sent", "тихий")
     put(data, at(DAY, 10), "ai.stop", "ШІ не взявся за нові Картки: ліміт вичерпано")
     step(clock, bot)
     [(text, silent)] = owner_texts(tg)
@@ -293,10 +297,10 @@ def test_quiet_limit_twelve_batches_per_hour_then_notice(conn, data, tg, make_bo
     clock, bot = started(tg, make_bot)
     for _ in range(14):  # кожну хвилину по 15 рядків — збірка одразу
         for n in range(15):
-            put(data, clock.now, "robot.post", f"{n} опубліковано")
+            put(data, clock.now, "site.sent", f"{n} відправлено")
         step(clock, bot)
     flags = tg.flags
-    assert sum("опубліковано" in t for t, _ in flags) == 12
+    assert sum("відправлено" in t for t, _ in flags) == 12
     notices = [t for t, _ in flags if t.startswith("ℹ️ Ще")]
     assert notices == ["ℹ️ Ще 15 подій — подивись /zvit."]
     assert all(s for _, s in flags)  # усе без звуку
@@ -342,7 +346,8 @@ def test_important_only_keeps_bot010_behavior(conn, data, tg, make_bot):
     number = session(conn, "done", published=2, problems=1)
     put(data, at(DAY, 10), "robot.end", "Сесія 1: опубліковано 2", extra={"session": number})
     step(clock, bot)
-    assert [t for t, _ in tg.flags] == ["✅ Сесія 1: опубліковано 2, у Проблемах 1"]
+    [text] = [t for t, _ in tg.flags]  # BOT-018: підсумок сесії — гучно й у «Лише важливе»
+    assert text.startswith("✅ 🛍 Шафа · сесія 1 завершена") and "виставлено 2 · Проблем 1" in text
 
 
 def test_detali_is_for_owner_only(conn, data, tg, make_bot):
@@ -372,28 +377,28 @@ def test_alerts_off_sends_nothing_from_journal(conn, data, tg, make_bot, monkeyp
 # --- Кінець сесії: журнал замість «✅ Сесія N» ---
 
 
-def test_journal_end_replaces_calm_session_line(conn, data, tg, make_bot):
+def test_journal_end_is_not_a_quiet_line_but_feeds_the_summary(conn, data, tg, make_bot):
     clock, bot = started(tg, make_bot)
     number = session(conn, "done", published=14, problems=1)
     put(
         data, at(DAY, 10), "robot.end",
         "Сесія 1: опубліковано 14, у Проблемах 1 · 38 хв · черга закінчилась",
-        extra={"session": number},
+        extra={"session": number, "deferred": [7300], "notes": ["Пост 7301: Схоже: https://x"]},
     )  # fmt: skip
     step(clock, bot)
     step(clock, bot, 6)
-    texts = [t for t, _ in tg.flags]
-    assert len(texts) == 1 and "✅ Сесія" not in texts[0]
-    assert texts[0].endswith(
-        "⏹ Сесія 1: опубліковано 14, у Проблемах 1 · 38 хв · черга закінчилась"
-    )
+    [(text, silent)] = owner_texts(tg)  # ні «⏹ …» у збірці, ні дубля: лише підсумок
+    assert "⏹" not in text and silent is False
+    assert text.startswith("✅ 🛍 Шафа · сесія 1 завершена")
+    assert "Відкладено" in text and "Пост 7300" in text and "На що глянути (1)" in text
 
 
 def test_calm_session_without_journal_line_is_still_announced(conn, data, tg, make_bot):
     clock, bot = started(tg, make_bot)
     session(conn, "done", published=2, problems=0)
     step(clock, bot)
-    assert [t for t, _ in tg.flags] == ["✅ Сесія 1: опубліковано 2, у Проблемах 0"]
+    [text] = [t for t, _ in tg.flags]
+    assert text.startswith("✅ 🛍 Шафа · сесія 1 завершена") and "виставлено 2 · Проблем 0" in text
 
 
 def test_stop_of_session_is_loud_once_with_journal_too(conn, data, tg, make_bot):
@@ -402,8 +407,11 @@ def test_stop_of_session_is_loud_once_with_journal_too(conn, data, tg, make_bot)
     put(data, at(DAY, 10), "robot.stop", "Сесія 1: зупинка", loud=True, extra={"session": number})
     step(clock, bot)
     step(clock, bot, 6)
-    [(text, silent)] = owner_texts(tg)
+    [(text, silent), (summary, summary_silent)] = owner_texts(tg)
     assert text.startswith("⛔ Робот зупинився") and silent is False
+    assert (
+        summary.startswith("⛔ 🛍 Шафа · сесія 1 зупинена") and summary_silent is True
+    )  # вже подзвонило
 
 
 # --- ШІ ---

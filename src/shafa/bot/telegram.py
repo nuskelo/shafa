@@ -162,12 +162,20 @@ class Telegram:
         return self.call("getFile", {"file_id": file_id})
 
     def send_message(
-        self, chat_id: int, text: str, markup: dict | None = None, silent: bool = False
+        self,
+        chat_id: int,
+        text: str,
+        markup: dict | None = None,
+        silent: bool = False,
+        entities: list[dict] | None = None,
     ) -> dict:
-        """`silent` — без звуку й вібрації (збірка тихих подій, BOT-012)."""
+        """`silent` — без звуку й вібрації (збірка тихих подій, BOT-012). `entities` — посилання й
+        розгортаємі блоки (BOT-018) без `parse_mode`: текст не розбирається як розмітка."""
         params: dict[str, Any] = {"chat_id": chat_id, "text": text}
         if silent:
             params["disable_notification"] = True
+        if entities:
+            params["entities"] = entities
         if markup is not None:
             params["reply_markup"] = markup
         return self.call("sendMessage", params)
@@ -194,14 +202,23 @@ class Telegram:
     def answer_callback(self, callback_id: str, text: str) -> None:
         self.call("answerCallbackQuery", {"callback_query_id": callback_id, "text": text})
 
-    def edit_text(self, chat_id: int, message_id: int, text: str, markup: dict | None = None):
-        """Новий текст повідомлення; без `markup` — і без кнопок."""
-        params = {
+    def edit_text(
+        self,
+        chat_id: int,
+        message_id: int,
+        text: str,
+        markup: dict | None = None,
+        entities: list[dict] | None = None,
+    ):
+        """Новий текст повідомлення (без звуку: правка не сповіщає); без `markup` — і без кнопок."""
+        params: dict[str, Any] = {
             "chat_id": chat_id,
             "message_id": message_id,
             "text": text,
             "reply_markup": markup or {"inline_keyboard": []},
         }
+        if entities:
+            params["entities"] = entities
         return self.call("editMessageText", params)
 
     def forward_message(self, chat_id: int, from_chat_id: int, message_id: int) -> dict:
