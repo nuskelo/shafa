@@ -421,6 +421,8 @@ class App:
         self.login_checking = False  # іде перевірка входу після «Старт» (панель: «Перевіряю…»)
         # UX-009: «Старт» натиснуто під час фонового читання «Мої речі» — чекаємо його кінця
         self.start_waiting = False
+        # QA-005: подвійний клік «Старт» — два запити одночасно; перевірка стану й запуск — разом
+        self.start_lock = threading.Lock()
         self.reading_poll = 5.0  # с між перевірками замка, поки чекаємо читання
         self.root = root
         self.cache_dir = cache_dir
@@ -1200,26 +1202,33 @@ class App:
         conn = self.connect()
         try:
             if action == "start":
-                state = self.robot_state(conn)
-                if not state.can_start:
-                    why = control.WHY_CODES.get(state.why_code)
-                    return redirect(f"{back}{sep}msg=robot_cannot_start{'_' + why if why else ''}")
-                args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
-                args += ["--fake-shafa"] if self.fake_shafa else []
-                if state.code == "reading" and not self.fake_shafa:  # UX-009: чекаємо кінця читання
-                    self.start_waiting = True
-                    self.run(lambda: self._start_after_reading(args))
-                    return redirect(f"{back}{sep}msg=robot_waiting_reading")
-                if not self.fake_shafa:
-                    verdict = self._login_verdict()
-                    if verdict is False:
-                        return redirect(f"{back}{sep}msg=robot_cannot_start_login")
-                    if verdict is None and self.login_probe is not None:
-                        self.login_checking = True  # перевірка — у фоні, екран одразу відповідає
-                        self.run(lambda: self._check_then_start(args))
-                        return redirect(f"{back}{sep}msg=robot_login_checking")
-                self._spawn(args)
-                return redirect(f"{back}{sep}msg=robot_started")
+                with self.start_lock:
+                    state = self.robot_state(conn)
+                    if not state.can_start:
+                        why = control.WHY_CODES.get(state.why_code)
+                        return redirect(
+                            f"{back}{sep}msg=robot_cannot_start{'_' + why if why else ''}"
+                        )
+                    args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
+                    args += ["--fake-shafa"] if self.fake_shafa else []
+                    if (
+                        state.code == "reading" and not self.fake_shafa
+                    ):  # UX-009: чекаємо кінця читання
+                        self.start_waiting = True
+                        self.run(lambda: self._start_after_reading(args))
+                        return redirect(f"{back}{sep}msg=robot_waiting_reading")
+                    if not self.fake_shafa:
+                        verdict = self._login_verdict()
+                        if verdict is False:
+                            return redirect(f"{back}{sep}msg=robot_cannot_start_login")
+                        if verdict is None and self.login_probe is not None:
+                            self.login_checking = (
+                                True  # перевірка — у фоні, екран одразу відповідає
+                            )
+                            self.run(lambda: self._check_then_start(args))
+                            return redirect(f"{back}{sep}msg=robot_login_checking")
+                    self._spawn(args)
+                    return redirect(f"{back}{sep}msg=robot_started")
             if action == "rehearse":
                 return self._rehearse(conn, back, sep)
             if action == "login":

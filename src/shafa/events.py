@@ -158,7 +158,7 @@ def version() -> str:
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], cwd=root, capture_output=True, text=True,
-            timeout=3, check=True,
+            timeout=3, check=True, **config.hidden_window(),
         ).stdout.strip()  # fmt: skip
     except (OSError, subprocess.SubprocessError):
         commit = ""

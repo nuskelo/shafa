@@ -103,6 +103,8 @@ def quit_all(kill: Callable[[int, int], None] = os.kill) -> list[str]:
         try:
             if publish.request(conn, "stop"):
                 done.append("робот допише поточний товар і зупиниться")
+            if publish.request(conn, "stop", site="klubok"):  # QA-005: Клубок теж слухає «Вийти»
+                done.append("робот Клубку допише поточну пару і зупиниться")
         finally:
             conn.close()
     return done
