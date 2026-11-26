@@ -11,6 +11,7 @@ from typing import Any
 
 import httpx2
 
+NO_PREVIEW = {"is_disabled": True}  # QA-005: під посиланням у тексті бота не вилазить картка сайту
 API = "https://api.telegram.org"
 TIMEOUT = 30.0  # секунд на звичайний запит
 POLL_EXTRA = 10.0  # до довгого опитування додаємо запас
@@ -171,7 +172,9 @@ class Telegram:
     ) -> dict:
         """`silent` — без звуку й вібрації (збірка тихих подій, BOT-012). `entities` — посилання й
         розгортаємі блоки (BOT-018) без `parse_mode`: текст не розбирається як розмітка."""
-        params: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        params: dict[str, Any] = {
+            "chat_id": chat_id, "text": text, "link_preview_options": NO_PREVIEW,
+        }  # fmt: skip
         if silent:
             params["disable_notification"] = True
         if entities:
@@ -216,6 +219,7 @@ class Telegram:
             "message_id": message_id,
             "text": text,
             "reply_markup": markup or {"inline_keyboard": []},
+            "link_preview_options": NO_PREVIEW,
         }
         if entities:
             params["entities"] = entities
