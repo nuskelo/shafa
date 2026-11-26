@@ -23,7 +23,9 @@ from shafa.robot import listings, login_check
 
 TICK = 60.0
 RETRY = timedelta(hours=1)  # спроба фонового читання — не частіше
-START_DELAY = timedelta(minutes=4)  # UX-010: після `login_check.START_DELAY` (2 хв), не разом із нею
+START_DELAY = timedelta(
+    minutes=4
+)  # UX-010: після `login_check.START_DELAY` (2 хв), не разом із нею
 
 
 class Watch:

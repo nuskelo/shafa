@@ -118,7 +118,7 @@ def test_problems_page_has_klubok_block_and_shafa_counter_unchanged(conn, app, r
 
 
 def test_problems_page_counts_klubok_problems_with_plural(conn, app, root):
-    for post in (7301, 7302, 7303, 7304, 7305):
-        item_id = add(conn, root, post, status=Status.PUBLISHED)
+    for number in (7301, 7302, 7303, 7304, 7305):
+        item_id = add(conn, root, number, status=Status.PUBLISHED)
         ad_row(conn, item_id, queue.PROBLEM, problem_code=queue.UNCERTAIN, problem_text="x")
     assert "Клубок: 5 проблем → відкрити" in plain(html(get(app, "/problem")))
