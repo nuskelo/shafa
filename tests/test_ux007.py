@@ -290,7 +290,7 @@ def test_robot_publish_blocked_has_no_buttons_and_own_line(conn, root, app):
     acts = web.problem_actions("robot_publish_blocked", "1342")
     assert not (acts.archive or acts.recheck or acts.to_review or acts.manual)
     problem(conn, root, "robot_publish_blocked", "Захист")
-    assert "нічого не натискайте, скажіть Власнику" in html(get(app, "/problem"))
+    assert "нічого не натискайте; скажіть Власнику" in html(get(app, "/problem"))
 
 
 def test_no_photos_error_says_what_to_do_and_is_not_counted_as_skipped(conn, root, app):

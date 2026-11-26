@@ -3,8 +3,8 @@
 import pytest
 from PIL import Image
 
-from shafa import review
-from shafa.bot import actions, report
+from shafa import hints, review
+from shafa.bot import actions
 from shafa.bot.core import Bot, Settings
 from shafa.db import Status
 from test_bot009 import DAY, stamp
@@ -102,7 +102,7 @@ def test_single_problem_gets_recheck_button_in_limit(conn, data, tg, make_bot):
 
 
 def test_every_known_problem_code_fits_callback_data():
-    longest = max([*report.PROBLEMS, "x" * 30], key=len)
+    longest = max([*hints.PROBLEMS, "x" * 30], key=len)
     row = {"id": 123456, "problem_code": longest}
     assert len(f"{actions.ARCHIVE_YES}:{row['id']}:{longest}".encode()) <= 64
 
@@ -170,7 +170,7 @@ def test_open_button_sends_the_card_and_removes_its_row(conn, data, tg, make_bot
     first = buttons(markup)[0]
     tap(bot, tg, first["callback_data"], "⚠️ Нові Проблеми (2)", markup=markup)
     [(_, card)] = [(m, p) for m, p in tg.calls if m == "sendMessage"]
-    assert card["text"] == "⚠️ Пост 201: Немає ціни"
+    assert card["text"].startswith("⚠️ Пост 201: Нема ціни")
     assert buttons(card["markup"])[0]["callback_data"].startswith("rc:")
     [edit] = edits(tg)
     assert [b["text"] for b in buttons(edit["markup"])] == ["📂 Пост 202"]
@@ -204,7 +204,7 @@ def test_session_stop_has_what_happened_button_and_no_start(conn, data, tg, make
     assert all("Старт" not in b["text"] for k in keyboards for b in buttons(k))
     tap(bot, tg, f"ws:{sid}", "⛔ Робот зупинився")
     text = final_text(tg)
-    assert "Пост 201: Робот не знайшов поле на формі — Поле «Колір»" in text
+    assert "Пост 201: Робот не знайшов поле — Поле «Колір»" in text
     assert edits(tg)[0]["markup"] is None
 
 

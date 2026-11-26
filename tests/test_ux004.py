@@ -259,8 +259,8 @@ def test_size_gone_has_archive_button_and_text(conn, root, app):
     assert "to_archive" in buttons(row(html(get(app, "/problem")), item))
     page = hint_of(app, item)
     assert (
-        "Розмір 43 прибрали з поста. Продано — «В архів». Не продано — поверніть розмір у пост"
-        in page
+        "Розмір 43 прибрали з поста. Що робити: 1) продано — «В архів»; "
+        "2) не продано — поверніть розмір у пост" in page
     )
     assert "to_archive" in buttons(page)
 
@@ -314,7 +314,7 @@ def test_logged_out_text_has_no_command_line(conn, root, app):
     item = problem(conn, root, "robot_logged_out", "Робот не увійшов на Шафу")
     page = hint_of(app, item)
     assert "python -m" not in page and "Власник:" not in page
-    assert "Натисніть на панелі «Увійти на Шафу»" in page
+    assert "на панелі натисніть «Увійти на Шафу»" in page
     assert "python -m" not in html(get(app, "/problem"))
 
 

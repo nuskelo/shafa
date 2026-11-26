@@ -45,15 +45,19 @@ def status_of(conn, item_id):
 CODES = [
     ("many_items", "Кілька пар у пості", "опублікуйте на Шафі вручну"),
     ("no_section", "Не взуття й не аксесуар", "опублікуйте на Шафі вручну"),
-    ("possible_duplicate", "Схожий є на Шафі", "відкрийте Картку й порівняйте"),
+    (
+        "possible_duplicate",
+        "Схожий товар уже є на Шафі",
+        "відкрийте Картку в «Проблемах» і порівняйте",
+    ),
     ("publish_uncertain", "Не впевнений", "«Мої речі» на Шафі"),
     ("publish_error", "Шафа не прийняла при публікації", "відкрийте Картку"),
     ("shafa_declined", "Шафа відхилила оголошення", "відкрийте Картку"),
-    ("photos_missing", "Нема фото в папці", "перевірте папку з фото"),
+    ("photos_missing", "Нема фото в папці", "додайте фото й натисніть"),
     ("robot_photos", "Фото не завантажились", "робот спробує ще раз"),
-    ("post_deleted", "Пост видалено", "продано"),
-    ("robot_field_missing", "Робот", "робот спробує знову"),
-    ("robot_brand_missing", "Робот", "робот спробує знову"),
+    ("post_deleted", "Пост видалено", "публікувати не треба"),
+    ("robot_field_missing", "Робот не знайшов поле", "робот спробує ще раз без змін"),
+    ("robot_brand_missing", "Бренд не знайдено", "робот спробує ще раз"),
     ("щось_нове", "Проблема", "відкрийте Картку"),
 ]
 
@@ -345,7 +349,7 @@ def test_session_page_cards_as_thumbnails(conn, root, app):
     assert f"Сесія {sid}" in page and 'tone-ok">Зупинено кнопкою «Стоп»' in page
     assert f'<img src="/thumb/{ok}/' in page and f'<img src="/thumb/{bad}/' in page
     assert '<span class="mark mark-ok">Опубліковані</span>' in page
-    assert '<span class="mark mark-bad">Робот</span>' in page
+    assert '<span class="mark mark-bad">Робот не знайшов поле</span>' in page
     assert "Поле не знайдено" in page
 
 
