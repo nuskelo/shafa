@@ -55,10 +55,11 @@ STORED = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".gif"}  # не стиск�
 LOCKS = (("програма", app.LOCK_NAME), ("бот", bot_run.LOCK_NAME), ("робот", "robot.lock"))
 SECRET_WORDS = ("TOKEN", "SECRET", "PASSWORD", "PASS", "KEY", "COOKIE", "SESSION")
 SETTING_NAME = re.compile(r"^(SHAFA_[A-Z0-9_]+|TELEGRAM_[A-Z0-9_]*_ID)$")
-# `SHAFA_BOT_SERVER*` — ключ обміну в кожного компа свій (OPS-004): без ключа обмін не піде
+# `SHAFA_BOT_SERVER*` — ключ обміну в кожного компа свій (OPS-004): без ключа обмін не піде;
+# `SHAFA_ALERTS_TO` (UX-010) — кому слати тривоги (`owner` на пілоті Влада), у Вікторії своє
 NOT_TRANSFERRED = (
     "SHAFA_ROOT_DIR", "SHAFA_DATA_DIR", "SHAFA_TESTING", "SHAFA_LEGACY_ENV",
-    "SHAFA_BOT_SERVER", "SHAFA_BOT_SERVER_KEY",
+    "SHAFA_BOT_SERVER", "SHAFA_BOT_SERVER_KEY", "SHAFA_ALERTS_TO",
 )  # fmt: skip
 STATUS_LABELS = {
     "published": "опубліковано",

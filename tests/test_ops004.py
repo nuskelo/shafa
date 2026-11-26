@@ -586,6 +586,12 @@ def test_server_setting_not_transferred():
     assert not transfer.transferable(client.KEY, "/x/key")
 
 
+def test_alerts_to_is_not_transferred_to_the_other_computer():
+    """UX-010: `SHAFA_ALERTS_TO=owner` на пілоті Власника не їде до Вікторії (їй — `both`)."""
+    assert not transfer.transferable("SHAFA_ALERTS_TO", "owner")
+    assert transfer.transferable("SHAFA_ALERTS", "off")  # сусіднє налаштування їде, як і було
+
+
 # --- панель і самоперевірка ---
 
 
