@@ -87,8 +87,9 @@ def _money(micro: int) -> str:
     return f"{micro / 1_000_000:.2f}".replace(".", ",").removesuffix(",00") + " $"
 
 
-def _spent_note(conn: sqlite3.Connection) -> str:
-    """« · сьогодні 1,20 $ з 3 $»; налаштування зіпсовані — порожньо."""
+def _spent_note(conn: sqlite3.Connection, just_spent: int = 0) -> str:
+    """« · сьогодні 1,20 $ з 3 $»; налаштування зіпсовані — порожньо. QA-005: «сьогодні» не може
+    бути меншим за щойно витрачене (`just_spent`), навіть якщо запити ще не лягли в `ai_requests`."""
     from shafa import batch
 
     try:
@@ -96,7 +97,7 @@ def _spent_note(conn: sqlite3.Connection) -> str:
         spent, limit = batch.spent_today(conn, today), batch.limits().daily_micro_usd
     except Exception:  # noqa: BLE001 — підсумок для журналу не ламає ШІ
         return ""
-    return f" · сьогодні {_money(spent)} з {_money(limit)}"
+    return f" · сьогодні {_money(max(spent, just_spent))} з {_money(limit)}"
 
 
 def tally_text(conn: sqlite3.Connection, tally: Tally) -> str:
@@ -118,7 +119,7 @@ def tally_text(conn: sqlite3.Connection, tally: Tally) -> str:
         )
         if n
     ]
-    spent = f" · витрачено {_money(tally.cost_micro)}" + _spent_note(conn)
+    spent = f" · витрачено {_money(tally.cost_micro)}" + _spent_note(conn, tally.cost_micro)
     text = f"ШІ закінчив: {events.cards(tally.total)} — {', '.join(parts)}{spent}"
     if tally.ready or tally.yellow:  # BOT-019: наступний крок — її робота, тож гучно й з порадою
         text += f"\n{hints.REVIEW[:1].upper()}{hints.REVIEW[1:]}."
