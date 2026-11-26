@@ -214,16 +214,18 @@ def test_watch_waits_while_robot_is_busy(tmp_path):
     assert w.tick() == "busy" and spawned == []
 
 
-def test_watch_does_not_open_chrome_without_robot_profile_or_in_first_two_minutes(tmp_path):
-    """ROBOT-019: на чистому встановленні (профілю немає) і в перші 2 хв Chrome не відкривається."""
+def test_watch_does_not_open_chrome_without_robot_profile_or_in_first_four_minutes(tmp_path):
+    """ROBOT-019: на чистому встановленні (профілю немає) і в перші 4 хв Chrome не відкривається
+    (UX-010: 4, а не 2 — після `login_check.Watch`, інакше обидва беруть замок в одну секунду)."""
     w, spawned, _, clock = watch(folder=tmp_path, ready=lambda: False)
     assert w.tick() is None and spawned == []
     w, spawned, _, clock = watch(folder=tmp_path, delay=listings_watch.START_DELAY)
-    assert listings_watch.START_DELAY == timedelta(minutes=2)
+    assert listings_watch.START_DELAY == timedelta(minutes=4)
+    assert listings_watch.START_DELAY > login_check.START_DELAY
     assert w.tick() is None
-    clock[0] = NOW + timedelta(minutes=1, seconds=59)
+    clock[0] = NOW + timedelta(minutes=3, seconds=59)
     assert w.tick() is None and spawned == []
-    clock[0] = NOW + timedelta(minutes=2)
+    clock[0] = NOW + timedelta(minutes=4)
     assert w.tick() == "started"
 
 
@@ -240,6 +242,50 @@ def test_watch_retries_no_more_than_once_an_hour(tmp_path):
     assert w.tick() is None
     clock[0] = NOW + timedelta(minutes=61)
     assert w.tick() == "started" and len(spawned) == 2
+
+
+class Exited:
+    """Підставний процес `--listings-refresh`, що вже вийшов з кодом."""
+
+    def __init__(self, code):
+        self.code = code
+
+    def poll(self):
+        return self.code
+
+
+def test_watch_lock_not_taken_is_not_an_attempt_and_retries_on_next_tick(tmp_path):
+    """UX-010 (26.11 11:38:39): `--listings-refresh` не взяв замок («Робот уже працює», код 2) —
+    без цього Watch мовчав годину (`RETRY`), хоча читання не було."""
+    spawned, clock = [], [NOW]
+    w = listings_watch.Watch(
+        command=lambda: ["--listings-refresh"], spawn=lambda a: spawned.append(a) or Exited(2),
+        busy=lambda: None, log=lambda _: None, due=lambda: True, clock=lambda: clock[0],
+        folder=tmp_path, delay=timedelta(0),
+    )  # fmt: skip
+    assert w.tick() == "started"
+    clock[0] = NOW + timedelta(seconds=60)  # наступний тік, не через годину
+    assert w.tick() == "started" and len(spawned) == 2
+
+
+def test_watch_real_failed_attempt_still_waits_an_hour(tmp_path):
+    """Код 2, але процес записав спробу в `listings-bg.json` (Chrome не відкрився) — це спроба."""
+    spawned, clock = [], [datetime.now().astimezone()]
+    start = clock[0]
+
+    def spawn(args):
+        spawned.append(args)
+        listings.write_state(listings.BG_LAST, {"at": (start + timedelta(seconds=5)).isoformat()})
+        return Exited(2)
+
+    w = listings_watch.Watch(
+        command=lambda: ["--listings-refresh"], spawn=spawn, busy=lambda: None,
+        log=lambda _: None, due=lambda: True, clock=lambda: clock[0], folder=tmp_path,
+        delay=timedelta(0),
+    )  # fmt: skip
+    assert w.tick() == "started"
+    clock[0] = start + timedelta(minutes=10)
+    assert w.tick() is None and len(spawned) == 1
 
 
 def test_watch_respects_failed_attempt_of_previous_program_run(tmp_path):
