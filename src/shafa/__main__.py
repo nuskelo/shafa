@@ -227,6 +227,19 @@ def build_parser() -> argparse.ArgumentParser:
     cmd.add_argument("--json", action="store_true", help="вивести як JSON")
     cmd = commands.add_parser("report", help="щоденний звіт Власнику: лише друкує (BOT-009)")
     cmd.add_argument("--day", help="доба YYYY-MM-DD (типово сьогодні, місцевий час)")
+    cmd = commands.add_parser(
+        "alerts-preview",
+        help="QA-005: по зразку кожного повідомлення бота в тестовий чат (токен — TELEGRAM_BOT_TOKEN)",
+    )
+    cmd.add_argument("--chat", type=int, required=True, help="id ТЕСТОВОГО чату")
+    cmd.add_argument(
+        "--as",
+        dest="viewer",
+        choices=("owner", "seller"),
+        default="owner",
+        help="чиїми очима: Власника (кнопки, коди) чи Вікторії (без них)",
+    )
+    cmd.add_argument("--pause", type=float, default=25.0, help="с між правками живого повідомлення")
     commands.add_parser("quit", help="закрити програму: екран і бота (для оновлення)")
     commands.add_parser("setup", help="майстер налаштування на її ноутбуці (секрети приховано)")
     cmd = commands.add_parser("transfer-pack", help="перенесення пілоту: усе потрібне в один zip")
@@ -1332,6 +1345,24 @@ def run_bot_move(parser: argparse.ArgumentParser, args: argparse.Namespace) -> i
     return 0
 
 
+def run_alerts_preview(args: argparse.Namespace) -> int:
+    """QA-005: токен лише зі змінної середовища (`.env` пілоту не читаємо), дані вигадані."""
+    import os
+
+    from shafa.bot import preview
+
+    try:
+        seconds = preview.run(
+            os.environ.get(preview.TOKEN, ""), args.chat, owner=args.viewer == "owner",
+            pause=args.pause,
+        )  # fmt: skip
+    except preview.PreviewError as error:
+        print(error, file=sys.stderr)
+        return 2
+    print(f"Готово за {seconds} с — подивіться чат на телефоні.")
+    return 0
+
+
 def run_health(args: argparse.Namespace) -> int:
     import json
 
@@ -1421,6 +1452,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_health(args)
     if args.command == "report":
         return run_report(parser, args)
+    if args.command == "alerts-preview":
+        return run_alerts_preview(args)
     if args.command == "setup":
         from shafa import wizard
 

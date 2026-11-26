@@ -421,6 +421,8 @@ class App:
         self.login_checking = False  # іде перевірка входу після «Старт» (панель: «Перевіряю…»)
         # UX-009: «Старт» натиснуто під час фонового читання «Мої речі» — чекаємо його кінця
         self.start_waiting = False
+        # QA-005: подвійний клік «Старт» — два запити одночасно; перевірка стану й запуск — разом
+        self.start_lock = threading.Lock()
         self.reading_poll = 5.0  # с між перевірками замка, поки чекаємо читання
         self.root = root
         self.cache_dir = cache_dir
@@ -1200,26 +1202,33 @@ class App:
         conn = self.connect()
         try:
             if action == "start":
-                state = self.robot_state(conn)
-                if not state.can_start:
-                    why = control.WHY_CODES.get(state.why_code)
-                    return redirect(f"{back}{sep}msg=robot_cannot_start{'_' + why if why else ''}")
-                args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
-                args += ["--fake-shafa"] if self.fake_shafa else []
-                if state.code == "reading" and not self.fake_shafa:  # UX-009: чекаємо кінця читання
-                    self.start_waiting = True
-                    self.run(lambda: self._start_after_reading(args))
-                    return redirect(f"{back}{sep}msg=robot_waiting_reading")
-                if not self.fake_shafa:
-                    verdict = self._login_verdict()
-                    if verdict is False:
-                        return redirect(f"{back}{sep}msg=robot_cannot_start_login")
-                    if verdict is None and self.login_probe is not None:
-                        self.login_checking = True  # перевірка — у фоні, екран одразу відповідає
-                        self.run(lambda: self._check_then_start(args))
-                        return redirect(f"{back}{sep}msg=robot_login_checking")
-                self._spawn(args)
-                return redirect(f"{back}{sep}msg=robot_started")
+                with self.start_lock:
+                    state = self.robot_state(conn)
+                    if not state.can_start:
+                        why = control.WHY_CODES.get(state.why_code)
+                        return redirect(
+                            f"{back}{sep}msg=robot_cannot_start{'_' + why if why else ''}"
+                        )
+                    args = ["--publish", "--db", str(self.db_path), "--root", str(self.root)]
+                    args += ["--fake-shafa"] if self.fake_shafa else []
+                    if (
+                        state.code == "reading" and not self.fake_shafa
+                    ):  # UX-009: чекаємо кінця читання
+                        self.start_waiting = True
+                        self.run(lambda: self._start_after_reading(args))
+                        return redirect(f"{back}{sep}msg=robot_waiting_reading")
+                    if not self.fake_shafa:
+                        verdict = self._login_verdict()
+                        if verdict is False:
+                            return redirect(f"{back}{sep}msg=robot_cannot_start_login")
+                        if verdict is None and self.login_probe is not None:
+                            self.login_checking = (
+                                True  # перевірка — у фоні, екран одразу відповідає
+                            )
+                            self.run(lambda: self._check_then_start(args))
+                            return redirect(f"{back}{sep}msg=robot_login_checking")
+                    self._spawn(args)
+                    return redirect(f"{back}{sep}msg=robot_started")
             if action == "rehearse":
                 return self._rehearse(conn, back, sep)
             if action == "login":
@@ -1402,6 +1411,13 @@ class App:
             query = request.arg("q").strip()
             wave = _wave_arg(request.arg("w")) if tab in klubok_screen.WAVE_FILTER else None
             every = klubok_screen.rows(conn, tab, query)
+            if tab == "decide":  # UX-010: фото стерто — «Спробувати ще раз» нічого не дасть
+                for r in every:
+                    if r.code in klubok_queue.BEFORE_CLICK:
+                        r.photos_gone = (
+                            klubok_screen.ad_view(r.card, self.root).skip_code
+                            == klubok_screen.NO_PHOTOS
+                        )
             found = [r for r in every if wave is None or r.wave == wave]
             list_url = klubok_list_url(tab, query, wave)
             pills = []
@@ -1500,6 +1516,13 @@ class App:
             if not card.only_klubok:  # F7: на вкладці Клубку — ціна Клубку (з поста), лише читання
                 card.fields["price"] = klubok_shafa_price(card)
             from_ = self._klubok_from(conn, request, card)
+            # UX-010: фото стерто — одна причина («немає фото») у «Як буде на Клубку», без другого
+            # рядка «не піде: …» і без «Спробувати ще раз» (повтор нічого не дасть)
+            no_photos = (
+                view is not None
+                and view.skip_code == klubok_screen.NO_PHOTOS
+                and (ad_row is None or ad_row["state"] in ("skipped", "problem"))
+            )
             return self.page(
                 "card.html",
                 **self._klubok_chrome(conn, request),
@@ -1507,7 +1530,8 @@ class App:
                 card=card,
                 item_action=f"/klubok/item/{item_id}",
                 view=view,
-                kline=None if editable else klubok_line(conn, self.root, card),
+                kphotos_gone=no_photos,
+                kline=None if editable or no_photos else klubok_line(conn, self.root, card),
                 kad=ad_row,
                 kwave=klubok_screen.card_wave(conn, card)[0],
                 kkind=klubok_screen.card_wave(conn, card)[1],
@@ -2492,6 +2516,8 @@ def klubok_todo(block: str | None, view: "klubok_screen.AdView | None") -> str |
     """F6: що заважає схвалити — одна причина, одним реченням (як «Щоб схвалити: …» у Шафи)."""
     if block in BLOCK_TODO:
         return f"Щоб схвалити: {BLOCK_TODO[block]}"
+    if view is not None and view.skip_code == klubok_screen.NO_PHOTOS:
+        return f"Схвалити не можна: {view.skip}"  # UX-010
     if view is not None and view.skip:
         why = klubok_queue.REASONS.get(view.skip_code) or view.skip  # без технічних дужок
         return f"Схвалити не можна: {why[:1].lower()}{why[1:]}"

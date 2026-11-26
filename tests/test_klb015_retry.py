@@ -83,3 +83,44 @@ def test_no_button_for_uncertain_and_post_refused(conn, root, app):  # noqa: F81
     response = post(app, f"/klubok/item/{item_id}", action="klubok_retry_form")
     assert "msg=stale" in location(response)  # запит мав піти — лише через «перевірте»
     assert row(conn, item_id)["state"] == queue.PROBLEM
+
+
+# --- UX-010: фото стерто — одна причина «немає фото», без «Спробувати ще раз» ---
+
+
+def _erase_photos(root):
+    for folder in root.iterdir():
+        if folder.is_dir():
+            for photo in folder.iterdir():
+                photo.unlink()
+
+
+def test_erased_photos_card_has_one_reason_and_no_retry(conn, root, app):  # noqa: F811
+    from test_web import plain
+
+    item_id = add(conn, root, 295, status=Status.PUBLISHED)
+    ad_row(conn, item_id, queue.PROBLEM, problem_code="klubok_photos", problem_text="x")
+    assert 'value="klubok_retry_form"' in html(get(app, f"/klubok/item/{item_id}"))  # фото є
+    _erase_photos(root)
+
+    page = html(get(app, f"/klubok/item/{item_id}"))
+    text = plain(page)
+
+    assert 'value="klubok_retry_form"' not in page and "Спробувати ще раз" not in page
+    assert "Не піде на Клубок: немає фото" in text
+    assert text.lower().count("немає фото") == 1  # одна причина, не дві
+    assert "Проблема:" not in text and "не піде:" not in text  # другого рядка-причини немає
+    assert "IMG_1.JPG" not in text  # без імен файлів у дужках
+    decide = html(get(app, "/klubok/decide"))
+    assert 'value="klubok_retry_form"' not in decide and "Відкрити Картку" in decide
+    assert "Форма Клубку не заповнилась" not in page
+
+
+def test_review_card_erased_photos_todo_is_just_no_photos(conn, root, app):  # noqa: F811
+    from test_web import plain
+
+    item_id = add(conn, root, 295, status=Status.APPROVED)
+    _erase_photos(root)
+    text = plain(html(get(app, f"/klubok/item/{item_id}")))
+    assert text.count("фото вже стерто") == 0 and "немає фото" in text
+    assert "IMG_1.JPG" not in text

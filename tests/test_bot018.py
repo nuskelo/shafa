@@ -322,7 +322,7 @@ def test_summary_has_expandable_blocks_with_links(conn, data, tg, make_bot):
     step(clock, bot)
     summary = sent(tg, OWNER)[0]
     text, entities = summary["text"], summary["entities"]
-    assert "виставлено 2 · Проблем 1 · продано 1" in text and "причина: черга закінчилась" in text
+    assert "виставлено 2 · Проблем 1 · продано 1" in text and "причина: Черга закінчилась" in text
     quotes = [e for e in entities if e["type"] == "expandable_blockquote"]
     titles = [utf16_slice(text, e["offset"], e["length"]).split("\n")[0] for e in quotes]
     assert titles == ["Виставлені (2)", "Проблеми (1)", "Продано, в Архів (1)"]

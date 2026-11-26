@@ -6,7 +6,7 @@ from shafa import web
 from shafa.db import Status
 from shafa.klubok import queue
 from test_klb002_queue import OTHER_PAIR, TODAY, ad_row, add, row, snapshot
-from test_web import PORT, TOKEN, get, html, location, post
+from test_web import PORT, TOKEN, get, html, location, plain, post
 
 
 @pytest.fixture(autouse=True)
@@ -108,9 +108,17 @@ def test_problems_page_has_klubok_block_and_shafa_counter_unchanged(conn, app, r
 
     page = html(get(app, "/problem"))
 
-    assert "Клубок: Проблеми" in page
-    assert f'href="/klubok/item/{item_id}?from=' in page  # KLB-009: рішення — у вкладці «Клубок»
-    assert "перевірте на Клубку, чи опубліковано" in page
+    # UX-010: один рядок із посиланням у «Проблеми» Клубку, а не список Карток
+    assert "Клубок: 1 проблема" in plain(page) and 'href="/klubok/decide"' in page
+    assert "Клубок: Проблеми" not in page and f"/klubok/item/{item_id}" not in page
+    assert "перевірте на Клубку, чи опубліковано" not in page
     assert web.review.counts(conn)[Status.PROBLEM] == 0  # лічильник Шафи не змінився
     other = add(conn, root, 7302)
-    assert "Клубок: Проблеми" not in html(get(app, "/review")) and other
+    assert "Клубок:" not in plain(html(get(app, "/review"))) and other
+
+
+def test_problems_page_counts_klubok_problems_with_plural(conn, app, root):
+    for number in (7301, 7302, 7303, 7304, 7305):
+        item_id = add(conn, root, number, status=Status.PUBLISHED)
+        ad_row(conn, item_id, queue.PROBLEM, problem_code=queue.UNCERTAIN, problem_text="x")
+    assert "Клубок: 5 проблем → відкрити" in plain(html(get(app, "/problem")))

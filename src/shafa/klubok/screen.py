@@ -125,6 +125,7 @@ class Row:
     listing: Listing | None = None
     note: str | None = None  # KLB-011: що сказала програма (ШІ, фото) — простою мовою
     auto: str | None = None  # KLB-011: рішення програми — "dup" (Архів) / "other" (Схвалені)
+    photos_gone: bool = False  # UX-010: фото Картки стерто — повторювати форму нема сенсу
 
     @property
     def todo(self) -> str:
@@ -135,7 +136,7 @@ class Row:
     @property
     def retryable(self) -> bool:
         """KLB-015: помилка форми до кліку — є кнопка «Спробувати ще раз»."""
-        return self.code in queue.BEFORE_CLICK
+        return self.code in queue.BEFORE_CLICK and not self.photos_gone
 
     @property
     def price(self) -> int | None:
@@ -341,6 +342,10 @@ class Line:
     warn: str = ""  # чого бракує — жовтим
 
 
+NO_PHOTOS = "klubok_no_photos"
+NO_PHOTOS_TEXT = "немає фото — файли вже стерто з комп'ютера"
+
+
 @dataclass
 class AdView:
     lines: list[Line] = field(default_factory=list)
@@ -405,6 +410,8 @@ def ad_view(card: Card, root: Path) -> AdView:
     ]
     reason = queue.REASONS.get(result.code, "")
     detail = result.text if result.text and result.text != reason else ""
+    if result.code == NO_PHOTOS:  # UX-010: одна причина простою мовою, без імен файлів у дужках
+        return AdView(lines, skip=NO_PHOTOS_TEXT, skip_code=result.code)
     return AdView(
         lines, skip=f"{reason} ({detail})" if detail else reason or result.text,
         skip_code=result.code,

@@ -1,14 +1,7 @@
 {% extends "list.html" %}
 {% block cards %}
 {% if klubok_problems %}
-<section class="klubok-problems">
-  <h2>Клубок: Проблеми</h2>
-  <ul>
-  {% for kcard, why in klubok_problems %}
-    <li><a href="/klubok/item/{{ kcard.id }}?from=%2Fklubok%2Fdecide">{{ kcard | card_name }}</a>{% if kcard.post_id %} · пост {{ kcard.post_id }}{% endif %} — {{ why }}</li>
-  {% endfor %}
-  </ul>
-</section>
+<p class="klubok-problems"><b>Клубок:</b> {{ plural(klubok_problems | length, "проблема", "проблеми", "проблем") }} → <a href="/klubok/decide">відкрити</a></p>
 {% endif %}
 <ul class="problems">
 {% for card in cards %}

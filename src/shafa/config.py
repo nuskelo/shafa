@@ -111,13 +111,21 @@ def default_data_dir() -> Path:
 # --- Запис `.env`: лише її користувач ---
 
 
+def hidden_window() -> dict:
+    """QA-005: `creationflags` для дочірніх процесів. Програма з ярлика — `pythonw` без консолі,
+    і консольний `icacls`/`git` без цього блимає чорним вікном (Windows). На інших ОС — порожньо."""
+    if os.name == "nt":  # pragma: no cover — перевіряється в windows-tests
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}
+
+
 def restrict(path: Path) -> None:
     """Права на файл — лише поточний користувач (Windows: `icacls`, без успадкування)."""
     if os.name == "nt":
         user = f"{os.environ.get('USERDOMAIN', '')}\\{os.environ['USERNAME']}".lstrip("\\")
         subprocess.run(
             ["icacls", str(path), "/inheritance:r", "/grant:r", f"{user}:F"],
-            check=True, capture_output=True,
+            check=True, capture_output=True, **hidden_window(),
         )  # fmt: skip
     else:
         path.chmod(0o600)
