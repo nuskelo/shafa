@@ -1,43 +1,45 @@
 """KLB-004: «Обновить все» на Клубку робить робот (`robot --klubok-renew`, початок сесії публікації,
-щоденний запуск у програмі).
+запуск у програмі).
 
 `renew` (KLB-013): вхід → знімок «до» (`type=0` ∪ `type=1`; **не вдався — це ще не стоп**, лише
-нічого не записано й P невідоме) → сьогодні GET уже був — нічого → сторінка керування (лише
-читання): посилання «Обновить все (N)» немає — нічого (термін попереду — «Наступне оновлення: …»,
-інакше тиха подія) → позначка доби → **один** GET `/renew/all` за `RenewTicket` (`page.goto`; у
-`--human-click` тисне людина) → пауза 5–10 с → знімок «після» (не вдався — стоп) і сторінка
-керування → `renew.judge`: успіх — тиха `klubok.renew` і `renewed_at`; інакше гучна
-`klubok.renew_failed`. Знімок «до» не вдався, а GET не буде (посилання немає, сьогодні вже було) —
-`RenewStop` з його кодом; `klubok_snapshot_drop` при посиланні — текст «Схоже, оголошення прострочені
-(N)…» (`drop_text`). 429 / немає входу — `RenewStop` одразу. Повтору немає.
+нічого не записано й P невідоме) → KLB-019: від минулого GET менше 3 год чи сьогодні вже 4 —
+нічого → сторінка керування (лише читання): посилання «Обновить все (N)» немає — нічого (термін
+попереду — «Наступне оновлення: …», інакше тиха подія) → позначка GET → **один** GET `/renew/all`
+за `RenewTicket` (`page.goto`; у `--human-click` тисне людина) → пауза 5–10 с → знімок «після» (не
+вдався — стоп) і сторінка керування → `renew.judge`: успіх — тиха `klubok.renew` і `renewed_at`;
+інакше гучна `klubok.renew_failed`. Знімок «до» не вдався, а GET не буде — `RenewStop` з його
+кодом; `klubok_snapshot_drop` при посиланні — текст «Схоже, оголошення прострочені (N)…»
+(`drop_text`). 429 / немає входу — `RenewStop` одразу. Повтору немає.
 
-`Daily` — за зразком `rehearse.Nightly`, але без `GRACE`: о `SHAFA_KLUBOK_RENEW_AT` і пізніше того ж
-дня, коли `SHAFA_KLUBOK`, робот вільний і `renew.wanted`; позначка доби — лише після запуску.
+`Daily` (KLB-019) — потік програми, раз на хвилину: не «о 20:00», а щойно оголошення можна оновити
+(`renew.wanted`: термін ≤ зараз + 1 год 45 хв), якщо `renew.blocked` мовчить, робот вільний і вхід
+не злетів. Лише `SHAFA_KLUBOK_RENEW_AT=off` вимикає.
 """
 
 import random
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from shafa import config, events
+from shafa import events
 from shafa.klubok import queue, renew, snapshot
 from shafa.robot import klubok_form as form
 
 LOGIN = "klubok_login"  # ті самі коди, що в `klubok_publish`
 TOO_MANY = snapshot.TOO_MANY
-NOT_DUE, DONE_TODAY, NO_LINK, NO_PAGE = "not_due", "done_today", "no_link", "no_page"
+NOT_DUE, TOO_SOON, NO_LINK, NO_PAGE = "not_due", "too_soon", "no_link", "no_page"
 RENEWED, FAILED, NOT_CLICKED = "renewed", "renew_failed", "renew_not_clicked"
-QUIET = (NOT_DUE, DONE_TODAY, NO_LINK, RENEWED)  # код виходу 0
+QUIET = (NOT_DUE, TOO_SOON, NO_LINK, RENEWED)  # код виходу 0
 SETTLE = (5.0, 10.0)  # с між GET і новим знімком
 HUMAN_WAIT = 600.0  # с: `--human-click` — людина тисне «Обновить все»
 FAILED_TEXT = "Оновлення на Клубку не підтвердилось — перевірте сторінку"
 LOGIN_TEXT = "Увійдіть у Клубок: python -m shafa robot --klubok-login"
-DAILY_MARK = "klubok-renew-daily"  # дата, коли щоденний запуск уже був
 TICK = 60.0  # с між перевірками годинника
+RETRY = timedelta(minutes=15)  # запуск без GET (посилання ще немає) — не частіше
+STALE_RETRY = timedelta(hours=1)  # знімок старий, а запуск не допоміг — не частіше
 
 
 class RenewStop(Exception):
@@ -154,11 +156,11 @@ class Renewer:
         snap, broken = self._before()
         snapped = snap is not None
         now = self.now()
-        if renew.done_on(now.date(), self.data_dir):
+        if (wait := renew.blocked(now, self.data_dir)) is not None:
             if broken is not None:
                 raise RenewStop(broken.code, drop_text(self._manage(), broken.text))
-            self.log("Обновить все: сьогодні вже оновлювали — наступне завтра")
-            return Outcome(DONE_TODAY, "сьогодні вже оновлювали", snapped=snapped)
+            self.log(f"Обновить все: поки не можна ({wait})")
+            return Outcome(TOO_SOON, wait, snapped=snapped)
         page = self._manage()
         if page is None or not page.present:
             if broken is not None:
@@ -192,9 +194,10 @@ class Renewer:
         if not verdict.ok:
             return self._failed(now, verdict.text, page.count, total, after)
         marked = renew.mark_ok(self.conn, verdict.renewed, now)
+        got = len(verdict.renewed) if before is not None else total  # скільки оновлено цим GET
         count = renew.active_count(self.conn)
-        renew.save(self.data_dir, ok=True, text=verdict.text, count=count, link=page.count,
-                   overdue=total, renewed=len(verdict.renewed))  # fmt: skip
+        renew.record_done(self.data_dir, now, got, text=verdict.text, count=count,
+                          link=page.count, overdue=total, renewed=len(verdict.renewed))  # fmt: skip
         text = (f"Клубок: «Обновить все» — {verdict.text} (посилання: {shown}), активних {count}"
                 + (f", виставлених програмою {marked}" if marked else ""))  # fmt: skip
         self.log(text)
@@ -222,12 +225,12 @@ class Renewer:
         return Outcome(code, text, overdue=renewable, snapped=True)
 
     def _send(self, now: datetime) -> bool:
-        """Один GET `/renew/all`. Позначка доби: робот — до запиту; `--human-click` — лише коли guard
+        """Один GET `/renew/all`. Позначка GET: робот — до запиту; `--human-click` — лише коли guard
         пропустив запит «Обновить все» (RENEWED, `Session.on_renew`): людина не натиснула чи
-        натиснула не те — позначки немає, того ж дня можна ще раз."""
+        натиснула не те — позначки немає, можна ще раз."""
 
         def mark() -> None:
-            renew.save(self.data_dir, day=now.date().isoformat(), at=now.isoformat(), ok=None)
+            renew.record_get(self.data_dir, now)
 
         if self.human:
             self.session.on_renew = mark
@@ -259,11 +262,12 @@ def renew_once(conn: sqlite3.Connection, session: form.Session, **kwargs: Any) -
 
 
 class Daily:
-    """Раз на добу о `SHAFA_KLUBOK_RENEW_AT` чи пізніше того ж дня запускає `--klubok-renew`.
+    """KLB-019: запускає `--klubok-renew`, щойно оголошення можна оновити (а не раз на добу о 20:00).
 
-    На відміну від `rehearse.Nightly`: без `GRACE`, робот зайнятий чи Mac спав — наступний тик того ж
-    дня; позначка доби — лише після запуску, коли термін уже минув (чи знімок старий); термін ще
-    попереду (≤ 1 год) — повтор не частіше ніж раз на годину. Налаштування читаються щоразу.
+    Тик раз на хвилину. Умови: Клубок і автоматика ввімкнені, вхід не злетів, `renew.wanted`
+    (термін ≤ зараз + 1 год 45 хв чи знімок старший за добу), `renew.blocked` мовчить (≥ 3 год від
+    минулого GET, < 4 за добу), робот вільний. Команда сама дивиться, чи є посилання «Обновить все»;
+    немає — GET нема, а повторний запуск — не раніше `RETRY`. Налаштування читаються щоразу.
     """
 
     def __init__(
@@ -278,45 +282,31 @@ class Daily:
     ) -> None:
         self.command, self.spawn, self.busy, self.log = command, spawn, busy, log
         self.connect, self.clock, self.folder = connect, clock, folder
-        self.said: set[str] = set()  # що вже писали в журнал сьогодні (не спамити кожну хвилину)
-        self.last: datetime | None = None  # коли запускали востаннє (термін ще попереду)
-
-    def _marker(self) -> Path:
-        return (self.folder or config.data_dir()) / DAILY_MARK
-
-    def _done(self, today: str) -> bool:
-        try:
-            return self._marker().read_text(encoding="utf-8").strip() == today
-        except OSError:
-            return False
-
-    def _mark(self, today: str) -> None:
-        try:
-            self._marker().parent.mkdir(parents=True, exist_ok=True)
-            self._marker().write_text(today, encoding="utf-8")
-        except OSError:
-            pass
+        self.said: set[str] = set()  # що вже писали в журнал (не спамити кожну хвилину)
+        self.last: datetime | None = None  # коли запускали востаннє
 
     def _say(self, key: str, text: str) -> None:
         if key not in self.said:
             self.said.add(key)
             self.log(text)
 
+    def _login_lost(self) -> bool:
+        from shafa.klubok import login
+        from shafa.robot import klubok_control
+
+        return login.failed(klubok_control._login_at(), self.folder)
+
     def tick(self) -> str | None:
         """started / busy — що зроблено цього разу; None — нічого."""
         now = self.clock()
         today = f"{now:%Y-%m-%d}"
-        if not queue.enabled():
+        if not queue.enabled() or not renew.automatic():
             return None
-        try:
-            at = renew.at_setting()
-        except renew.SetupError as error:
-            self._say(f"bad:{error}", f"{error} — щоденного «Обновить все» немає")
+        if (stray := renew.ignored_value()) is not None:
+            self._say(f"stray:{stray}", f"{renew.AT_SETTING}={stray!r} більше не час запуску "
+                      "(лише «off» вимикає «Обновить все») — ігнорую")  # fmt: skip
+        if renew.blocked(now, self.folder) is not None:
             return None
-        if at is None or now.time() < at or self._done(today):
-            return None
-        if renew.done_on(now.date(), self.folder):
-            return None  # сьогодні вже оновила сесія публікації чи команда
         conn = self.connect()
         try:
             if not renew.wanted(conn, now):
@@ -324,20 +314,20 @@ class Daily:
             first, read = renew.due(conn), renew.read_at(conn)
         finally:
             conn.close()
-        # термін ще попереду (≤ 1 год): команда скаже «не настав» — доба лишається відкритою,
-        # наступна спроба не раніше ніж за годину
-        final = read is None or now - read > renew.STALE or (first is not None and first <= now)
-        if not final and self.last is not None and now - self.last < renew.AHEAD:
+        if self._login_lost():
+            self._say(
+                f"login:{today}", "«Обновить все»: вхід у Клубок злетів — спершу «Увійти в Клубок»"
+            )
+            return None
+        near = first is not None and first <= now + renew.AHEAD and not (
+            read is None or now - read > renew.STALE)  # fmt: skip
+        if self.last is not None and now - self.last < (RETRY if near else STALE_RETRY):
             return None
         if self.busy():
-            self._say(
-                f"busy:{today}", f"«Обновить все» о {at:%H:%M}: робот зайнятий — спробую пізніше"
-            )
+            self._say(f"busy:{today}:{now:%H}", "«Обновить все»: робот зайнятий — спробую пізніше")
             return "busy"
         self.spawn(self.command())
         self.last = now
-        if final:
-            self._mark(today)
         self.log(f"«Обновить все» на Клубку запущено ({now:%H:%M})")
         return "started"
 

@@ -124,7 +124,7 @@ def nightly(path: Path) -> rehearse.Nightly:
 
 
 def klubok_daily(path: Path) -> klubok_renew.Daily:
-    """KLB-004: «Обновить все» на Клубку раз на добу о `SHAFA_KLUBOK_RENEW_AT` і пізніше."""
+    """KLB-019: «Обновить все» на Клубку — щойно оголошення можна оновити (≥ 3 год від минулого)."""
     return klubok_renew.Daily(
         command=lambda: ["--klubok-renew", "--db", str(path)],
         spawn=lambda args: control.spawn(args, log=klubok_control.log_path()),
