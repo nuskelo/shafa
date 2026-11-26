@@ -32,6 +32,7 @@ class Kind:
     emoji: str
     loud: bool = False  # гучне повідомлення одразу, інакше — тихо, у збірці раз на 5 хв
     skip: bool = False  # бот не шле: те саме вже йде іншим шляхом (Проблеми — з кнопками, BOT-011)
+    hint: str = ""  # BOT-019: ключ у `hints.EVENTS` — до гучного рядка додається «Що робити»
 
 
 # Єдина таблиця видів: `kind` → emoji, гучність, пропускати чи ні.
@@ -47,7 +48,9 @@ KINDS = {
     "robot.problem": Kind("⚠️", skip=True),  # її вже шле `alerts._problem_events` з кнопками
     "robot.end": Kind("⏹", skip=True),  # BOT-018: кінець — підсумок із бази, дані — для нього
     "robot.stop": Kind("⛔", loud=True, skip=True),  # її вже шле `alerts._session_events`
-    "shafa.balance": Kind("💳", loud=True),  # ROBOT-014: вікно від'ємного балансу, раз на добу
+    "shafa.balance": Kind(
+        "💳", loud=True, hint="shafa.balance"
+    ),  # ROBOT-014: вікно від'ємного балансу, раз на добу
     # пробний прогін (`robot/rehearse.py`)
     "rehearse.start": Kind("🧪"),
     "rehearse.done": Kind("🧪"),
@@ -68,14 +71,22 @@ KINDS = {
     "klubok.dup_auto": Kind("🧶"),  # KLB-011: дубль вирішила програма (фото чи ШІ), тихо
     "klubok.renew": Kind("🔄"),  # KLB-004: «Обновить все» підтверджено (тихо)
     "klubok.renew_skip": Kind("🔄"),  # KLB-004: прострочених немає / не натиснуто (тихо)
-    "klubok.renew_failed": Kind("⚠️", loud=True),  # KLB-004: оновлення не підтвердилось
+    "klubok.renew_failed": Kind(
+        "⚠️", loud=True, hint="klubok.renew_failed"
+    ),  # KLB-004: оновлення не підтвердилось
     "klubok.sold_asked": Kind("🏷"),  # KLB-005: «схоже, продано» — питання на екрані (тихо)
     "klubok.sold_answer": Kind("🏷"),  # KLB-005: відповідь Вікторії «Так» / «Ні» (тихо)
     "klubok.sold": Kind("🏷"),  # KLB-005: оголошення позначено проданим, Клубок підтвердив (тихо)
-    "klubok.sold_failed": Kind("⚠️", loud=True),  # KLB-005: «продано» не підтвердилось
+    "klubok.sold_failed": Kind(
+        "⚠️", loud=True, hint="klubok.sold_failed"
+    ),  # KLB-005: «продано» не підтвердилось
     "klubok.dup_stop": Kind("⚠️"),  # KLB-011: Клубок відповів 429/403 — перевірку дублів зупинено
-    "klubok.login": Kind("🔑", loud=True),  # KLB-018: вхід у Клубок злетів — потрібно увійти
-    "shafa.login": Kind("🔑", loud=True),  # ROBOT-019: вхід на Шафу злетів — потрібно увійти
+    "klubok.login": Kind(
+        "🔑", loud=True, hint="klubok.login"
+    ),  # KLB-018: вхід у Клубок злетів — потрібно увійти
+    "shafa.login": Kind(
+        "🔑", loud=True, hint="shafa.login"
+    ),  # ROBOT-019: вхід на Шафу злетів — потрібно увійти
     "klubok.photos": Kind("🖼"),  # KLB-012: фото постів бота з Експорту обговорення (тихо)
     "klubok.linked": Kind("🔗"),  # KLB-016: її оголошення ↔ пости за фото (`klubok-link`), тихо
     # пости каналу (`scan.py`, `changes.py`, `robot/publish.py`, `site.py`)

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from shafa import batch, config, events
+from shafa import batch, config, events, hints
 from shafa.bot import actions, report, sessions
 from shafa.db import Status
 from shafa.klubok import queue as klubok_queue
@@ -274,8 +274,9 @@ def _problem_events(conn: sqlite3.Connection, state: dict, owner: bool) -> list[
     else:
         text = f"⚠️ Нові Проблеми ({len(rows)}):\n" + "\n".join("• " + line for line in lines)
         text += f"\n…і ще {more}" if more else ""
-        if owner and len(rows) > actions.MULTI_MAX:
-            text += f"\nКнопки — для перших {actions.MULTI_MAX}, решту — у програмі."
+    text += actions.advice_text(rows)  # BOT-019: що робити — з того самого довідника, що й екран
+    if owner and len(rows) > actions.MULTI_MAX:
+        text += f"\nКнопки — для перших {actions.MULTI_MAX}, решту — у програмі."
     album_of = None
     if len(rows) == 1 and rows[0]["problem_code"] == "possible_duplicate":
         album_of = rows[0]["id"]
@@ -329,8 +330,9 @@ def _budget_events(conn: sqlite3.Connection, state: dict, moment: datetime) -> l
     spent, limit = high
     text = (
         f"💸 ШІ: сьогодні витрачено ${spent / 1_000_000:.2f} із ${limit / 1_000_000:.2f} "
-        f"({spent * 100 // limit}%). Коли ліміт вичерпається, нові Картки зачекають до завтра."
+        f"({spent * 100 // limit}%)."
     )
+    text += "\n" + hints.advice(hints.EVENTS["ai_budget"])  # BOT-019
     return [Event(f"budget:{day}", text, _set("budget_day", day.isoformat()))]
 
 
@@ -390,6 +392,9 @@ def _journal_events(data_dir: Path, state: dict, moment: datetime) -> list[Event
             continue
         line = f"{kind.emoji} {record.text}"
         loud = record.loud or kind.loud
+        hint = hints.EVENTS.get(str(record.data.get("hint") or kind.hint))
+        if loud and hint and hint.do:  # BOT-019: гучна подія — одразу з порадою «Що робити»
+            line += f"\n{hints.advice(hint)}"
         if not loud:
             stamp = record.at.strftime("%H:%M") if record.at else ""
             line = f"{stamp} {line}"

@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from shafa import config
-from shafa.klubok import auto, login, queue, renew, snapshot
+from shafa import config, hints
+from shafa.klubok import auto, login, queue, renew
 from shafa.robot import control, klubok_publish, lock
 
 LOG_NAME = "klubok-run.log"
@@ -63,15 +63,9 @@ SHORT = {  # на сторінках Клубку «Клубку» зайве �
 }
 # Як закінчилась сесія — простими словами (решта — `klubok_publish.STOPS` / `queue.REASONS`)
 LAST = {
-    klubok_publish.DONE: "виставлено, скільки можна було",
-    klubok_publish.STOPPED: "зупинено кнопкою «Стоп»",
-    klubok_publish.LOGIN: "робот вийшов із Клубку — натисніть «Увійти в Клубок»",
-    klubok_publish.CRASH: "робот зупинився посеред роботи",
-    queue.EMPTY: "черга закінчилась",
-    queue.LIMIT_REACHED: "денний ліміт Клубку вичерпано",
-    snapshot.FAILED: "не вдалось перечитати ваші оголошення на Клубку — «Старт» ще раз пізніше",
-    snapshot.TOO_MANY: "Клубок попросив зачекати (429) — «Старт» через годину",
-}
+    code: hints.inline(h)[:1].lower() + hints.inline(h)[1:]
+    for code, h in hints.KLUBOK_STOPS.items()
+}  # BOT-019: як у боті
 
 WORKING = ("running", "pausing", "paused", "stopping")
 IDLE = ("stopped", "off", "crashed", "failed", "login_needed")
@@ -79,10 +73,7 @@ CRASHED_LIMIT = (  # N9: ліміт доби вичерпано — «Старт
     "Робот Клубку зупинився посеред роботи — відкрийте «Проблеми». На сьогодні ліміт вичерпано: "
     "завтра після 00:00 натисніть «Старт». Повториться — скажіть Власнику."
 )
-LOGIN_HELP = (
-    "Робот вийшов із Клубку. Натисніть «Увійти в Клубок»: відкриється вікно Chrome — увійдіть, як "
-    "завжди, і закрийте це вікно. Потім натисніть «Старт»."
-)
+LOGIN_HELP = hints.card_text(hints.KLUBOK_STOPS[klubok_publish.LOGIN])  # BOT-019
 
 
 @dataclass

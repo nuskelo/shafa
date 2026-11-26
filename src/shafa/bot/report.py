@@ -13,9 +13,9 @@ from collections import Counter
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
-from shafa import batch, borh, changes, config
+from shafa import batch, borh, changes, config, hints
 from shafa.db import Status
-from shafa.robot import control, rehearse
+from shafa.robot import rehearse
 
 SETTING = "SHAFA_REPORT_AT"  # «21:00»; порожнє чи «off» — звіту немає; не задано — 21:00
 DEFAULT_AT = "21:00"
@@ -35,39 +35,6 @@ SECRETS = (
     "TELEGRAM_BOT_CHANNEL_ID",
 )
 
-# Коротко для звіту. Довгі підказки до тих самих кодів — `web.PROBLEM_HINTS` (екран); їх сюди не
-# тягнемо: `web` — HTTP-сервер, а в звіті потрібна лише назва.
-PROBLEMS = {
-    "bad_folder_name": "Неправильна назва папки",
-    "duplicate_post": "Дві папки на один пост",
-    "post_not_found": "Поста немає в Експорті",
-    "no_text": "Немає тексту поста",
-    "no_price": "Немає ціни",
-    "many_items": "Кілька товарів у пості",
-    "size_gone": "Розмір прибрано з поста",
-    "no_section": "Немає розділу на Шафі",
-    "no_photos": "Немає фото",
-    "too_many_photos": "Забагато фото",
-    "folder_missing": "Папку не знайдено",
-    "ai_error": "ШІ не заповнило бланк",
-    "stale_rules": "Схвалено за старими правилами",
-    "publish_uncertain": "Невідомо, чи опубліковано",
-    "possible_duplicate": "Можливий дубль на Шафі",
-    "already_published": "Уже опубліковано",
-    "shafa_declined": "Шафа відхилила",
-    "publish_error": "Шафа не прийняла товар",
-    "robot_field_missing": "Робот не знайшов поле на формі",
-    "robot_logged_out": "Робот не увійшов на Шафу",
-    "robot_brand_missing": "Робот не знайшов бренд",
-    "photos_missing": "Фото поста не знайдено в папці",
-    "robot_photos": "Не всі фото завантажились",
-    "robot_not_ready": "Картку не можна передати роботу",
-    "robot_not_sent": "Форма на Шафі не надіслалась",
-    "robot_publish_blocked": "Захист не пропустив публікацію",
-    "robot_slow": "Шафа довго не відповідала",
-    "duplicate": "Уже є на Шафі",
-}
-
 _WINDOWS_PATH = re.compile(r"[A-Za-z]:\\\S*")
 _UNIX_PATH = re.compile(r"(?<![\w/])~?(?:/[^\s/]+){2,}")
 _LONG_NUMBER = re.compile(r"-?\d{7,}")  # chat id, id каналу
@@ -76,7 +43,11 @@ _LONG_NUMBER = re.compile(r"-?\d{7,}")  # chat id, id каналу
 def problem_name(code: str | None) -> str:
     if not code:
         return "Без коду"
-    return PROBLEMS.get(code) or (code if re.fullmatch(r"[a-z0-9_]+", code) else "Інше")
+    if hint := hints.problem(code) or hints.problem(
+        code, "klubok"
+    ):  # BOT-019: назви — з довідника, як на екрані
+        return hint.title
+    return code if re.fullmatch(r"[a-z0-9_]+", code) else "Інше"
 
 
 # --- Доба ---
@@ -120,7 +91,8 @@ def _shafa(conn: sqlite3.Connection, day: date) -> str:
     last = sessions[-1]
     if last["ended_at"] is None:
         return line + "; робот ще працює"
-    reason = control.LAST.get(last["stop_code"] or "", "") or last["stop_reason"] or ""
+    hint = hints.stop("shafa", last["stop_code"])
+    reason = (hint.what if hint else "") or last["stop_reason"] or ""
     return f"{line}; зупинка: {reason}" if reason else line
 
 
