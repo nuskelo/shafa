@@ -429,15 +429,16 @@ def test_ai_run_of_ten_cards_has_start_and_end_with_numbers(conn, root, data):
     client = FakeClient(ai_message(answer, usage=(9000, 500)))
     results = fill.fill_all(conn, client, planned)
     start, done = journal(data)
-    assert (start["kind"], start["text"]) == ("ai.start", "ШІ почав аналіз: 10 Карток")
-    cents = round(sum(r.usage.cost_micro_usd for r in results) / 10_000)
+    assert start["kind"] == "ai.start" and not start["loud"]
+    assert start["text"].startswith("ШІ почав аналіз: 10 Карток (нових 10, старих 0) · оцінка ≈ ")
     assert done["kind"] == "ai.done"
     assert done["text"].startswith("ШІ закінчив: 10 Карток — ")
-    assert f"· {cents} ¢ (сьогодні " in done["text"] and done["text"].endswith(" з 3 $)")
+    assert " · витрачено " in done["text"] and " · сьогодні " in done["text"]
+    assert done["text"].endswith(" з 3 $\nВідкрийте «На перевірку».") and done["loud"]  # BOT-019
     ready = sum(1 for r in results if not r.yellow)
     yellow = len(results) - ready
-    assert f"{ready} готові до перевірки" in done["text"] or ready == 0
-    assert (f"{yellow} з жовтим" in done["text"]) == bool(yellow)
+    assert f"{ready} готові" in done["text"] or ready == 0
+    assert (f"{yellow} з жовтим (перевірте жовті поля)" in done["text"]) == bool(yellow)
 
 
 def test_ai_run_with_problem_counts_it(conn, root, data):
@@ -495,13 +496,13 @@ def test_batch_has_start_when_many_and_end_when_collected(conn, root, data):
     client = FakeBatchClient()
     ids, bid = sent_batch(conn, root, client, 2)
     [start] = journal(data)
-    assert start["text"].startswith("ШІ почав аналіз: 2 Картки (пакет, ≈ ")
+    assert start["text"].startswith("ШІ почав аналіз: 2 Картки (нових 2, старих 0) · оцінка ≈ ")
     client.batches.status["msgbatch_1"] = "ended"
     client.batches.lines["msgbatch_1"] = [line(f"b{bid}-i{i}") for i in ids]
     batch.collect(conn, client, TODAY)
     done = journal(data)[-1]
     assert done["kind"] == "ai.done" and done["text"].startswith("ШІ закінчив: 2 Картки — ")
-    assert "¢ (сьогодні" in done["text"]
+    assert " · витрачено " in done["text"] and " · сьогодні " in done["text"]
 
 
 def test_batch_of_one_card_says_nothing_at_start(conn, root, data):

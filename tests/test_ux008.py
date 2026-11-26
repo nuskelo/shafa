@@ -101,7 +101,7 @@ def test_problem_labels(conn, root, app):  # R-B20, R-B21
     problem(conn, root, "possible_duplicate", folder="1344", post_id=1344)
     page = html(get(app, "/problem"))
     assert "Нема фото в папці" in page and "Фото не завантажились" in page
-    assert "інша пара — «Це інший товар», та сама — «В архів»" in page
+    assert "інша пара — «Це інший товар»; та сама — «В архів»" in page
 
 
 def test_stale_rules_recheck_that_ends_in_problem_is_not_reported_as_done(

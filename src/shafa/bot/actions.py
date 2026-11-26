@@ -15,13 +15,13 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from shafa import config, photos, review
+from shafa import config, hints, photos, review
 from shafa.bot import report
 from shafa.bot.telegram import TelegramError, Upload
 from shafa.db import Status
 from shafa.folders import item_folder
-from shafa.robot import control, publish
 from shafa.robot import listings as listings_mod
+from shafa.robot import publish
 from shafa.scan import STICKY
 
 RECHECK, ARCHIVE, ARCHIVE_YES, ARCHIVE_NO = "rc", "ar", "ay", "an"
@@ -78,6 +78,26 @@ def card_text(row: sqlite3.Row, limit: int = LINE_MAX) -> str:
     return report.clip(what, limit)
 
 
+ADVICE_MAX = 3  # скільки різних порад у повідомленні про кілька Проблем
+
+
+def advice_text(rows: list[sqlite3.Row]) -> str:
+    """BOT-019: «Що робити» під повідомленням про нові Проблеми — з `hints.py`, як на екрані.
+    Одна Картка — один рядок; кілька — по рядку на кожен різний код."""
+    found: dict[str, hints.Hint] = {}
+    for row in rows:
+        code = row["problem_code"] or ""
+        hint = hints.problem(code)
+        if hint is not None and hint.do and code not in found:
+            found[code] = hint
+    if not found:
+        return ""
+    if len(rows) == 1:
+        return "\n" + hints.advice(next(iter(found.values())))
+    lines = [f"→ {h.title}: {hints.steps(h)}" for h in list(found.values())[:ADVICE_MAX]]
+    return "\nЩо робити:\n" + "\n".join(lines)
+
+
 def _data(action: str, row: sqlite3.Row) -> str:
     return f"{action}:{row['id']}:{row['problem_code'] or ''}"
 
@@ -93,7 +113,7 @@ def buttons(row: sqlite3.Row) -> list[list[dict]]:
             return [[_button("🔁 Перевірити ще раз", RECHECK, row)]]
         case "duplicate":
             return [
-                [_button("✅ Різні пари", DIFFERENT, row), _button("🗄 Дубль", ARCHIVE, row)],
+                [_button("Це інший товар", DIFFERENT, row), _button("В архів", ARCHIVE, row)],
             ]
         case "declined":
             link = shafa_link(row["shafa_url"])
@@ -381,8 +401,11 @@ def _what(bot: Any, query: dict, raw_id: str) -> None:
     if session is None:
         _finish(bot, query, TEXTS["gone"])
         return
-    reason = control.LAST.get(session["stop_code"] or "", "") or session["stop_reason"] or ""
+    hint = hints.stop("shafa", session["stop_code"])
+    reason = (hint.what if hint else "") or session["stop_reason"] or ""
     lines = [f"📋 Сесія {session['id']}: {reason.strip().rstrip('.') or 'причина невідома'}."]
+    if hint and hint.do:
+        lines.append(hints.advice(hint))
     rows = session_problems(bot.conn, session)
     if rows:
         lines.append("Проблеми цієї сесії:")

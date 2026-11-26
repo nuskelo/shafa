@@ -120,7 +120,7 @@ def test_report_text_on_fixture_db(conn, data):
     assert text.splitlines() == [
         "📊 Звіт за 21.10",
         "Шафа: опубліковано 3 (сесій 2); зупинка: Денний ліміт вичерпано",
-        "Проблеми за день: 3 (Робот не знайшов поле на формі ×2, Немає ціни ×1)",
+        "Проблеми за день: 3 (Робот не знайшов поле ×2, Нема ціни ×1)",
         "Чекають тебе: На перевірку 2 · Схвалені 1 (у черзі на завтра)",
         "Пробний прогін: перевірено 5, Проблем 2",
         "Бот: нових постів 2; сайт: надіслано 1, помилок 1",
@@ -170,7 +170,7 @@ def test_problems_top_five(conn, data):
         item(conn, str(number), "problem", code=code)
         item(conn, str(number + 50), "problem", code=code if number == 1 else "no_price")
     line = report.build(conn, data, DAY).splitlines()[2]
-    assert line.startswith("Проблеми за день: 12 (Немає ціни ×")
+    assert line.startswith("Проблеми за день: 12 (Нема ціни ×")
     assert line.count("×") == 5
 
 

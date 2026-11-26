@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
+from shafa import hints
 from shafa.bot import actions, report
 from shafa.bot.telegram import TelegramError
 from shafa.klubok import queue as klubok_queue
@@ -223,6 +224,22 @@ def _problem_line(row: sqlite3.Row, site: str) -> Line:
     return [_clip(f"• {_name(row)}" + (f" — {why}" if why else ""))]
 
 
+def _advice_lines(rows: list[sqlite3.Row], site: str) -> list[Line]:
+    """BOT-019: «→ Назва: що робити» — по одному рядку на кожен різний код (не більше 5)."""
+    out: list[Line] = []
+    seen: set[str] = set()
+    for row in rows:
+        code = row["problem_code"] or ""
+        hint = hints.problem(code, site)
+        if code in seen or hint is None or not hint.do:
+            continue
+        seen.add(code)
+        out.append([_clip(f"→ {hint.title}. Що робити: {hints.steps(hint)}")])
+        if len(out) == 5:
+            break
+    return out
+
+
 def span_text(row: sqlite3.Row, moment: datetime) -> str:
     start, end = _stamp(row["started_at"], moment), _stamp(row["ended_at"], moment)
     if start is None or end is None:
@@ -241,10 +258,26 @@ def is_calm(row: sqlite3.Row) -> bool:
     return code in {"done", "limit", "stop"} or (not code and not (row["stop_reason"] or ""))
 
 
+def hint_of(row: sqlite3.Row) -> hints.Hint | None:
+    """BOT-019: підказка до причини зупинки сесії (той самий довідник, що на екрані)."""
+    code, text = row["stop_code"] or "", row["stop_reason"] or ""
+    if code in ("error", "crash") and "TargetClosed" in text:
+        return None  # зрозуміліший текст — `control.CRASH_CLOSED` (вікно закрили самі)
+    return hints.stop(row["site"], code)
+
+
 def reason(row: sqlite3.Row) -> str:
     code, text = row["stop_code"] or "", row["stop_reason"] or ""
+    if hint := hint_of(row):
+        return hint.what.strip().rstrip(".")
     ours = klubok_control if row["site"] == "klubok" else control
     return str(ours.reason_of(code, text) or text).strip().rstrip(".")
+
+
+def advice_of(row: sqlite3.Row) -> str:
+    """«Що робити: 1) …» до зупинки; порожньо, коли робити нічого."""
+    hint = hint_of(row)
+    return hints.advice(hint) if hint else ""
 
 
 def summary(
@@ -288,8 +321,9 @@ def summary(
                 )
             )
         if problems:
+            lines = [_problem_line(r, site) for r in problems]
             sections.append(
-                Section(f"Проблеми ({len(problems)})", [_problem_line(r, site) for r in problems])
+                Section(f"Проблеми ({len(problems)})", lines + _advice_lines(problems, site))
             )
         if sold:
             sections.append(
@@ -333,6 +367,8 @@ def stop_text(row: sqlite3.Row, owner: bool) -> str:
     text += f"у Проблемах {row['problems'] or 0}."
     if owner and row["stop_code"] and site == "klubok":
         text += f" (код: {row['stop_code']})"
+    if advice := advice_of(row):  # BOT-019: що робити — тими самими словами, що й на екрані
+        text += f"\n{advice}"
     return text
 
 

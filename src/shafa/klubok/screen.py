@@ -16,7 +16,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from shafa import rules
+from shafa import hints, rules
 from shafa.db import Status
 from shafa.klubok import dupcheck, fields, queue, sold
 from shafa.review import Card, _matches, load_card
@@ -125,6 +125,12 @@ class Row:
     listing: Listing | None = None
     note: str | None = None  # KLB-011: що сказала програма (ШІ, фото) — простою мовою
     auto: str | None = None  # KLB-011: рішення програми — "dup" (Архів) / "other" (Схвалені)
+
+    @property
+    def todo(self) -> str:
+        """BOT-019: «що робити» з `hints.py` — ті самі слова, що в боті; порожньо, коли нема що."""
+        hint = hints.problem(self.code, "klubok")
+        return "; ".join(hint.do) if hint else ""
 
     @property
     def retryable(self) -> bool:

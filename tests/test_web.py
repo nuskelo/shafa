@@ -248,7 +248,7 @@ def test_recheck_problem(conn, app, root, item_id):
             "problem_text = 'У папці немає фото .jpg'"
         )
     page = html(get(app, f"/item/{item_id}"))
-    assert "Додайте в папку фото .jpg." in page
+    assert "У папці немає фото. Що робити: 1) додайте в папку фото .jpg" in page
 
     assert location(post(app, f"/item/{item_id}", action="recheck")) == "/problem?msg=recheck_new"
     assert status(conn, item_id) == Status.NEW
@@ -303,7 +303,7 @@ def test_recheck_never_returns_publication_problem(conn, app, root, item_id):
             "UPDATE items SET status = 'problem', problem_code = 'publish_uncertain', "
             "problem_text = 'Перевір на Шафі'"
         )
-    assert "Робот сам не повторює" in html(get(app, f"/item/{item_id}"))
+    assert "сам не повторює" in html(get(app, f"/item/{item_id}"))
 
     response = post(app, f"/item/{item_id}", action="recheck")
 

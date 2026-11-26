@@ -171,9 +171,9 @@ def test_three_problems_in_a_minute_is_one_message(conn, data, tg, make_bot):
     step(clock, bot)
     [text] = sent(tg)
     assert text.startswith("⚠️ Нові Проблеми (3):")
-    assert "• Пост 201: Немає ціни — У пості немає ціни" in text
-    assert "Пост 202: Робот не знайшов поле на формі — Поле «Колір»" in text
-    assert "Пост 203: Кілька товарів у пості" in text
+    assert "• Пост 201: Нема ціни — У пості немає ціни" in text
+    assert "Пост 202: Робот не знайшов поле — Поле «Колір»" in text
+    assert "Пост 203: Кілька пар у пості" in text
     step(clock, bot)
     step(clock, bot)
     assert len(sent(tg)) == 1
@@ -184,7 +184,8 @@ def test_single_problem_is_one_line_and_old_ones_are_not_repeated(conn, data, tg
     clock, bot = started(conn, data, tg, make_bot)
     problem(conn, "201", "no_section", "Немає розділу")
     step(clock, bot)
-    assert sent(tg) == ["⚠️ Пост 201: Немає розділу на Шафі — Немає розділу"]
+    [text] = sent(tg)
+    assert text.startswith("⚠️ Пост 201: Не взуття й не аксесуар — Немає розділу\nЩо робити: ")
 
 
 def test_more_than_ten_problems_are_cut(conn, data, tg, make_bot):

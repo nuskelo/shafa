@@ -94,7 +94,7 @@ def test_login_needed_after_logout_stop(conn, root, lock_file):
     session(conn, ended_at="2026-10-13T11:30:00+00:00", stop_code="login", stop_reason="x")
     s = state(conn, lock_file)
     assert s.code == "login_needed" and "login" in s.buttons
-    assert s.last.endswith("робот вийшов із Шафи") and s.last.startswith("Сесія 1 о 11:00")
+    assert "робот вийшов із Шафи" in s.last and s.last.startswith("Сесія 1 о 11:00")
 
 
 def test_no_form_is_not_login(conn, root, lock_file):

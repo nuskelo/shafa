@@ -339,6 +339,7 @@ def send(
                 "ai.stop",
                 f"ШІ не взявся за нові Картки: ліміт витрат на добу ({dollars(lim.daily_micro_usd)}) "
                 "вичерпано — решта завтра",
+                data={"hint": "ai_budget_out"},  # BOT-019
             )
         return Sent(plan)
     with conn:
@@ -359,7 +360,11 @@ def send(
         with conn:
             if _definitely_not_created(error):
                 _fail(conn, batch_id, text)
-                events.emit("ai.stop", f"ШІ не взяв Картки: {text}. Вони лишились у черзі")
+                events.emit(
+                    "ai.stop",
+                    f"ШІ не взяв Картки: {text}. Вони лишились у черзі",
+                    data={"hint": _stop_hint(error)},
+                )
                 return Sent(plan, batch_id, error=text)
             conn.execute(
                 "UPDATE ai_batches SET status = 'uncertain', note = ? WHERE id = ?",
@@ -368,6 +373,7 @@ def send(
         events.emit(
             "ai.stop",
             f"ШІ не відповів на пакет ({text}): перевірю його пізніше, вдруге не відправляю",
+            data={"hint": _stop_hint(error)},
         )
         return Sent(plan, batch_id, uncertain=True)
     with conn:
@@ -376,12 +382,13 @@ def send(
             (created.id, batch_id),
         )
     if len(plan.planned) > 1:  # одну Картку (пост з бота) не оголошуємо: лише результат
-        events.emit(
-            "ai.start",
-            f"ШІ почав аналіз: {events.cards(len(plan.planned))} (пакет, ≈ {cents(plan.estimate)}, "
-            "результат зазвичай до години)",
-        )
+        events.emit("ai.start", fill.start_text(plan.planned, " · зазвичай до години"))
     return Sent(plan, batch_id)
+
+
+def _stop_hint(error: Exception) -> str:
+    """BOT-019: яку пораду додати до `ai.stop` (`hints.EVENTS`): ключ чи просто збій."""
+    return "ai_key" if isinstance(error, anthropic.AuthenticationError) else "ai_failed"
 
 
 def _fail(conn: sqlite3.Connection, batch_id: int, note: str) -> None:
@@ -419,7 +426,7 @@ def _announce(conn: sqlite3.Connection, report: Collected) -> None:
     """BOT-012: пакет(и) оброблено — підсумок в журнал подій (одна Картка — один короткий рядок)."""
     tally = report.tally
     if tally.total:
-        events.emit("ai.done", fill.tally_text(conn, tally))
+        events.emit("ai.done", fill.tally_text(conn, tally), loud=tally.total > 1)  # BOT-019
     elif tally.returned:
         events.emit(
             "ai.done", f"ШІ: пакет не обробив {events.cards(tally.returned)} — вони знову в черзі"

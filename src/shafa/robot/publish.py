@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from shafa import borh, catalog, config, dup, events, review, rules, variants
+from shafa import borh, catalog, config, dup, events, hints, review, rules, variants
 from shafa.bot.presence import GONE, UNKNOWN
 from shafa.db import Status, now
 from shafa.fill import STALE_RULES
@@ -79,7 +79,7 @@ CHANNEL_ATTEMPTS = 3  # перевірок каналу на Картку: пе�
 CHANNEL_PAUSES = (30.0, 60.0)  # с перед повтором, коли Telegram мовчить без `retry_after`
 CHANNEL_MARGIN = 5.0  # с зверху до `retry_after` від Telegram
 CHANNEL_BUDGET = 20 * 60.0  # с: скільки за сесію разом чекаємо відповіді Telegram
-CHANNEL_BUSY = "Telegram не відповідає — спробуйте «Старт» за годину"
+CHANNEL_BUSY = hints.inline(hints.STOPS["telegram_busy"])  # BOT-019
 SLEEP_JUMP = 60.0  # с: «тік» став довшим — ноутбук засинав
 NOW_NAME = "robot-now.json"  # UX-002: що робить сесія зараз — для панелі (лише читання екраном)
 ITEM_URL = "https://shafa.ua/uk/item/{id}-shafa"  # Шафа переводить на справжню адресу (301)
